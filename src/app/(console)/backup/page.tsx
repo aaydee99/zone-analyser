@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
-interface Zone { id: string; name: string; status: string; plan: string; paused: boolean }
+interface Zone { id: string; name: string; status: string; plan: string; paused: boolean; accountId?: string; accountName?: string }
 interface Preset { id: string; name: string; config: BackupConfig; updatedAt: string }
 
 const STATUS_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'neutral'> = { active: 'ok', pending: 'warn', initializing: 'warn', moved: 'bad', deactivated: 'neutral' };
@@ -95,7 +95,9 @@ function ZonePicker({ credentialId, selected, onChange }: { credentialId: string
   }, [credentialId]);
   useEffect(() => { load(); }, [load]);
 
-  const shown = useMemo(() => (zones ?? []).filter((z) => !q || z.name.toLowerCase().includes(q.toLowerCase()) || z.id.startsWith(q.toLowerCase())), [zones, q]);
+  const shown = useMemo(() => (zones ?? []).filter((z) => !q || z.name.toLowerCase().includes(q.toLowerCase()) || z.id.startsWith(q.toLowerCase()) || !!z.accountName?.toLowerCase().includes(q.toLowerCase())), [zones, q]);
+  // A credential without an account ID lists zones from several accounts: name the account on each.
+  const multiAccount = new Set((zones ?? []).map((z) => z.accountId)).size > 1;
   const sel = new Set(selected);
   const allShown = shown.length > 0 && shown.every((z) => sel.has(z.id));
   const someShown = shown.some((z) => sel.has(z.id));
@@ -142,7 +144,7 @@ function ZonePicker({ credentialId, selected, onChange }: { credentialId: string
               <CheckboxBox checked={sel.has(z.id)} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm text-ink">{z.name}</span>
-                <span className="block font-mono text-[11px] text-faint">{z.id}</span>
+                <span className="block font-mono text-[11px] text-faint">{z.id}{multiAccount && z.accountName ? <span className="font-sans"> · {z.accountName}</span> : null}</span>
               </span>
               {z.plan && <span className="hidden text-xs text-muted sm:inline">{z.plan}</span>}
               <Badge tone={STATUS_TONE[z.status] ?? 'neutral'}>{z.status}{z.paused ? ' · paused' : ''}</Badge>

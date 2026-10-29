@@ -126,9 +126,9 @@ export const KINDS: Record<CredentialKind, KindDef> = {
         placeholder: 'Paste token', help: 'My Profile › API Tokens › Create Token › "Read all resources".',
       },
       {
-        key: 'accountId', label: 'Account ID', secret: false, required: true,
-        placeholder: '32 hex characters', pattern: '^[0-9a-f]{32}$', patternHint: '32 lowercase hex characters',
-        help: 'Dashboard › any zone › Overview (right sidebar).',
+        key: 'accountId', label: 'Account ID', secret: false, required: false,
+        placeholder: 'Empty: every account the token can access', pattern: '^[0-9a-f]{32}$', patternHint: '32 lowercase hex characters',
+        help: 'Dashboard › any zone › Overview (right sidebar). Leave it empty to use every account the token can access: backups, zones and Cloudflare activity then cover all of them.',
       },
       ...grouped('r2', R2_FIELDS),
       ...grouped('aws', AWS_FIELDS),

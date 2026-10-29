@@ -33,7 +33,11 @@ function SecretValue({ cred, field }: { cred: CredentialSummary; field: string }
 
   const fetchValue = () => api<{ value: string }>(`/api/credentials/${cred.id}/reveal`, { method: 'POST', json: { field } }).then((r) => r.value);
 
-  if (!view?.set) return <span className="text-faint">—</span>;
+  if (!view?.set) {
+    // No account ID: the account set covers every account its token can access.
+    if (cred.kind === 'cloudflare' && field === 'accountId') return <span className="text-[12.5px] text-ink-2">All accounts the token can access</span>;
+    return <span className="text-faint">—</span>;
+  }
   if (!def.secret) {
     return (
       <span className="flex min-w-0 items-center gap-1.5">

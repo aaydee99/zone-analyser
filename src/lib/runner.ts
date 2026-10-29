@@ -16,6 +16,7 @@ import type { Me } from './auth';
 import { TOOLS_BIN, ensureTools, resolveTools } from './tools';
 import { systemPath, systemPathSources } from './syspath';
 import { activeRestore } from './job-lock';
+import { listZones, tokenAccounts } from './providers';
 
 // Every variable backup.js reads from its environment. Inherited values are
 // dropped so only what the console sets reaches the script.
@@ -143,6 +144,23 @@ export async function checkRunConfig(config: BackupConfig): Promise<{ cloudflare
   return { cloudflare: cf.name, r2Bucket, awsBucket, outputDir };
 }
 
+/**
+ * The accounts a run backs up, each with the chosen zones in it: the credential's account ID, or
+ * (left empty) every account its token can access.
+ */
+async function accountsToBackUp(cf: Credential, config: BackupConfig, log: (m: string, level?: 'info' | 'ok' | 'warn') => void) {
+  const fixed = cf.fields.accountId?.trim();
+  if (fixed) return [{ id: fixed, name: '', zoneIds: config.zoneIds }];
+  const all = await tokenAccounts(cf);
+  log(`No account ID on "${cf.name}": backing up the ${all.length} account${all.length === 1 ? '' : 's'} the token can access — ${all.map((a) => a.name || a.id).join(', ')}`);
+  if (config.zoneMode !== 'selected') return all.map((a) => ({ ...a, zoneIds: [] }));
+  const zones = await listZones(cf);
+  const accountOf = new Map(zones.map((z) => [z.id, z.accountId]));
+  const unknown = config.zoneIds.filter((z) => !accountOf.has(z));
+  if (unknown.length) log(`${unknown.length} chosen zone(s) are not visible to the token and are skipped: ${unknown.join(', ')}`, 'warn');
+  return all.map((a) => ({ ...a, zoneIds: config.zoneIds.filter((z) => accountOf.get(z) === a.id) })).filter((a) => a.zoneIds.length);
+}
+
 export async function startRun(me: Me, config: BackupConfig, presetName?: string, approval?: { id: string; by: string }): Promise<RunMeta> {
   const running = activeRunId();
   if (running) throw new HttpError(409, 'A backup is already running — wait for it or cancel it first');
@@ -230,8 +248,10 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
   }
 
   const args = buildArgs(config);
+  // No account ID: backup.js runs once per account the token can access.
+  const shown = { ...vars, CF_ACCOUNT_ID: vars.CF_ACCOUNT_ID || '<each account the token can access>' };
   const command = [
-    ...Object.entries(vars).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${SECRET_ENV_KEYS.has(k) ? '••••••••' : shellQuote(v)}`),
+    ...Object.entries(shown).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${SECRET_ENV_KEYS.has(k) ? '••••••••' : shellQuote(v)}`),
     'node backup.js',
     ...args,
   ].join(' \\\n  ');
@@ -335,6 +355,17 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
     }
     if (run.cancelled) { finish(null); return; }
 
+    // The accounts to back up: the credential's account, or (no account ID) every account the
+    // token can access. With chosen zones, only the accounts those zones are in.
+    let accounts: { id: string; name: string; zoneIds: string[] }[];
+    try {
+      accounts = await accountsToBackUp(cf, config, log);
+    } catch (err) {
+      finish(null, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (!accounts.length) { finish(null, 'None of the chosen zones is in an account this token can access'); return; }
+
     const env = augmentedEnvPath({ ...process.env });
     for (const k of Object.keys(env)) if (SCRIPT_ENV_KEYS.includes(k.toUpperCase()) || CONSOLE_ENV_RE.test(k)) delete env[k];
     Object.assign(env, vars);
@@ -342,12 +373,26 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
     env.TF_PLUGIN_CACHE_DIR = settings.pluginCacheDir || env.TF_PLUGIN_CACHE_DIR || path.join(DATA_DIR, 'plugin-cache');
     env.TF_IN_AUTOMATION = '1';
 
-    const child = spawn(process.execPath, [RUNNER_SCRIPT, ...args], { cwd: RUNNER_DIR, env, windowsHide: true });
-    run.child = child;
-    child.stdout?.on('data', outS.data);
-    child.stderr?.on('data', errS.data);
-    child.on('error', (e) => finish(null, `Could not start backup.js: ${e.message}`));
-    child.on('close', (code) => finish(code));
+    // backup.js backs up one account: it runs once per account, one after the other, in this run.
+    const failed: string[] = [];
+    for (const [i, acct] of accounts.entries()) {
+      if (run.cancelled) break;
+      if (accounts.length > 1) push(`\x1b[0;36m\x1b[1m━━━  Account ${i + 1} of ${accounts.length}: ${acct.name || acct.id} (${acct.id})  ━━━\x1b[0m`);
+      const accountArgs = buildArgs({ ...config, zoneIds: acct.zoneIds });
+      const code = await new Promise<number | null>((resolve) => {
+        const child = spawn(process.execPath, [RUNNER_SCRIPT, ...accountArgs], { cwd: RUNNER_DIR, env: { ...env, CF_ACCOUNT_ID: acct.id }, windowsHide: true });
+        run.child = child;
+        child.stdout?.on('data', outS.data);
+        child.stderr?.on('data', errS.data);
+        child.on('error', (e) => { push(`\x1b[0;31m[ERROR]\x1b[0m Could not start backup.js: ${e.message}`); resolve(null); });
+        child.on('close', (c) => { outS.flush(); errS.flush(); resolve(c); });
+      });
+      if (code !== 0 && !run.cancelled) failed.push(acct.name || acct.id);
+    }
+    if (accounts.length > 1 && !run.cancelled) {
+      log(failed.length ? `${accounts.length - failed.length} of ${accounts.length} accounts backed up; failed: ${failed.join(', ')}` : `All ${accounts.length} accounts backed up`, failed.length ? 'warn' : 'ok');
+    }
+    finish(failed.length ? 1 : 0);
   })();
 
   void markUsed([cf, r2, aws].flatMap((c) => (c ? [c.id] : []))).catch(() => {});

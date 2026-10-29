@@ -243,7 +243,8 @@ export async function prepareRestore(me: Me, input: PrepareInput): Promise<Resto
     .then((t) => { const j = JSON.parse(t) as { result?: { enabled?: unknown } }; return typeof j.result?.enabled === 'boolean' ? { enabled: j.result.enabled } : null; })
     .catch(() => null);
 
-  const accountId = cf.fields.accountId;
+  // No account ID on the credential: the zone's own account.
+  const accountId = cf.fields.accountId || zone.accountId;
   const backupTime = new Date(found.folder.time);
   const oldest = new Date(Date.now() - CF_RETENTION_DAYS * DAY);
   const since = backupTime < oldest ? oldest : backupTime;

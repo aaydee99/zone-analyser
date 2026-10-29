@@ -26,21 +26,43 @@ async function cf<T>(token: string, p: string): Promise<{ status: number; body: 
 
 const cfError = (b: CfEnvelope<unknown> | null, status: number) => b?.errors?.[0]?.message ?? `HTTP ${status}`;
 
-export interface Zone { id: string; name: string; status: string; plan: string; paused: boolean }
+export interface Zone { id: string; name: string; status: string; plan: string; paused: boolean; accountId: string; accountName: string }
 
-/** The account's zones for the backup and restore pickers, kept for two minutes. */
+/** A Cloudflare account the credential works with. */
+export interface CfAccount { id: string; name: string }
+
+/** The credential's Cloudflare accounts: its account ID, or (left empty) every account the token can access. Kept for five minutes. */
+export function tokenAccounts(c: Credential): Promise<CfAccount[]> {
+  const fixed = c.fields.accountId?.trim();
+  if (fixed) return Promise.resolve([{ id: fixed, name: '' }]);
+  return cached(`cf:token-accounts:${tag(c.fields.apiToken)}`, 5 * 60_000, async () => {
+    const out: CfAccount[] = [];
+    for (let page = 1; page <= 100; page++) {
+      const { status, body } = await cf<{ id: string; name: string }[]>(c.fields.apiToken, `/accounts?per_page=50&page=${page}`);
+      if (!body?.success) throw new Error(`Cloudflare: could not list the token's accounts (${cfError(body, status)})`);
+      for (const a of body.result) out.push({ id: a.id, name: a.name });
+      if (!body.result_info || page >= body.result_info.total_pages) break;
+    }
+    if (!out.length) throw new Error('This API token can access no Cloudflare account — give it access to at least one, or enter the account ID');
+    return out;
+  });
+}
+
+/** The account's zones (or, with no account ID, every zone the token can see) for the backup and restore pickers, kept for two minutes. */
 export function listZones(c: Credential): Promise<Zone[]> {
-  return cached(`cf:picker-zones:${c.fields.accountId}:${tag(c.fields.apiToken)}`, 2 * 60_000, () => readZones(c));
+  return cached(`cf:picker-zones:${c.fields.accountId || 'all'}:${tag(c.fields.apiToken)}`, 2 * 60_000, () => readZones(c));
 }
 
 async function readZones(c: Credential): Promise<Zone[]> {
   const { apiToken, accountId } = c.fields;
   const zones: Zone[] = [];
   for (let page = 1; page <= 200; page++) {
-    const { status, body } = await cf<{ id: string; name: string; status: string; paused: boolean; plan?: { name: string } }[]>(
-      apiToken, `/zones?account.id=${accountId}&per_page=50&page=${page}&order=name`);
+    const { status, body } = await cf<{ id: string; name: string; status: string; paused: boolean; plan?: { name: string }; account?: { id: string; name: string } }[]>(
+      apiToken, `/zones?${accountId ? `account.id=${accountId}&` : ''}per_page=50&page=${page}&order=name`);
     if (!body?.success) throw new Error(`Cloudflare: ${cfError(body, status)}`);
-    for (const z of body.result) zones.push({ id: z.id, name: z.name, status: z.status, paused: z.paused, plan: z.plan?.name ?? '' });
+    for (const z of body.result) {
+      zones.push({ id: z.id, name: z.name, status: z.status, paused: z.paused, plan: z.plan?.name ?? '', accountId: z.account?.id ?? accountId ?? '', accountName: z.account?.name ?? '' });
+    }
     if (!body.result_info || page >= body.result_info.total_pages) break;
   }
   return zones;
@@ -48,6 +70,16 @@ async function readZones(c: Credential): Promise<Zone[]> {
 
 async function testCloudflare(c: Credential): Promise<string> {
   const { apiToken, accountId } = c.fields;
+  if (!accountId) {
+    // No account ID: the token is checked by what it can reach.
+    const v = await cf<{ status: string }>(apiToken, '/user/tokens/verify');
+    if (v.body?.success && v.body.result.status !== 'active') throw new Error(`Token status is "${v.body.result.status}"`);
+    const accounts = await tokenAccounts(c);
+    const zones = await cf<unknown[]>(apiToken, '/zones?per_page=1');
+    const count = zones.body?.result_info?.total_count ?? 0;
+    const names = accounts.map((a) => `"${a.name || a.id}"`);
+    return `Token active · ${accounts.length} account${accounts.length === 1 ? '' : 's'} (${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}) · ${count} zone${count === 1 ? '' : 's'} visible`;
+  }
   // User-owned tokens verify at /user/tokens/verify, account-owned ones under the account.
   let v = await cf<{ status: string }>(apiToken, '/user/tokens/verify');
   if (!v.body?.success) v = await cf<{ status: string }>(apiToken, `/accounts/${accountId}/tokens/verify`);

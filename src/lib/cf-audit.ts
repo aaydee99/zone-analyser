@@ -2,6 +2,7 @@ import 'server-only';
 import { cached, tag } from './cache';
 import { HttpError } from './http';
 import { credentialForRun, listCredentialOptions } from './vault';
+import { tokenAccounts } from './providers';
 import {
   CF_RANGES, CF_RETENTION_DAYS, type CfAccountResult, type CfAuditReport, type CfChange, type CfHistoryResult, type CfRange, type CfZoneEvent,
 } from './cf-audit-report';
@@ -288,9 +289,17 @@ export async function cloudflareAudit(credentialId: string, period: { range: CfR
   const changes: CfChange[] = [];
   const events: CfZoneEvent[] = [];
   const seen = new Set<string>();
+  // Each credential's accounts: its account ID, or every account its token can access.
+  const targets: { c: Awaited<ReturnType<typeof credentialForRun>>; o: (typeof chosen)[number]; accountId: string; accountName: string }[] = [];
   for (const o of chosen) {
     const c = await credentialForRun(o.id, 'cloudflare');
-    const accountId = c.fields.accountId;
+    try {
+      for (const a of await tokenAccounts(c)) targets.push({ c, o, accountId: a.id, accountName: a.name });
+    } catch (err) {
+      accounts.push({ accountId: '', accountName: '', credentialName: o.name, count: 0, truncated: false, error: err instanceof Error ? err.message : 'Could not list the accounts of this token' });
+    }
+  }
+  for (const { c, o, accountId, accountName: knownName } of targets) {
     if (seen.has(accountId)) continue;
     seen.add(accountId);
     const left = MAX_TOTAL - changes.length;
@@ -298,7 +307,7 @@ export async function cloudflareAudit(credentialId: string, period: { range: CfR
       accounts.push({ accountId, accountName: '', credentialName: o.name, count: 0, truncated: true, error: 'Skipped — the report already holds the maximum number of changes' });
       continue;
     }
-    const result: CfAccountResult = { accountId, accountName: '', credentialName: o.name, count: 0, truncated: false };
+    const result: CfAccountResult = { accountId, accountName: knownName, credentialName: o.name, count: 0, truncated: false };
     accounts.push(result);
     let mine: CfChange[] = [];
     try {
@@ -310,7 +319,7 @@ export async function cloudflareAudit(credentialId: string, period: { range: CfR
       const all = buildChanges(entries, accountId, categories);
       mine = all.filter(isConfigChange);
       await fillDeletedValues(mine, token, accountId);
-      Object.assign(result, { accountName: all.find((x) => x.accountName)?.accountName ?? '', count: mine.length, ignored: all.length - mine.length, truncated });
+      Object.assign(result, { accountName: all.find((x) => x.accountName)?.accountName ?? knownName, count: mine.length, ignored: all.length - mine.length, truncated });
       changes.push(...mine);
     } catch (err) {
       result.error = err instanceof Error ? err.message : 'Could not read the audit log';
@@ -410,6 +419,8 @@ export async function credentialForAccount(accountId: string) {
   for (const o of (await listCredentialOptions()).filter((x) => x.kind === 'cloudflare')) {
     const c = await credentialForRun(o.id, 'cloudflare');
     if (c.fields.accountId === accountId) return c;
+    // No account ID: the credential covers every account its token can access.
+    if (!c.fields.accountId && (await tokenAccounts(c).catch(() => [])).some((a) => a.id === accountId)) return c;
   }
   throw new HttpError(404, 'No stored credential for this account');
 }
