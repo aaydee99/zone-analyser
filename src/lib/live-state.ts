@@ -2,7 +2,7 @@ import 'server-only';
 import { activeRunId } from './runner';
 import { activeRestore, type ActiveRestore } from './job-lock';
 import { pendingFor } from './approvals';
-import { isWebRole, latestWorker, relayJson } from './worker-link';
+import { isWebRole, latestWorker, relayJson, retireIfOutdated } from './worker-link';
 import { startProgress, startingSince, wakeConfigured, wakeWorker, type StartProgress } from './worker-wake';
 import type { Me } from './auth';
 
@@ -15,6 +15,8 @@ export interface WorkerSummary {
   start: StartProgress | null;
   /** Whether the web side can start it (GitHub Actions set up). */
   onDemand: boolean;
+  /** Runs older code: it stops once nothing is running, and a new one starts. */
+  updating: boolean;
   /** 'github-actions' when it runs on GitHub Actions (no fixed outgoing IP). */
   id: string | null;
   hostname: string | null;
@@ -39,6 +41,7 @@ export async function liveState(me: Me): Promise<LiveState> {
   if (!isWebRole()) return { activeRunId: activeRunId(), activeRestore: activeRestore(), pendingApprovals: pendingFor(me) };
   const w = await latestWorker().catch(() => null);
   const s = w?.online ? await relayJson<LiveState>(me, '/api/auth/me?peek=1', 4_000) : null;
+  const updating = w?.online ? await retireIfOutdated(w).catch(() => false) : false;
   // Someone opened the console and no worker runs: start one now, so it is ready by the time it is needed.
   if (!s && wakeConfigured()) await wakeWorker(me.email).catch(() => null);
   const starting = !s && wakeConfigured() ? await startingSince().catch(() => null) : null;
@@ -47,6 +50,6 @@ export async function liveState(me: Me): Promise<LiveState> {
     activeRunId: s?.activeRunId ?? null,
     activeRestore: s?.activeRestore ?? null,
     pendingApprovals: s?.pendingApprovals ?? 0,
-    worker: { online: !!w?.online && !!s, startingSince: starting, start, onDemand: wakeConfigured(), id: w?.id ?? null, hostname: w?.hostname ?? null, publicIp: w?.publicIp ?? null, lastSeen: w?.lastSeen ?? null, tools: w?.tools ?? null },
+    worker: { online: !!w?.online && !!s, startingSince: starting, start, updating, onDemand: wakeConfigured(), id: w?.id ?? null, hostname: w?.hostname ?? null, publicIp: w?.publicIp ?? null, lastSeen: w?.lastSeen ?? null, tools: w?.tools ?? null },
   };
 }

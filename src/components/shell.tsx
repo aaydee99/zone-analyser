@@ -226,6 +226,11 @@ export function Shell({ initial, children }: { initial: MeState; children: React
                 <b className="text-warn">Running in development mode.</b> Errors show stack traces in the browser and the security policy is relaxed. For real use, run <span className="font-mono">npm run build</span> then <span className="font-mono">npm start</span>.
               </div>
             )}
+            {me.worker?.online && me.worker.updating && (
+              <div role="status" className="mb-6 rounded-xl border border-info/40 bg-info/[0.07] px-4 py-3 text-[13px]">
+                <b className="text-info">Updating the worker.</b> A newer version of the console is deployed: the worker restarts with it as soon as nothing is running (about 3 minutes once it stops).
+              </div>
+            )}
             {me.worker && !me.worker.online && (me.worker.startingSince ? (
               <WorkerStarting w={me.worker} />
             ) : (

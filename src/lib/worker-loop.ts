@@ -28,7 +28,7 @@ const PROCESS_START = Date.now();
 const busy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0;
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
-const g = globalThis as unknown as { __workerLoop?: boolean; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
+const g = globalThis as unknown as { __workerLoop?: boolean; __outdated?: string; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const port = () => Number(process.env.PORT) || 4400;
 const base = () => `http://127.0.0.1:${port()}`;
@@ -84,13 +84,23 @@ async function run() {
   let ip: string | null = null;
   let ipAt = 0;
   let tools: { name: string; version: string | null }[] = [];
-  const version = (() => { try { return (JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as { version?: string }).version ?? null; } catch { return null; } })();
+  // The git commit on GitHub Actions (or CONSOLE_VERSION), else package.json: the web side compares it with its own.
+  const version = process.env.GITHUB_SHA?.trim() || process.env.CONSOLE_VERSION?.trim() || (() => { try { return (JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as { version?: string }).version ?? null; } catch { return null; } })();
 
+  let first = true;
   const beat = async () => {
     if (Date.now() - ipAt > IP_REFRESH_MS) { ip = (await publicIp()) ?? ip; ipAt = Date.now(); }
     const { error } = await db().from('workers').upsert({
       id, hostname: os.hostname(), public_ip: ip, version, platform: `${process.platform} ${os.release()}`, tools, started_at: startedAt, last_seen: new Date().toISOString(),
+      // A fresh worker starts without the stop request meant for the one before it.
+      ...(first ? { retire_requested: null } : {}),
     });
+    first = false;
+    if (!error) {
+      const own = await db().from('workers').select('retire_requested').eq('id', id).maybeSingle();
+      const wanted = (own.data as { retire_requested: string | null } | null)?.retire_requested;
+      if (wanted && wanted !== version && !g.__outdated) { g.__outdated = wanted; log(`a newer version of the console is deployed (${wanted.slice(0, 7)}): stopping once nothing is running`); }
+    }
     if (error) log(`heartbeat failed: ${error.message}${/workers|42P01|PGRST205/.test(`${error.code} ${error.message}`) ? ' (run supabase/migrations/0004_worker.sql)' : ''}`);
   };
 
@@ -147,8 +157,8 @@ async function run() {
     if (took || inflight) lastWork = Date.now();
     const idle = IDLE_MS > 0 && Date.now() - lastWork > IDLE_MS;
     const old = MAX_MS > 0 && Date.now() - PROCESS_START > MAX_MS;
-    if ((idle || old) && !inflight && !busy()) {
-      await retire(id, old ? `running for ${Math.round(MAX_MS / 60_000)} minutes` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
+    if ((idle || old || g.__outdated) && !inflight && !busy()) {
+      await retire(id, g.__outdated ? 'a newer version of the console is deployed' : old ? `running for ${Math.round(MAX_MS / 60_000)} minutes` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
       process.exit(0);
     }
     // Quick to pick up while busy, gentler on Supabase when idle.

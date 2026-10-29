@@ -430,7 +430,7 @@ function VaultContents({ onLocked, header }: { onLocked: () => void; header: Rea
       <Modal
         open={importOpen} onClose={() => setImportOpen(false)} width="max-w-2xl"
         title="Import from .env"
-        description="Paste a backup.js .env file. It becomes one account set: CF_API_TOKEN + CF_ACCOUNT_ID, with the R2 and AWS keys in it if the file has them. Nothing is written to disk unencrypted."
+        description="Paste a backup.js .env file. It becomes one account set: CF_API_TOKEN and CF_ACCOUNT_ID (optional: without it, every account the token can access), with the R2 and AWS keys in it if the file has them. Nothing is written to disk unencrypted."
         footer={<>
           <Button variant="ghost" onClick={() => setImportOpen(false)}>Cancel</Button>
           <Button variant="primary" loading={importing} disabled={!importText.trim()} onClick={runImport} icon={<FileUp className="size-4" />}>Import</Button>

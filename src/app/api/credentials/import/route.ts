@@ -36,8 +36,9 @@ export const POST = route(async (req, _ctx, me) => {
   const env = parseDotEnv(text);
   const base = (name ?? '').trim() || 'Imported';
   // One .env = one account set: the Cloudflare account plus whatever storage the file has.
-  if (!real(env.CF_API_TOKEN) || !real(env.CF_ACCOUNT_ID)) throw new HttpError(400, 'An account set needs CF_API_TOKEN and CF_ACCOUNT_ID');
-  const fields: Record<string, string> = { apiToken: env.CF_API_TOKEN, accountId: env.CF_ACCOUNT_ID };
+  if (!real(env.CF_API_TOKEN)) throw new HttpError(400, 'An account set needs CF_API_TOKEN');
+  // No CF_ACCOUNT_ID: the set covers every account the token can access.
+  const fields: Record<string, string> = { apiToken: env.CF_API_TOKEN, ...(real(env.CF_ACCOUNT_ID) ? { accountId: env.CF_ACCOUNT_ID } : {}) };
   if (real(env.R2_ACCESS_KEY_ID) && real(env.R2_SECRET_ACCESS_KEY) && real(env.R2_ENDPOINT)) {
     Object.assign(fields, groupedFields({
       accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY, endpoint: env.R2_ENDPOINT,

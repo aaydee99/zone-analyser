@@ -41,9 +41,11 @@ export interface WorkerInfo {
   startedAt: string;
   lastSeen: string;
   online: boolean;
+  /** Asked to stop for this (newer) version of the console. */
+  retireRequested: string | null;
 }
 
-interface WorkerRow { id: string; hostname: string; public_ip: string | null; version: string | null; platform: string | null; tools: WorkerInfo['tools']; started_at: string; last_seen: string }
+interface WorkerRow { id: string; hostname: string; public_ip: string | null; version: string | null; platform: string | null; tools: WorkerInfo['tools']; started_at: string; last_seen: string; retire_requested?: string | null }
 
 const g = globalThis as unknown as { __workerSeen?: { at: number; value: WorkerInfo | null } };
 
@@ -51,7 +53,7 @@ const g = globalThis as unknown as { __workerSeen?: { at: number; value: WorkerI
 export async function latestWorker(fresh = false): Promise<WorkerInfo | null> {
   const hit = g.__workerSeen;
   if (!fresh && hit && Date.now() - hit.at < 3000) return hit.value;
-  const { data, error } = await db().from('workers').select('id, hostname, public_ip, version, platform, tools, started_at, last_seen').order('last_seen', { ascending: false }).limit(1);
+  const { data, error } = await db().from('workers').select('*').order('last_seen', { ascending: false }).limit(1);
   if (error) {
     if (/workers|42P01|PGRST205/.test(`${error.code} ${error.message}`)) {
       throw new RelayError(503, 'The worker tables are missing: run supabase/migrations/0004_worker.sql in the Supabase SQL editor');
@@ -61,10 +63,40 @@ export async function latestWorker(fresh = false): Promise<WorkerInfo | null> {
   const r = (data as WorkerRow[])[0];
   const value: WorkerInfo | null = r ? {
     id: r.id, hostname: r.hostname, publicIp: r.public_ip, version: r.version, platform: r.platform, tools: r.tools,
-    startedAt: r.started_at, lastSeen: r.last_seen, online: Date.now() - Date.parse(r.last_seen) < ONLINE_MS,
+    startedAt: r.started_at, lastSeen: r.last_seen, retireRequested: r.retire_requested ?? null, online: Date.now() - Date.parse(r.last_seen) < ONLINE_MS,
   } : null;
   g.__workerSeen = { at: Date.now(), value };
   return value;
+}
+
+// ── Replacing a worker that runs older code ─────────────────────────────────
+
+const gv = globalThis as unknown as { __webVersion?: { version: string; firstSeen: string } };
+
+/** This deployment's version (git commit on Vercel) and when it first ran, recorded in Supabase. */
+async function webVersion(): Promise<{ version: string; firstSeen: string } | null> {
+  const version = process.env.VERCEL_GIT_COMMIT_SHA?.trim() || process.env.CONSOLE_VERSION?.trim();
+  if (!version) return null;
+  if (gv.__webVersion?.version === version) return gv.__webVersion;
+  await db().from('web_versions').upsert({ version }, { onConflict: 'version', ignoreDuplicates: true });
+  const { data } = await db().from('web_versions').select('version, first_seen').eq('version', version).maybeSingle();
+  const row = data as { version: string; first_seen: string } | null;
+  if (!row) return null;
+  gv.__webVersion = { version, firstSeen: row.first_seen };
+  return gv.__webVersion;
+}
+
+/**
+ * A worker that runs a different version and started before this one was deployed is asked to stop
+ * (it finishes what it is doing first); the next request starts one with the new code. A worker
+ * started after this deployment is kept, even if its version differs (Vercel may deploy later).
+ */
+export async function retireIfOutdated(w: WorkerInfo): Promise<boolean> {
+  if (!w.online || !w.version || w.retireRequested) return !!w.retireRequested;
+  const wv = await webVersion().catch(() => null);
+  if (!wv || w.version === wv.version || Date.parse(w.startedAt) >= Date.parse(wv.firstSeen)) return false;
+  const { error } = await db().from('workers').update({ retire_requested: wv.version }).eq('id', w.id);
+  return !error;
 }
 
 export class RelayError extends Error {
