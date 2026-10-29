@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql) and [`0004_worker.sql`](supabase/migrations/0004_worker.sql) and [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), in that order.
+2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql) and [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql) and [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), in that order.
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -44,7 +44,7 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
   The worker trusts a replayed request only with a valid signature, for that exact method and path, before it expires.
 - **No inbound access**: the worker only connects out (Supabase, Cloudflare, R2/S3, the Terraform release site). It needs no public URL, open port or tunnel.
 - **Cloudflare token IP restrictions**: every Cloudflare call comes from the worker.
-  - **On Cloudflare Containers** (the default below): the outgoing IP is not fixed, so the console's Cloudflare API tokens must **not** be restricted to client IPs.
+  - **On GitHub Actions** (the default below): the outgoing IP changes with every run, so the console's Cloudflare API tokens must **not** be restricted to client IPs.
   - **On a machine with a fixed IP**: **Settings › Worker** shows its public IP, and you can restrict tokens to it.
 - **Live logs**: the worker writes each run's log to Supabase as it goes. The run page on Vercel follows it there and reconnects every few minutes.
 - **Worker offline**: a banner on every page says so. Backups, restores, the vault and Cloudflare pages answer "The worker is offline". Sign-in, users and the audit log keep working.
@@ -55,45 +55,33 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
 2. In the Vercel project, set `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. `CONSOLE_ROLE=web` is the default on Vercel.
 3. Deploy. [`vercel.json`](vercel.json) gives API routes up to 300 s, so a slow call such as a full zone read can wait for the worker.
 
-### Start the worker on Cloudflare (recommended)
+### Start the worker on GitHub Actions (free, recommended)
 
-The worker runs on **Cloudflare Containers**. It's built and deployed from your GitHub repository by Cloudflare's Git integration (Workers Builds), all from the dashboard. Nothing runs on your own machine, and you need no Docker.
+The worker runs as a GitHub Actions job: [`.github/workflows/worker.yml`](.github/workflows/worker.yml), the **Console worker** workflow. You need no server, no Docker and no paid plan. Public repositories get unlimited Actions minutes; private ones get 2,000 a month.
 
-**Before you start:**
+How it runs:
 
-- Apply the migrations above, including `0004_worker.sql` and `0005_worker_state.sql`.
-- Make sure the Cloudflare account is on the **Workers Paid** plan, which Containers need.
-- Push this project to GitHub, including `cloudflare/` and its `package-lock.json`.
+- **Starts when needed**: when someone opens the console and no worker is running, Vercel asks GitHub to start it. It does the same when a page needs the worker.
+- **Startup**: a runner takes about 2–3 minutes to come up. It installs and builds the console, then downloads Terraform and cf-terraforming (cached between runs). Meanwhile, every page shows **Starting the worker…**.
+- **Stops when idle**: it stops itself after **20 idle minutes**. An open console page counts as activity, and it never stops during a backup, a restore or an open restore session. It also stops before GitHub's 6-hour job limit, unless a job is still running.
+- **One at a time**: one worker runs at a time.
+- **What lasts between runs**: approval requests and restore history are kept in Supabase. The vault unlock and run folders behind **Download** last for one worker session; backups uploaded to R2 or S3 stay there.
+- **Token IP restrictions**: GitHub's runners have a different IP on every run, so the console's Cloudflare API tokens must not be restricted to client IPs.
 
-**In the Cloudflare dashboard:**
+Set up:
 
-1. Go to **Workers & Pages › Create › Import a repository**, connect GitHub, and pick the repository.
-2. Set up the project:
-   - **Project name:** `backup-console-worker`. It must match `name` in [`cloudflare/wrangler.jsonc`](cloudflare/wrangler.jsonc).
-   - **Production branch:** `main`.
-   - **Root directory:** leave empty (the repository root), so the build can see the [`Dockerfile`](Dockerfile).
-   - **Build command:** leave empty.
-   - **Deploy command:** `cd cloudflare && npm ci && npx wrangler deploy`
-   - **Non-production branch deploy command:** `cd cloudflare && npm ci && npx wrangler versions upload`. This builds other branches without replacing the running container. You can also turn off non-production builds.
-3. Select **Save and Deploy**. The first build takes several minutes. It builds the console image and creates three things:
-   - the Worker;
-   - the container (`standard-1`: ½ vCPU, 4 GiB memory, 8 GB disk);
-   - the cron trigger that keeps it running.
-4. Open the Worker's **Settings › Variables and Secrets** and add three items of type **Secret**: `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, with the same values as on Vercel. Optionally add `REDIS_URL`.
-5. Start the container again with the secrets: **Deployments › Retry deployment** on the latest build, or push any commit. The container only reads its settings when it starts, and the first one started without them.
-6. Check it. **Workers & Pages › Containers** shows one instance running. Within a minute or two, **Settings › Worker** in the console on Vercel shows the worker **online**.
+1. **Apply the migrations.** Include `0004_worker.sql`, `0005_worker_state.sql` and `0006_worker_wakeups.sql`.
+2. **Add repository secrets.** In GitHub › the repository › **Settings › Secrets and variables › Actions**, add `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, with the same values as on Vercel. Optionally add `REDIS_URL`.
+3. **Create a token Vercel can use to start the workflow.** In GitHub › your avatar › **Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token**:
+   - **Repository access:** only this repository.
+   - **Permissions:** **Actions: Read and write**. Nothing else is needed.
+4. **Add Vercel environment variables.** In Vercel › the project › **Settings › Environment Variables**, add:
+   - `WORKER_GITHUB_TOKEN`: the token from step 3.
+   - `WORKER_GITHUB_REPO`: `owner/name`, for example `aaydee99/zone-analyser`.
+   - Optionally `WORKER_GITHUB_REF`, the branch to run (default `main`), and `WORKER_GITHUB_WORKFLOW` (default `worker.yml`).
 
-After that, every push to `main` builds and deploys the worker again. **Settings › Builds** shows each build and its log, and the Worker's **Logs** tab shows what the worker prints.
-
-How it stays up:
-
-- **Never sleeps**: the container never sleeps when idle, because backups run in the background.
-- **Restarted automatically**: a cron trigger starts it again within a minute if Cloudflare stopped it (host maintenance, a crash).
-- **Fresh disk on every start**: the worker downloads Terraform and cf-terraforming again, and puts approval requests and restore history back from Supabase (`state_files`), so none of them are lost.
-- **What a restart does lose**:
-  - run folders kept on its disk, behind **Download** on a finished run; backups uploaded to R2 or S3 stay there;
-  - a restore that was in progress (start it again);
-  - the vault unlock (unlock again).
+   Redeploy Vercel after adding them.
+5. **Push and test.** Push the repository, including `.github/workflows/worker.yml`, then open the console. The banner shows **Starting the worker…**, and within about 3 minutes **Settings › Worker** shows it **online**. You can also start it by hand under **Actions › Console worker › Run workflow**, and watch its log there.
 
 ### Or start the worker on your own machine or server
 

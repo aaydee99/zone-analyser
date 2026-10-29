@@ -23,6 +23,78 @@ export async function startingSince(): Promise<string | null> {
   return row && row.result === 'started' && Date.now() - Date.parse(row.requested_at) < WAKE_WINDOW_MS ? row.requested_at : null;
 }
 
+const ghApi = () => (process.env.WORKER_GITHUB_API?.trim() || 'https://api.github.com').replace(/\/$/, '');
+const ghWorkflow = () => process.env.WORKER_GITHUB_WORKFLOW?.trim() || 'worker.yml';
+const ghHeaders = () => ({
+  Authorization: `Bearer ${process.env.WORKER_GITHUB_TOKEN!.trim()}`,
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+  'User-Agent': 'backup-console',
+});
+
+/** One step of the GitHub Actions run that starts the worker. */
+export interface StartStep {
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed' | 'pending';
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+/** How far the worker's GitHub Actions run has got (shown while the worker starts). */
+export interface StartProgress {
+  /** requested: GitHub has not listed the run yet · queued: waiting for a runner · in_progress · completed. */
+  status: 'requested' | 'queued' | 'in_progress' | 'completed' | 'waiting';
+  conclusion: string | null;
+  /** The run's page on GitHub (its live log). */
+  url: string | null;
+  startedAt: string | null;
+  steps: StartStep[];
+}
+
+const gp = globalThis as unknown as { __wakeProgress?: { at: number; since: string; value: StartProgress | null } };
+
+/** The GitHub Actions run started at or after `since`, with its steps (cached for 4 s). */
+export async function startProgress(since: string): Promise<StartProgress | null> {
+  if (!wakeConfigured()) return null;
+  const hit = gp.__wakeProgress;
+  if (hit && hit.since === since && Date.now() - hit.at < 4_000) return hit.value;
+  const repo = process.env.WORKER_GITHUB_REPO!.trim();
+  const get = async <T>(p: string): Promise<T | null> => {
+    const res = await fetch(`${ghApi()}/repos/${repo}${p}`, { headers: ghHeaders(), signal: AbortSignal.timeout(8_000), cache: 'no-store' });
+    return res.ok ? ((await res.json()) as T) : null;
+  };
+  let value: StartProgress | null = null;
+  try {
+    type Run = { id: number; status: string; conclusion: string | null; html_url: string; created_at: string; run_started_at?: string };
+    const runs = await get<{ workflow_runs: Run[] }>(`/actions/workflows/${encodeURIComponent(ghWorkflow())}/runs?event=workflow_dispatch&per_page=5`);
+    // The run this request started: created after it (allowing for clock differences).
+    const run = runs?.workflow_runs?.find((r) => Date.parse(r.created_at) >= Date.parse(since) - 60_000);
+    if (!run) value = { status: 'requested', conclusion: null, url: null, startedAt: null, steps: [] };
+    else {
+      type Step = { name: string; status: StartStep['status']; conclusion: string | null; started_at: string | null; completed_at: string | null };
+      const jobs = await get<{ jobs: { started_at: string | null; steps?: Step[] }[] }>(`/actions/runs/${run.id}/jobs`);
+      const job = jobs?.jobs?.[0];
+      value = {
+        status: (['queued', 'in_progress', 'completed', 'waiting'].includes(run.status) ? run.status : 'queued') as StartProgress['status'],
+        conclusion: run.conclusion,
+        url: run.html_url,
+        startedAt: job?.started_at ?? run.run_started_at ?? null,
+        // GitHub's own clean-up steps say nothing about starting the worker.
+        steps: (job?.steps ?? []).filter((s) => !/^(Post |Complete job$)/.test(s.name)).map((s) => ({
+          // Unnamed steps are listed by GitHub as "Run <command>": shown as the command.
+          name: s.name === 'Set up job' ? 'Get a GitHub runner' : s.name.replace(/^Run (?=actions\/|npm |npx |node )/, ''),
+          status: s.status, conclusion: s.conclusion, startedAt: s.started_at, completedAt: s.completed_at,
+        })),
+      };
+    }
+  } catch {
+    value = hit?.since === since ? hit.value : null;
+  }
+  gp.__wakeProgress = { at: Date.now(), since, value };
+  return value;
+}
+
 /**
  * Asks GitHub to start the worker, unless that was asked within the last few minutes.
  * Returns 'started', 'already' (a start is on its way) or 'unavailable' (not configured, or GitHub refused).
@@ -39,19 +111,11 @@ export async function wakeWorker(by: string): Promise<{ result: 'started' | 'alr
   if (claim.error || !(claim.data as unknown[] | null)?.length) return { result: 'already' };
 
   const repo = process.env.WORKER_GITHUB_REPO!.trim();
-  const workflow = process.env.WORKER_GITHUB_WORKFLOW?.trim() || 'worker.yml';
-  const api = (process.env.WORKER_GITHUB_API?.trim() || 'https://api.github.com').replace(/\/$/, '');
   let message = '';
   try {
-    const res = await fetch(`${api}/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+    const res = await fetch(`${ghApi()}/repos/${repo}/actions/workflows/${encodeURIComponent(ghWorkflow())}/dispatches`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.WORKER_GITHUB_TOKEN!.trim()}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-        'User-Agent': 'backup-console',
-      },
+      headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ ref: process.env.WORKER_GITHUB_REF?.trim() || 'main' }),
       signal: AbortSignal.timeout(10_000),
       cache: 'no-store',

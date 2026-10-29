@@ -8,6 +8,7 @@ import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
 import { cx } from './ui';
 import { MeProvider, type MeState } from './me';
+import { WorkerStarting } from './worker-starting';
 
 interface NavItem { href: string; label: string; icon: typeof LayoutGrid; perm?: Permission }
 
@@ -91,7 +92,8 @@ export function Shell({ initial, children }: { initial: MeState; children: React
 
   // Background poll does not count as activity; real input does (throttled).
   // Faster while a job runs, so its banner (and the pages' start buttons) follow it closely.
-  const jobRunning = !!(me.activeRunId || me.activeRestore);
+  // Refresh often while something changes: a job runs, or the worker is starting.
+  const jobRunning = !!(me.activeRunId || me.activeRestore || (me.worker && !me.worker.online && me.worker.startingSince));
   useEffect(() => {
     const poll = setInterval(() => refresh(false), jobRunning ? 4_000 : 20_000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
@@ -225,10 +227,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
               </div>
             )}
             {me.worker && !me.worker.online && (me.worker.startingSince ? (
-              <div role="status" className="mb-6 flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/[0.07] px-4 py-3 text-[13px]">
-                <span className="live-dot size-2 shrink-0 rounded-full bg-warn" aria-hidden />
-                <span><b className="text-warn">Starting the worker…</b> It runs on GitHub Actions and takes about 2–3 minutes to start (asked {new Date(me.worker.startingSince).toLocaleTimeString()}). Backups, restores, the vault and Cloudflare pages work once it is online.</span>
-              </div>
+              <WorkerStarting w={me.worker} />
             ) : (
               <div role="alert" className="mb-6 rounded-xl border border-bad/40 bg-bad/[0.07] px-4 py-3 text-[13px]">
                 <b className="text-bad">The worker is offline.</b> Backups, restores, the vault and Cloudflare reads run on the worker, so they wait until it is back.{' '}

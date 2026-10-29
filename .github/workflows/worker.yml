@@ -37,7 +37,8 @@ jobs:
       CONSOLE_DATA_DIR: ${{ github.workspace }}/.worker-data
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
-      - uses: actions/checkout@v4
+      - name: Get the code
+        uses: actions/checkout@v4
 
       - name: Check the secrets
         run: |
@@ -45,13 +46,15 @@ jobs:
             if [ -z "${!name}" ]; then echo "::error::Repository secret $name is not set (Settings › Secrets and variables › Actions)"; exit 1; fi
           done
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       # The build cache and the downloaded Terraform / cf-terraforming, kept between runs.
-      - uses: actions/cache@v4
+      - name: Restore the cache
+        uses: actions/cache@v4
         with:
           path: |
             .next/cache
@@ -61,8 +64,11 @@ jobs:
             worker-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
             worker-${{ runner.os }}-
 
-      - run: npm ci --no-audit --no-fund
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
 
-      - name: Run the worker (stops itself when idle)
+      - name: Build the console
+        run: npm run build
+
+      - name: Run the worker
         run: node scripts/worker.mjs
