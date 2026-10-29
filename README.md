@@ -133,6 +133,16 @@ Roles are enforced on the server for every request ([`src/lib/rbac.ts`](src/lib/
 
 Credentials are **account sets**: one vault entry holds a Cloudflare account (API token + account ID) together with the storage its backups go to — an optional **Cloudflare R2** section and an optional **AWS S3** section. Either can be left empty, but storage never exists on its own, so one account's backup can never be sent to another account's bucket, and a restore only reads from the set's own buckets.
 
+**Leave the account ID empty** to use every account the API token can access. The console asks Cloudflare which accounts that is (`GET /accounts`, kept for 5 minutes), and then:
+
+- **Test** checks the token and lists those accounts and the zones it can see.
+- **Zone pickers** (backup, restore) list the zones of all of them, each labelled with its account.
+- **A backup** runs `backup.js` once per account, one after the other, in one run with one log. Each account gets its own backup folder, named after the account. With chosen zones, only the accounts those zones are in are backed up. The run fails if any account fails, and the log ends with which ones.
+- **Cloudflare activity** and **Revert** read the audit log of every account.
+- **A restore** uses the account the zone belongs to.
+
+All of an empty-ID set's backups go to its own buckets. For different buckets per account, make one set per account with its account ID.
+
 On **New backup** you pick the account set. *Upload to Cloudflare R2* and *Upload to AWS S3* are ON/OFF switches (`R2_SKIP_UPLOAD`, `AWS_SKIP_UPLOAD`); a switch is disabled when the set has no such storage. With an upload on, you choose:
 
 - **The bucket.** The choices are the set's **default bucket** plus its **other approved buckets** for that storage. Only a super admin edits these in Credentials.
