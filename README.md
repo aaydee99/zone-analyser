@@ -87,6 +87,12 @@ The run record and the audit log show which bucket was used, and "run again" reu
   - `dek_pw`: wrapped with scrypt (N=2¹⁷) of the vault password. Opens the vault UI.
   - `dek_server`: wrapped with `VAULT_SERVER_KEY`. Used only inside the server process when a backup runs, so operators can run backups and presets without the vault being opened. Secrets are put into the `backup.js` process environment and replaced with `••••••••` in every log line. No API ever returns them to anyone except a super admin with the vault unlocked.
 - **Lost server key**: if `VAULT_SERVER_KEY` is lost or changed, a super admin unlocks the vault once with the vault password and the server copy is re-wrapped automatically. If both the server key and the vault password are lost, the credentials can't be recovered.
+- **Reset the vault password** (lost or to be replaced), keeping every credential:
+  1. Run [`supabase/maintenance/reset_vault_password.sql`](supabase/maintenance/reset_vault_password.sql) in the Supabase SQL editor. It clears only the password copy of the data key (`dek_pw` and its salt). The credentials and the server-key copy stay, and it refuses to run if the server-key copy is missing.
+  2. Open **Credentials** as a super admin. It asks for a new vault password.
+  3. The console opens the data key with the server key and wraps it under the new password. Nothing is re-entered, and backups keep running throughout.
+
+  The console needs the same server key the vault was created or last re-sealed with. The audit log records `vault.password_cleared`, then `vault.password_reset`.
 - **Audit**: every reveal, test, create, edit and delete is recorded in the audit log.
 - **Older separate R2 / AWS entries** (saved before account sets) show as *legacy*. They can't be created or used for runs any more; **Move into a set** copies one into an account set on the server (its secrets are never shown or retyped) and can delete the old entry. **Import .env** creates one account set per file.
 

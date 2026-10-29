@@ -20,10 +20,15 @@ import {
 //                inside this process to inject secrets into a backup run, so
 //                presets work for every role without exposing the vault.
 // Neither the DEK nor any plaintext ever leaves the server.
+//
+// Password reset (supabase/maintenance/reset_vault_password.sql): dek_pw and kdf are
+// cleared in the database. The vault then asks a super admin for a new password and
+// wraps the same DEK (opened with the server key) under it: credentials are unchanged.
 
 interface Sealed { iv: string; tag: string; ct: string }
 interface Kdf { name: 'scrypt'; N: number; r: number; p: number; salt: string }
-interface VaultRow { kdf: Kdf; dek_pw: Sealed; dek_server: Sealed }
+/** kdf and dek_pw are null after a password reset, until a new password is set. */
+interface VaultRow { kdf: Kdf | null; dek_pw: Sealed | null; dek_server: Sealed }
 
 export interface Credential {
   id: string;
@@ -119,6 +124,9 @@ async function readVault(): Promise<VaultRow | null> {
   return must(await db().from('vault').select('kdf, dek_pw, dek_server').eq('id', 1).maybeSingle(), 'Reading vault') as VaultRow | null;
 }
 
+/** The vault password was reset in the database: a new one must be set before the vault opens. */
+const needsNewPassword = (row: VaultRow) => !row.dek_pw || !row.kdf;
+
 // ── Vault access (super admin + vault password) ─────────────────────────────
 
 const requireSuperAdmin = (me: Me) => { if (me.role !== 'super_admin') throw new VaultError('Only a super admin can access the vault', 403); };
@@ -134,7 +142,8 @@ function current(me: Me): Unlocked | null {
 export async function vaultStatus(me: Me) {
   requireSuperAdmin(me);
   const u = current(me);
-  return { initialized: !!(await readVault()), unlocked: !!u, expiresAt: u ? u.lastActive + idleMs() : null };
+  const row = await readVault();
+  return { initialized: !!row, passwordReset: !!row && needsNewPassword(row), unlocked: !!u, expiresAt: u ? u.lastActive + idleMs() : null };
 }
 
 /** The DEK for vault operations; requires a super admin who unlocked the vault in this session. */
@@ -158,17 +167,35 @@ function fail(me: Me) {
   state.failures.set(me.id, f);
 }
 
+/**
+ * Creates the vault, or — after a password reset — sets its new password. A reset keeps the
+ * data key (opened with the server key), so every stored credential stays as it is.
+ */
 export async function initVault(me: Me, password: string) {
   requireSuperAdmin(me);
-  if (await readVault()) throw new VaultError('The vault already exists', 409);
+  const existing = await readVault();
+  if (existing && !needsNewPassword(existing)) throw new VaultError('The vault already exists', 409);
   checkPassword(password, 'Vault password');
   const sk = serverKey();
-  const dek = crypto.randomBytes(32);
   const salt = crypto.randomBytes(16);
+  const kdf = { name: 'scrypt', ...KDF, salt: salt.toString('base64') };
+  if (existing) {
+    const dek = tryOpen(sk, existing.dek_server, AAD_SERVER);
+    sk.fill(0);
+    if (!dek) throw new VaultError('The vault server key does not match this vault, so its data key cannot be recovered for a new password. Use the server key the vault was created with', 409);
+    const kek = await deriveKey(password, salt);
+    must(await db().from('vault').update({ kdf, dek_pw: seal(kek, dek, AAD_PW), updated_at: new Date().toISOString() }).eq('id', 1), 'Setting the new vault password');
+    kek.fill(0);
+    state.failures.clear();
+    for (const hash of [...state.unlocked.keys()]) wipe(hash);
+    state.unlocked.set(me.sessionHash, { dek, lastActive: Date.now() });
+    await audit(me, 'vault.password_reset');
+    return;
+  }
+  const dek = crypto.randomBytes(32);
   const kek = await deriveKey(password, salt);
   const { error } = await db().from('vault').insert({
-    id: 1, kdf: { name: 'scrypt', ...KDF, salt: salt.toString('base64') },
-    dek_pw: seal(kek, dek, AAD_PW), dek_server: seal(sk, dek, AAD_SERVER), created_by: me.id,
+    id: 1, kdf, dek_pw: seal(kek, dek, AAD_PW), dek_server: seal(sk, dek, AAD_SERVER), created_by: me.id,
   });
   kek.fill(0);
   if (error?.code === '23505') throw new VaultError('The vault already exists', 409);
@@ -178,9 +205,10 @@ export async function initVault(me: Me, password: string) {
 }
 
 async function unwrapWithPassword(row: VaultRow, password: string): Promise<Buffer | null> {
-  const { N, r, p, salt } = row.kdf;
+  if (needsNewPassword(row)) return null;
+  const { N, r, p, salt } = row.kdf!;
   const kek = await deriveKey(password, Buffer.from(salt, 'base64'), { N, r, p });
-  const dek = tryOpen(kek, row.dek_pw, AAD_PW);
+  const dek = tryOpen(kek, row.dek_pw!, AAD_PW);
   kek.fill(0);
   return dek;
 }
@@ -189,6 +217,7 @@ export async function unlockVault(me: Me, password: string) {
   requireSuperAdmin(me);
   const row = await readVault();
   if (!row) throw new VaultError('The vault has not been created yet', 404);
+  if (needsNewPassword(row)) throw new VaultError('The vault password was reset — set a new vault password first', 409);
   throttle(me);
   const dek = typeof password === 'string' && password ? await unwrapWithPassword(row, password) : null;
   if (!dek) {

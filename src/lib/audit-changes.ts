@@ -32,6 +32,8 @@ export const CHANGE_AREA: Record<string, ChangeArea> = {
   'vault.created': 'credentials',
   'vault.password_changed': 'credentials',
   'vault.server_key_resealed': 'credentials',
+  'vault.password_reset': 'credentials',
+  'vault.password_cleared': 'credentials',
   'credential.created': 'credentials',
   'credential.updated': 'credentials',
   'credential.deleted': 'credentials',
@@ -127,6 +129,8 @@ export function describeChange(e: AuditEntry): string {
     case 'vault.created': return 'Created the credential vault';
     case 'vault.password_changed': return 'Changed the vault password';
     case 'vault.server_key_resealed': return 'Re-sealed the vault for a new server key';
+    case 'vault.password_cleared': return 'Cleared the vault password in the database (reset script)';
+    case 'vault.password_reset': return 'Set a new vault password after a reset (credentials unchanged)';
     case 'credential.created': return `Added ${credNoun(d.kind)} ${q(e.target)}`;
     case 'credential.deleted': return `Deleted ${credNoun(d.kind)} ${q(e.target)}`;
     case 'credential.storage_attached': return `Moved ${q(d.from)} into account set ${q(e.target)}`;

@@ -491,11 +491,13 @@ function VaultContents({ onLocked, header }: { onLocked: () => void; header: Rea
 
 // ── Vault gate: super admin + separate vault password ───────────────────────
 
-interface VaultStatus { initialized: boolean; unlocked: boolean; expiresAt: number | null }
+interface VaultStatus { initialized: boolean; passwordReset?: boolean; unlocked: boolean; expiresAt: number | null }
 
 function VaultGate({ status, onDone }: { status: VaultStatus; onDone: () => void }) {
   const toast = useToast();
-  const create = !status.initialized;
+  // A new vault, or a new password after the vault password was reset in the database.
+  const reset = !!status.initialized && !!status.passwordReset;
+  const create = !status.initialized || reset;
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [busy, setBusy] = useState(false);
@@ -509,7 +511,7 @@ function VaultGate({ status, onDone }: { status: VaultStatus; onDone: () => void
     setBusy(true);
     try {
       await api(create ? '/api/vault/init' : '/api/vault/unlock', { method: 'POST', json: { password: pw } });
-      if (create) toast('Vault created');
+      if (create) toast(reset ? 'New vault password set: stored credentials are unchanged' : 'Vault created');
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -524,15 +526,17 @@ function VaultGate({ status, onDone }: { status: VaultStatus; onDone: () => void
           {create ? <ShieldCheck className="size-6" /> : <Lock className="size-6" />}
         </div>
         <div className="eyebrow mb-1.5">Super admin · Credentials</div>
-        <h1 className="text-[22px] font-semibold">{create ? 'Create the credential vault' : 'Vault locked'}</h1>
+        <h1 className="text-[22px] font-semibold">{reset ? 'Set a new vault password' : create ? 'Create the credential vault' : 'Vault locked'}</h1>
         <p className="mt-2 text-sm text-muted">
-          {create
+          {reset
+            ? 'The vault password was reset. Choose a new one, different from your sign-in password. Every stored credential stays as it is.'
+            : create
             ? 'Choose a vault password that is different from your sign-in password. It is needed every time you open the vault and cannot be recovered.'
             : 'Enter the vault password to view or change stored credentials. Backups keep running while it is locked.'}
         </p>
       </div>
       <form onSubmit={submit} className="panel space-y-4 p-6">
-        <Field label="Vault password" htmlFor="vpw">
+        <Field label={reset ? 'New vault password' : 'Vault password'} htmlFor="vpw">
           <input id="vpw" type="password" autoFocus autoComplete={create ? 'new-password' : 'off'} className="input font-mono" value={pw} onChange={(e) => setPw(e.target.value)} disabled={busy} />
           {create && <PasswordStrength value={pw} />}
         </Field>
@@ -543,7 +547,7 @@ function VaultGate({ status, onDone }: { status: VaultStatus; onDone: () => void
         )}
         {error && <p role="alert" className="rounded-lg border border-bad/25 bg-bad/[0.06] px-3 py-2 text-[13px] text-bad">{error}</p>}
         <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!pw} icon={create ? <ShieldCheck className="size-4" /> : <KeyRound className="size-4" />}>
-          {create ? 'Create vault' : 'Unlock vault'}
+          {reset ? 'Set new password' : create ? 'Create vault' : 'Unlock vault'}
         </Button>
       </form>
     </div>
