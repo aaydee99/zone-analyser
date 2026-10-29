@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { db } from './supabase';
+import { db, missingEnv } from './supabase';
 import { DATA_DIR, ensureDir } from './store';
 import { ensureTools, toolStatus } from './tools';
 import { openRelay, sealRelay } from './vault';
@@ -19,7 +19,7 @@ const IP_REFRESH_MS = 10 * 60_000;
 const MAX_PARALLEL = 8;
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
-const g = globalThis as unknown as { __workerLoop?: boolean };
+const g = globalThis as unknown as { __workerLoop?: boolean; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const port = () => Number(process.env.PORT) || 4400;
 const base = () => `http://127.0.0.1:${port()}`;
@@ -50,10 +50,26 @@ async function publicIp(): Promise<string | null> {
 export function startWorkerLoop() {
   if (g.__workerLoop) return;
   g.__workerLoop = true;
-  void run().catch((err) => { g.__workerLoop = false; console.error('[worker] stopped:', err); });
+  void keepRunning();
+}
+
+/** Runs the worker; if anything stops it, logs why and starts it again (a dead loop would leave the worker "offline" for good). */
+async function keepRunning() {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await run();
+    } catch (err) {
+      const wait = Math.min(60_000, 2_000 * 2 ** Math.min(attempt, 5));
+      console.error(`[worker] stopped (${err instanceof Error ? err.message : String(err)}); starting again in ${Math.round(wait / 1000)} s`);
+      await sleep(wait);
+    }
+  }
 }
 
 async function run() {
+  const missing = missingEnv();
+  // Without Supabase there is nothing to take calls from: say so (every minute), then wait for settings.
+  if (missing.length) throw new Error(`not configured: set ${missing.join(', ')} for the worker (on Cloudflare: the Worker's Variables and Secrets, then redeploy)`);
   const id = workerId();
   const startedAt = new Date().toISOString();
   let ip: string | null = null;
@@ -66,7 +82,7 @@ async function run() {
     const { error } = await db().from('workers').upsert({
       id, hostname: os.hostname(), public_ip: ip, version, platform: `${process.platform} ${os.release()}`, tools, started_at: startedAt, last_seen: new Date().toISOString(),
     });
-    if (error) log(`heartbeat failed: ${error.message}`);
+    if (error) log(`heartbeat failed: ${error.message}${/workers|42P01|PGRST205/.test(`${error.code} ${error.message}`) ? ' (run supabase/migrations/0004_worker.sql)' : ''}`);
   };
 
   // Wait for this server to answer before replaying calls on it.
@@ -75,8 +91,12 @@ async function run() {
   }
   await beat();
   log(`${id} online at ${base()}${ip ? `, public IP ${ip}` : ''}`);
-  setInterval(() => { void beat().catch(() => {}); }, HEARTBEAT_MS);
-  setInterval(() => { void purge().catch(() => {}); }, 60_000);
+  // One heartbeat and one purge timer for the life of the process (run() may start again).
+  if (g.__workerTimers) clearInterval(g.__workerTimers.beat), clearInterval(g.__workerTimers.purge);
+  g.__workerTimers = {
+    beat: setInterval(() => { void beat().catch((err) => log(`heartbeat failed: ${err instanceof Error ? err.message : String(err)}`)); }, HEARTBEAT_MS),
+    purge: setInterval(() => { void purge().catch(() => {}); }, 60_000),
+  };
 
   // Terraform and cf-terraforming: downloaded (checksum-verified) when missing.
   void (async () => {
@@ -93,20 +113,27 @@ async function run() {
   let lastWork = Date.now();
   for (;;) {
     let took = 0;
-    if (inflight < MAX_PARALLEL) {
-      const { data, error } = await db().from('worker_calls').select('id').eq('status', 'queued').gt('expires_at', new Date().toISOString())
-        .order('created_at').limit(MAX_PARALLEL - inflight);
-      if (error) { log(`queue: ${error.message}`); await sleep(2_000); continue; }
-      for (const { id: callId } of (data ?? []) as { id: string }[]) {
-        // Claimed only if still queued: a second worker never takes the same call.
-        const claim = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: new Date().toISOString() })
-          .eq('id', callId).eq('status', 'queued').select('id, request');
-        const row = (claim.data as { id: string; request: never }[] | null)?.[0];
-        if (!row) continue;
-        took++;
-        inflight++;
-        void handle(row.id, row.request).finally(() => { inflight--; });
+    try {
+      if (inflight < MAX_PARALLEL) {
+        const { data, error } = await db().from('worker_calls').select('id').eq('status', 'queued').gt('expires_at', new Date().toISOString())
+          .order('created_at').limit(MAX_PARALLEL - inflight);
+        if (error) { log(`queue: ${error.message}`); await sleep(2_000); continue; }
+        for (const { id: callId } of (data ?? []) as { id: string }[]) {
+          // Claimed only if still queued: a second worker never takes the same call.
+          const claim = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: new Date().toISOString() })
+            .eq('id', callId).eq('status', 'queued').select('id, request');
+          const row = (claim.data as { id: string; request: never }[] | null)?.[0];
+          if (!row) continue;
+          took++;
+          inflight++;
+          void handle(row.id, row.request).finally(() => { inflight--; });
+        }
       }
+    } catch (err) {
+      // A dropped connection to Supabase: keep going.
+      log(`queue: ${err instanceof Error ? err.message : String(err)}`);
+      await sleep(2_000);
+      continue;
     }
     if (took || inflight) lastWork = Date.now();
     // Quick to pick up while busy, gentler on Supabase when idle.
