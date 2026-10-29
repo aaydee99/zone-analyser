@@ -25,7 +25,7 @@ export async function requestBackup(me: Me, config: BackupConfig, presetName?: s
     kind: 'backup', requestedBy: { id: me.id, email: me.email, role: me.role },
     title: `Backup ${presetName ? `“${presetName}”` : checked.cloudflare} · ${zones}`,
     details: [
-      `Account ${checked.cloudflare} · ${zones}${config.nameFilter.trim() ? ` matching ${config.nameFilter.trim()}` : ''}`,
+      `Account ${checked.cloudflare}${config.accountId ? ` › ${config.accountId}` : ''} · ${zones}${config.nameFilter.trim() ? ` matching ${config.nameFilter.trim()}` : ''}`,
       `Mode ${config.importMode ? 'generate + import' : 'generate only'} · account resources ${config.accountScope}${config.withAccount ? ' (with account)' : ''}`,
       `Upload: R2 ${config.r2.enabled ? checked.r2Bucket : 'off'} · S3 ${config.aws.enabled ? checked.awsBucket : 'off'}`,
       `Output folder ${checked.outputDir} · audit log ${config.auditLogHours} h · import mode ${yesNo(config.importMode)}`,

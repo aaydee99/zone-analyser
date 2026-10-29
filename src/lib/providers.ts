@@ -37,14 +37,19 @@ export function tokenAccounts(c: Credential): Promise<CfAccount[]> {
   if (fixed) return Promise.resolve([{ id: fixed, name: '' }]);
   return cached(`cf:token-accounts:${tag(c.fields.apiToken)}`, 5 * 60_000, async () => {
     const out: CfAccount[] = [];
+    let refused = '';
     for (let page = 1; page <= 100; page++) {
       const { status, body } = await cf<{ id: string; name: string }[]>(c.fields.apiToken, `/accounts?per_page=50&page=${page}`);
-      if (!body?.success) throw new Error(`Cloudflare: could not list the token's accounts (${cfError(body, status)})`);
+      if (!body?.success) { refused = cfError(body, status); break; }
       for (const a of body.result) out.push({ id: a.id, name: a.name });
       if (!body.result_info || page >= body.result_info.total_pages) break;
     }
-    if (!out.length) throw new Error('This API token can access no Cloudflare account — give it access to at least one, or enter the account ID');
-    return out;
+    if (out.length) return out;
+    // A token with zone permissions only lists no account: take the accounts of the zones it can see.
+    const fromZones = new Map<string, string>();
+    for (const z of await readZones(c).catch(() => [])) if (z.accountId) fromZones.set(z.accountId, z.accountName);
+    if (fromZones.size) return [...fromZones].map(([id, name]) => ({ id, name }));
+    throw new Error(`This API token can access no Cloudflare account or zone${refused ? ` (Cloudflare: ${refused})` : ''}. Give it access (for example "Read all resources"), or enter the account ID`);
   });
 }
 

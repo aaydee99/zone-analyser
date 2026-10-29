@@ -73,27 +73,47 @@ function CredentialSelect({ value, onChange, options, empty }:{ value: string; o
   );
 }
 
-function ZonePicker({ credentialId, selected, onChange }: { credentialId: string; selected: string[]; onChange: (ids: string[]) => void }) {
-  const [zones, setZones] = useState<Zone[] | null>(null);
+interface AccountOption { id: string; name: string; zones: number }
+interface ZoneList {
+  credentialId: string;
+  zones: Zone[] | null;
+  accounts: AccountOption[];
+  /** The set has no account ID: it covers every account its token can access. */
+  allAccounts: boolean;
+  loading: boolean;
+  error: string;
+  reload: () => void;
+}
+
+/** The account set's zones and accounts, read from Cloudflare on the server. */
+function useZoneList(credentialId: string): ZoneList {
+  const [data, setData] = useState<{ zones: Zone[]; accounts: AccountOption[]; allAccounts: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [q, setQ] = useState('');
-  const [manual, setManual] = useState('');
-
-  const load = useCallback(async () => {
-    if (!credentialId) return;
+  const reload = useCallback(async () => {
+    if (!credentialId) { setData(null); return; }
     setLoading(true);
     setError('');
     try {
-      setZones((await api<{ zones: Zone[] }>(`/api/zones?credentialId=${encodeURIComponent(credentialId)}`)).zones);
+      const r = await api<{ zones: Zone[]; accounts?: AccountOption[]; allAccounts?: boolean }>(`/api/zones?credentialId=${encodeURIComponent(credentialId)}`);
+      setData({ zones: r.zones, accounts: r.accounts ?? [], allAccounts: !!r.allAccounts });
     } catch (e) {
       setError((e as Error).message);
-      setZones(null);
+      setData(null);
     } finally {
       setLoading(false);
     }
   }, [credentialId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { reload(); }, [reload]);
+  return { credentialId, zones: data?.zones ?? null, accounts: data?.accounts ?? [], allAccounts: !!data?.allAccounts, loading, error, reload };
+}
+
+function ZonePicker({ list, accountId, selected, onChange }: { list: ZoneList; accountId: string; selected: string[]; onChange: (ids: string[]) => void }) {
+  const [q, setQ] = useState('');
+  const [manual, setManual] = useState('');
+  const { loading, error, reload: load, credentialId } = list;
+  // Only the chosen account's zones (all of the set's accounts when none is chosen).
+  const zones = useMemo(() => (list.zones && accountId ? list.zones.filter((z) => z.accountId === accountId) : list.zones), [list.zones, accountId]);
 
   const shown = useMemo(() => (zones ?? []).filter((z) => !q || z.name.toLowerCase().includes(q.toLowerCase()) || z.id.startsWith(q.toLowerCase()) || !!z.accountName?.toLowerCase().includes(q.toLowerCase())), [zones, q]);
   // A credential without an account ID lists zones from several accounts: name the account on each.
@@ -241,6 +261,13 @@ function BackupBuilder() {
   const problems = validateConfig(cfg);
   const account = includesAccount(cfg);
   const selectedMode = cfg.zoneMode === 'selected';
+  const zoneList = useZoneList(cfg.cloudflareCredentialId);
+  const chosenAccount = zoneList.accounts.find((a) => a.id === cfg.accountId);
+  const chooseAccount = (id: string) => setCfg((c) => ({
+    ...c, accountId: id,
+    // Chosen zones outside the account are dropped.
+    zoneIds: id ? c.zoneIds.filter((z) => zoneList.zones?.find((x) => x.id === z)?.accountId === id) : c.zoneIds,
+  }));
 
   const command = useMemo(() => {
     const env: string[] = [];
@@ -363,25 +390,35 @@ function BackupBuilder() {
                 onChange={(v) => setCfg((c) => {
                   // Another set has other storage: drop the bucket choice, and turn off uploads it cannot do.
                   const st = creds.find((x) => x.id === v)?.storage ?? {};
-                  return { ...c, cloudflareCredentialId: v, zoneIds: [], r2: { enabled: c.r2.enabled && !!st.r2, bucket: '' }, aws: { enabled: c.aws.enabled && !!st.aws, bucket: '' } };
+                  return { ...c, cloudflareCredentialId: v, accountId: '', zoneIds: [], r2: { enabled: c.r2.enabled && !!st.r2, bucket: '' }, aws: { enabled: c.aws.enabled && !!st.aws, bucket: '' } };
                 })} />
             </div>
           </Card>
 
           {/* 2 — Zones */}
           <Card>
-            <SectionHeader step="02" title="Zones" description="Back up every zone on the account, or pick specific ones." />
+            <SectionHeader step="02" title={zoneList.allAccounts ? 'Account and zones' : 'Zones'}
+              description={zoneList.allAccounts ? 'Choose an account (or all of them), then all of its zones or just the ones you pick.' : 'Back up every zone on the account, or pick specific ones.'} />
             <div className="space-y-5 p-5">
+              {zoneList.allAccounts && (
+                <Field label="Account" htmlFor="backup-account" hint="This account set has no account ID: it covers every account its token can access. Each account is backed up into its own folder.">
+                  <select id="backup-account" className="input" value={cfg.accountId} onChange={(e) => chooseAccount(e.target.value)}>
+                    <option value="">All {zoneList.accounts.length} accounts{zoneList.zones ? ` (${zoneList.zones.length} zones)` : ''}</option>
+                    {zoneList.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
+                    {cfg.accountId && !chosenAccount && zoneList.zones && <option value={cfg.accountId}>{cfg.accountId} (not accessible to this token)</option>}
+                  </select>
+                </Field>
+              )}
               <Segmented
                 value={cfg.zoneMode}
                 onChange={(v) => set('zoneMode', v)}
                 options={[
-                  { value: 'all', label: 'All zones', hint: 'Discovered via the API, then filtered' },
-                  { value: 'selected', label: 'Selected zones', hint: 'Passed as -z <zone_id> flags' },
+                  { value: 'all', label: 'All zones', hint: chosenAccount ? `Every zone of ${chosenAccount.name}` : zoneList.allAccounts ? 'Every zone of every account' : 'Discovered via the API, then filtered' },
+                  { value: 'selected', label: 'Chosen zones', hint: 'One or more · passed as -z <zone_id> flags' },
                 ]}
               />
               {selectedMode ? (
-                <ZonePicker credentialId={cfg.cloudflareCredentialId} selected={cfg.zoneIds} onChange={(ids) => set('zoneIds', ids)} />
+                <ZonePicker list={zoneList} accountId={cfg.accountId} selected={cfg.zoneIds} onChange={(ids) => set('zoneIds', ids)} />
               ) : (
                 <div className="grid gap-5 md:grid-cols-2">
                   <Field label="Only zones with status" hint="ZONE_STATUS_FILTER">
@@ -520,6 +557,9 @@ function BackupBuilder() {
               <div className="mt-1 text-[15px] font-semibold">{credName(cfg.cloudflareCredentialId) ?? 'No source selected'}</div>
             </div>
             <div className="divide-y divide-line/70 px-5 py-2">
+              {zoneList.allAccounts && (
+                <PlanRow label="Accounts">{chosenAccount ? chosenAccount.name : `All ${zoneList.accounts.length}, one after the other`}</PlanRow>
+              )}
               <PlanRow label="Zones">
                 {selectedMode ? `${cfg.zoneIds.length} selected` : (
                   <>All{cfg.statusFilter !== 'all' ? ` ${cfg.statusFilter}` : ''}{cfg.nameFilter.trim() && cfg.nameFilter.trim() !== '*' ? ` matching ${cfg.nameFilter.trim()}` : ''}</>

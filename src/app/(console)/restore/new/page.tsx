@@ -13,7 +13,7 @@ import { Terminal } from '@/components/terminal';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
-interface Zone { id: string; name: string; status: string }
+interface Zone { id: string; name: string; status: string; accountId?: string; accountName?: string }
 
 const MODE: Record<CandidateMode, { label: string; tone: 'info' | 'warn' | 'neutral' | 'bad'; help: string }> = {
   revert: { label: 'Revert to backup', tone: 'info', help: 'Still exists — imported, then set back to the backup values.' },
@@ -80,6 +80,10 @@ export default function RestorePage() {
   const [cfId, setCfId] = useState('');
   const [zones, setZones] = useState<Zone[] | null>(null);
   const [zoneId, setZoneId] = useState('');
+  // A set without an account ID covers every account its token can access: narrow the zones to one.
+  const [accounts, setAccounts] = useState<{ id: string; name: string; zones: number }[]>([]);
+  const [allAccounts, setAllAccounts] = useState(false);
+  const [acctId, setAcctId] = useState('');
   const [kind, setKind] = useState<'r2' | 'aws'>('r2');
   const [bucket, setBucket] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,9 +107,15 @@ export default function RestorePage() {
   useEffect(() => {
     if (!cfId) return;
     setZones(null);
-    api<{ zones: Zone[] }>(`/api/zones?credentialId=${encodeURIComponent(cfId)}`)
-      .then((x) => { setZones(x.zones); setZoneId((z) => (x.zones.some((y) => y.id === z) ? z : '')); })
-      .catch((e) => { setZones([]); toast((e as Error).message, 'bad'); });
+    api<{ zones: Zone[]; accounts?: { id: string; name: string; zones: number }[]; allAccounts?: boolean }>(`/api/zones?credentialId=${encodeURIComponent(cfId)}`)
+      .then((x) => {
+        setZones(x.zones);
+        setAccounts(x.accounts ?? []);
+        setAllAccounts(!!x.allAccounts);
+        setAcctId((a) => ((x.accounts ?? []).some((y) => y.id === a) ? a : ''));
+        setZoneId((z) => (x.zones.some((y) => y.id === z) ? z : ''));
+      })
+      .catch((e) => { setZones([]); setAccounts([]); setAllAccounts(false); toast((e as Error).message, 'bad'); });
   }, [cfId, toast]);
 
   // After a refresh: show the restore that is running (or the one this tab had open), not a blank page.
@@ -253,10 +263,35 @@ export default function RestorePage() {
               {creds.filter((c) => c.kind === 'cloudflare').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Field>
+          {allAccounts && (
+            <Field label="Account" hint="This account set has no account ID: it covers every account its token can access.">
+              <select className="input" value={acctId} onChange={(e) => {
+                const id = e.target.value;
+                setAcctId(id);
+                if (id && zones?.find((z) => z.id === zoneId)?.accountId !== id) setZoneId('');
+                setR(null);
+              }} disabled={!zones}>
+                <option value="">All {accounts.length} accounts</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Zone">
-            <select className="input" value={zoneId} onChange={(e) => { setZoneId(e.target.value); setR(null); }} disabled={!zones}>
+            <select className="input" value={zoneId} onChange={(e) => {
+              setZoneId(e.target.value);
+              // Picking a zone from "all accounts" selects its account too.
+              const z = zones?.find((x) => x.id === e.target.value);
+              if (allAccounts && z?.accountId) setAcctId(z.accountId);
+              setR(null);
+            }} disabled={!zones}>
               <option value="">{zones ? 'Choose a zone…' : 'Loading zones…'}</option>
-              {zones?.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+              {allAccounts && !acctId
+                ? accounts.map((a) => (
+                    <optgroup key={a.id} label={a.name}>
+                      {zones?.filter((z) => z.accountId === a.id).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+                    </optgroup>
+                  ))
+                : zones?.filter((z) => !acctId || z.accountId === acctId).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </Field>
           <Field label="Backups are in">

@@ -10,6 +10,11 @@ export type AccountScope = 'auto' | 'true' | 'false';
 
 export interface BackupConfig {
   cloudflareCredentialId: string;
+  /**
+   * One account of an account set that has no account ID (it covers every account its token can
+   * access); '' = all of them. Ignored for a set with an account ID.
+   */
+  accountId: string;
   /** all → every zone on the account; selected → only zoneIds (passed as -z flags). */
   zoneMode: 'all' | 'selected';
   zoneIds: string[];
@@ -39,6 +44,7 @@ export interface BackupConfig {
 
 export const DEFAULT_CONFIG: BackupConfig = {
   cloudflareCredentialId: '',
+  accountId: '',
   zoneMode: 'all',
   zoneIds: [],
   withAccount: false,
@@ -64,6 +70,7 @@ export function normalizeConfig(input: Partial<BackupConfig> | undefined): Backu
   const d = DEFAULT_CONFIG;
   return {
     cloudflareCredentialId: str(c.cloudflareCredentialId, d.cloudflareCredentialId),
+    accountId: str(c.accountId, d.accountId).trim().toLowerCase(),
     zoneMode: c.zoneMode === 'selected' ? 'selected' : 'all',
     zoneIds: Array.isArray(c.zoneIds) ? c.zoneIds.filter((z): z is string => typeof z === 'string') : [],
     withAccount: c.withAccount === true,
@@ -86,6 +93,7 @@ const ZONE_ID_RE = /^[0-9a-f]{32}$/;
 export function validateConfig(c: BackupConfig): string[] {
   const errs: string[] = [];
   if (!c.cloudflareCredentialId) errs.push('Choose an account set from the vault.');
+  if (c.accountId && !ZONE_ID_RE.test(c.accountId)) errs.push('Not a Cloudflare account ID.');
   if (c.zoneMode === 'selected') {
     if (c.zoneIds.length === 0) errs.push('Select at least one zone, or back up all zones.');
     const bad = c.zoneIds.filter((z) => !ZONE_ID_RE.test(z));

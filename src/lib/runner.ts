@@ -113,10 +113,23 @@ function assertNoRestore() {
  * Every check a backup start makes about its configuration, without starting anything: run when an
  * operator asks for approval, so an approver only ever sees requests that can run.
  */
+/** A chosen account must be one the set covers: its own account ID, or one its token can access. */
+async function assertAccountChoice(cf: Credential, config: BackupConfig) {
+  if (!config.accountId) return;
+  const fixed = cf.fields.accountId?.trim();
+  if (fixed) {
+    if (fixed !== config.accountId) throw new HttpError(400, `"${cf.name}" is for account ${fixed}, not ${config.accountId}`);
+    return;
+  }
+  const reachable = await tokenAccounts(cf).catch((err) => { throw new HttpError(502, err instanceof Error ? err.message : String(err)); });
+  if (!reachable.some((a) => a.id === config.accountId)) throw new HttpError(400, `The token of "${cf.name}" cannot access account ${config.accountId}`);
+}
+
 export async function checkRunConfig(config: BackupConfig): Promise<{ cloudflare: string; r2Bucket: string; awsBucket: string; outputDir: string }> {
   const problems = validateConfig(config);
   if (problems.length) throw new HttpError(400, problems.join(' '));
   const cf = await credentialForRun(config.cloudflareCredentialId, 'cloudflare');
+  await assertAccountChoice(cf, config);
   const r2 = config.r2.enabled ? storageOf(cf, 'r2') : null;
   const aws = config.aws.enabled ? storageOf(cf, 'aws') : null;
   const settings = await getSettings();
@@ -151,8 +164,12 @@ export async function checkRunConfig(config: BackupConfig): Promise<{ cloudflare
 async function accountsToBackUp(cf: Credential, config: BackupConfig, log: (m: string, level?: 'info' | 'ok' | 'warn') => void) {
   const fixed = cf.fields.accountId?.trim();
   if (fixed) return [{ id: fixed, name: '', zoneIds: config.zoneIds }];
-  const all = await tokenAccounts(cf);
-  log(`No account ID on "${cf.name}": backing up the ${all.length} account${all.length === 1 ? '' : 's'} the token can access — ${all.map((a) => a.name || a.id).join(', ')}`);
+  const reachable = await tokenAccounts(cf);
+  const all = config.accountId ? reachable.filter((a) => a.id === config.accountId) : reachable;
+  if (!all.length) throw new Error(`The token of "${cf.name}" cannot access account ${config.accountId}`);
+  log(config.accountId
+    ? `Backing up account ${all[0].name || all[0].id} (one of the ${reachable.length} accounts the token of "${cf.name}" can access)`
+    : `No account ID on "${cf.name}": backing up the ${all.length} account${all.length === 1 ? '' : 's'} the token can access — ${all.map((a) => a.name || a.id).join(', ')}`);
   if (config.zoneMode !== 'selected') return all.map((a) => ({ ...a, zoneIds: [] }));
   const zones = await listZones(cf);
   const accountOf = new Map(zones.map((z) => [z.id, z.accountId]));
@@ -174,6 +191,7 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
   }
 
   const cf = await credentialForRun(config.cloudflareCredentialId, 'cloudflare');
+  await assertAccountChoice(cf, config);
   // Storage comes only from the same account set: one account's backup cannot reach another's bucket.
   const r2 = config.r2.enabled ? storageOf(cf, 'r2') : null;
   const aws = config.aws.enabled ? storageOf(cf, 'aws') : null;
