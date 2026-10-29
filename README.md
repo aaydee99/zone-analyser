@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql) and then [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), in that order.
+2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql) and [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), in that order.
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -14,7 +14,6 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
    | `SUPABASE_URL` | Project Settings › API › Project URL |
    | `SUPABASE_ANON_KEY` | Project Settings › API › anon / publishable key |
    | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings › API › service_role / secret key. **Server only.** |
-   | `VAULT_SERVER_KEY_FILE` | Path to the vault server key, kept **outside** the project. It's already set up at `%USERPROFILE%\.backup-console\vault-server.key`, readable only by your account. Back that file up. |
    | `REDIS_URL` | Optional. Redis for the shared cache of Cloudflare reads, e.g. `redis://127.0.0.1:6379` (`rediss://user:password@host:6380` when it's not on this machine). Without it the cache is kept in memory. See [Cache](#cache). |
    | `CONSOLE_ALLOWED_HOSTS` | Optional. By default the console answers to any host name. Set a comma-separated list (for example `backups.example.com`) to answer only to those and the loopback names. `*` allows any host. Names other than loopback must be reached over HTTPS through a TLS proxy. |
 
@@ -82,11 +81,13 @@ The run record and the audit log show which bucket was used, and "run again" reu
 ## Vault
 
 - **Access**: only super admins can open the vault, and only after entering the **vault password**. Choose one different from your sign-in password. The console doesn't check this, because checking would mean sending the vault password to Supabase Auth. The vault locks itself after an idle period (Settings › Sessions) or when you sign out.
-- **The trade-off of running backups without the vault password**: whoever can read the vault server key *and* the database can decrypt every credential. That's why the key lives in its own file outside the project (`VAULT_SERVER_KEY_FILE`), not next to the service-role key. Keep that file's permissions limited to the account that runs the console.
+- **Vault server key, in Supabase**: backups decrypt credentials with the vault server key, so they never need the vault password and never depend on the vault being locked or unlocked. The key is kept in Supabase (`public.vault_keys`, row-level security on, readable only with the service-role key) and created on first use; there is no key file. `VAULT_SERVER_KEY` in `.env.local` still overrides it, and `VAULT_SERVER_KEY_FILE` is no longer used.
+- **The trade-off**: whoever has the Supabase service-role key can read both the vault server key and the vault, so they can decrypt every credential. Keep the service-role key secret.
+- **Moving from a key file**: remove `VAULT_SERVER_KEY_FILE` from `.env.local`, apply `0003_vault_server_key.sql`, restart, and unlock the vault once with the vault password. The console re-wraps its server copy under the key in Supabase (`vault.server_key_resealed` in the audit log). Until then, backups say a super admin must unlock the vault once.
 - **Encryption**: all credentials are encrypted with one random 256-bit data key (AES-256-GCM, each sealed with its own id). Supabase only ever stores ciphertext. The data key is stored in two wrapped copies:
   - `dek_pw`: wrapped with scrypt (N=2¹⁷) of the vault password. Opens the vault UI.
-  - `dek_server`: wrapped with `VAULT_SERVER_KEY`. Used only inside the server process when a backup runs, so operators can run backups and presets without the vault being opened. Secrets are put into the `backup.js` process environment and replaced with `••••••••` in every log line. No API ever returns them to anyone except a super admin with the vault unlocked.
-- **Lost server key**: if `VAULT_SERVER_KEY` is lost or changed, a super admin unlocks the vault once with the vault password and the server copy is re-wrapped automatically. If both the server key and the vault password are lost, the credentials can't be recovered.
+  - `dek_server`: wrapped with the vault server key. Used only inside the server process when a backup runs, so operators can run backups and presets without the vault being opened. Secrets are put into the `backup.js` process environment and replaced with `••••••••` in every log line. No API ever returns them to anyone except a super admin with the vault unlocked.
+- **Lost or changed server key**: if the key in `vault_keys` is deleted or changed, a super admin unlocks the vault once with the vault password and the server copy is re-wrapped automatically. If both the server key and the vault password are lost, the credentials can't be recovered.
 - **Reset the vault password** (lost or to be replaced), keeping every credential:
   1. Run [`supabase/maintenance/reset_vault_password.sql`](supabase/maintenance/reset_vault_password.sql) in the Supabase SQL editor. It clears only the password copy of the data key (`dek_pw` and its salt). The credentials and the server-key copy stay, and it refuses to run if the server-key copy is missing.
   2. Open **Credentials** as a super admin. It asks for a new vault password.

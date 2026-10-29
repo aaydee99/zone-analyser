@@ -14,7 +14,6 @@ const ENV_HELP: Record<string, string> = {
   SUPABASE_URL: 'Project Settings › API › Project URL',
   SUPABASE_ANON_KEY: 'Project Settings › API › anon / publishable key',
   SUPABASE_SERVICE_ROLE_KEY: 'Project Settings › API › service_role / secret key (server only)',
-  VAULT_SERVER_KEY: 'Set VAULT_SERVER_KEY_FILE to a key file outside the project (see .env.example), or VAULT_SERVER_KEY inline',
 };
 
 function Step({ done, title, children }: { done: boolean; title: string; children?: React.ReactNode }) {

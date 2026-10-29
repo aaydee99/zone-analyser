@@ -171,7 +171,7 @@ export default function SettingsPage() {
                 <CheckRow label="Backup script" check={sys.script} />
                 <CheckRow label="No .env next to the script" check={{ ok: sys.envOverride.ok, detail: sys.envOverride.ok ? 'vault credentials take effect' : `${sys.envOverride.detail} exists — it would override the vault` }} />
                 <CheckRow label="Supabase public sign-up disabled" check={sys.signupDisabled} />
-                <CheckRow label="Vault server key stored separately" check={sys.vaultKeyFile} />
+                <CheckRow label="Vault server key" check={sys.vaultKeyFile} />
                 <CheckRow label="No leftover local vault" check={sys.legacyVault} />
               </div>
             )}
@@ -193,12 +193,12 @@ export default function SettingsPage() {
           <Alert tone="info" title="Security model">
             Sign-in is verified by Supabase Auth; roles are enforced on the server for every request. Credentials are encrypted
             with AES-256-GCM before they reach Supabase. Only super admins can open the vault, with a separate vault password;
-            backups decrypt secrets on the server with <code className="font-mono">VAULT_SERVER_KEY</code>, inject them into the
+            backups decrypt secrets on the server with the vault server key kept in Supabase, inject them into the
             backup process and scrub them from every log line.
           </Alert>
           <div className="flex items-start gap-2 px-1 text-xs text-muted">
             <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
-            Keep a copy of <code className="font-mono">VAULT_SERVER_KEY</code> and the vault password somewhere safe. Losing both makes stored credentials unrecoverable.
+            Keep the Supabase service-role key secret: with it, the vault server key and the vault can be read. Keep the vault password somewhere safe too.
           </div>
         </div>
       </div>

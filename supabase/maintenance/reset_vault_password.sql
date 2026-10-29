@@ -7,7 +7,7 @@
 --
 --   1. Run this script.
 --   2. Sign in as a super admin and open Credentials: it asks for a new vault password.
---   3. The console opens the data key with the server key (VAULT_SERVER_KEY_FILE) and wraps
+--   3. The console opens the data key with the server key (public.vault_keys) and wraps
 --      it under the new password. Credentials, presets and backups are unchanged, and the
 --      audit log records vault.password_reset.
 --
@@ -31,7 +31,7 @@ begin
   end if;
   -- Without the server-key copy, clearing dek_pw would make every credential unrecoverable.
   if v.dek_server is null or jsonb_typeof(v.dek_server) <> 'object' or not (v.dek_server ? 'ct') then
-    raise exception 'The vault has no server-key copy of its data key (dek_server), so the password cannot be reset without losing the credentials. Nothing was changed.';
+    raise exception 'The vault has no server-key copy of its data key (dek_server), so the password cannot be reset without losing the credentials. Nothing was changed. If you know the current vault password: unlock the vault once in the console (it re-creates the server-key copy), then use Change vault password there.';
   end if;
   update public.vault set dek_pw = null, kdf = null, updated_at = now() where id = 1;
 end $$;

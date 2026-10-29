@@ -463,8 +463,10 @@ export async function systemCheck() {
     envOverride: { ok: !fs.existsSync(path.join(RUNNER_DIR, '.env')), detail: path.join(RUNNER_DIR, '.env') },
     signupDisabled: signupCheck(await publicSignupEnabled()),
     vaultKeyFile: process.env.VAULT_SERVER_KEY_FILE?.trim()
-      ? { ok: true, detail: 'kept in a separate file (VAULT_SERVER_KEY_FILE)' }
-      : { ok: false, detail: 'VAULT_SERVER_KEY is inline in .env.local next to the service-role key — move it to VAULT_SERVER_KEY_FILE' },
+      ? { ok: false, detail: 'VAULT_SERVER_KEY_FILE is no longer used: the key is kept in Supabase. Remove the line from .env.local' }
+      : process.env.VAULT_SERVER_KEY?.trim()
+        ? { ok: true, detail: 'VAULT_SERVER_KEY in the environment (overrides the key in Supabase)' }
+        : { ok: true, detail: 'kept in Supabase (vault_keys, service role only)' },
     legacyVault: fs.existsSync(path.join(DATA_DIR, 'vault.json'))
       ? { ok: false, detail: `${path.join(DATA_DIR, 'vault.json')} (pre-Supabase vault) is still on disk — delete it once its credentials are re-added` }
       : { ok: true, detail: 'no pre-Supabase vault file left' },

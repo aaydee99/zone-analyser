@@ -1,6 +1,5 @@
 import 'server-only';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { db, must } from './supabase';
 import { cachedSettings } from './settings';
 import { audit } from './audit';
@@ -16,7 +15,8 @@ import {
 // The DEK is stored in Supabase wrapped twice:
 //   dek_pw     — under scrypt(vault password). Only a super admin who enters
 //                the vault password can open the vault UI / API with it.
-//   dek_server — under VAULT_SERVER_KEY from the server environment. Used only
+//   dek_server — under the vault server key, kept in Supabase (public.vault_keys,
+//                service role only; VAULT_SERVER_KEY in the environment overrides it). Used only
 //                inside this process to inject secrets into a backup run, so
 //                presets work for every role without exposing the vault.
 // Neither the DEK nor any plaintext ever leaves the server.
@@ -95,28 +95,49 @@ function open(key: Buffer, s: Sealed, aad: string): Buffer {
 
 const tryOpen = (key: Buffer, s: Sealed, aad: string) => { try { return open(key, s, aad); } catch { return null; } };
 
-/** VAULT_SERVER_KEY: 32 bytes as base64 (44 chars) or hex (64 chars). */
-/**
- * The server key, preferably from VAULT_SERVER_KEY_FILE (a file outside the project,
- * readable only by the account running the console) so it never sits in the same
- * file as the Supabase service-role key. VAULT_SERVER_KEY inline is still accepted.
- */
-function serverKey(): Buffer {
-  const file = process.env.VAULT_SERVER_KEY_FILE?.trim();
-  let raw = (process.env.VAULT_SERVER_KEY ?? '').trim();
-  if (file) {
-    try { raw = fs.readFileSync(file, 'utf8').trim(); } catch (err) {
-      throw new VaultError(`Cannot read VAULT_SERVER_KEY_FILE (${(err as NodeJS.ErrnoException).code ?? 'error'})`, 500);
-    }
-  }
-  const key = /^[0-9a-f]{64}$/i.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
-  if (key.length !== 32) throw new VaultError('The vault server key must be 32 random bytes (base64 or hex) — see .env.example', 500);
+/** 32 bytes as base64 (44 chars) or hex (64 chars). */
+function parseKey(raw: string, where: string): Buffer {
+  const v = raw.trim();
+  const key = /^[0-9a-f]{64}$/i.test(v) ? Buffer.from(v, 'hex') : Buffer.from(v, 'base64');
+  if (key.length !== 32) throw new VaultError(`The vault server key in ${where} must be 32 random bytes (base64 or hex)`, 500);
   return key;
 }
 
+const gk = globalThis as unknown as { __vaultServerKey?: Buffer };
+
+/**
+ * The vault server key, from Supabase (public.vault_keys, service role only). Created on first
+ * use, so nothing has to be set up. VAULT_SERVER_KEY in the environment still overrides it.
+ * Returns a copy: callers wipe it when done.
+ */
+async function serverKey(): Promise<Buffer> {
+  const inline = (process.env.VAULT_SERVER_KEY ?? '').trim();
+  if (inline) return parseKey(inline, 'VAULT_SERVER_KEY');
+  if (gk.__vaultServerKey) return Buffer.from(gk.__vaultServerKey);
+  const read = async () => {
+    const { data, error } = await db().from('vault_keys').select('server_key').eq('id', 1).maybeSingle();
+    if (error) {
+      throw new VaultError(/vault_keys|42P01|PGRST205/.test(`${error.code} ${error.message}`)
+        ? 'The vault key table is missing: run supabase/migrations/0003_vault_server_key.sql in the Supabase SQL editor'
+        : `Reading the vault server key: ${error.message}`, 500);
+    }
+    return (data as { server_key: string } | null)?.server_key ?? null;
+  };
+  let stored = await read();
+  if (!stored) {
+    // First use: create it. Two requests at once insert one row; both then read the same key.
+    const { error } = await db().from('vault_keys').upsert({ id: 1, server_key: crypto.randomBytes(32).toString('base64') }, { onConflict: 'id', ignoreDuplicates: true });
+    if (error) throw new VaultError(`Creating the vault server key: ${error.message}`, 500);
+    stored = await read();
+    if (!stored) throw new VaultError('Creating the vault server key failed', 500);
+  }
+  gk.__vaultServerKey = parseKey(stored, 'Supabase (vault_keys)');
+  return Buffer.from(gk.__vaultServerKey);
+}
+
 /** A key for the shared cache, derived from the server key (so cached data is unreadable without it). */
-export function cacheKeyMaterial(): Buffer {
-  const sk = serverKey();
+export async function cacheKeyMaterial(): Promise<Buffer> {
+  const sk = await serverKey();
   try { return Buffer.from(crypto.hkdfSync('sha256', sk, Buffer.alloc(0), 'backup-console cache v1', 32)); } finally { sk.fill(0); }
 }
 
@@ -176,7 +197,7 @@ export async function initVault(me: Me, password: string) {
   const existing = await readVault();
   if (existing && !needsNewPassword(existing)) throw new VaultError('The vault already exists', 409);
   checkPassword(password, 'Vault password');
-  const sk = serverKey();
+  const sk = await serverKey();
   const salt = crypto.randomBytes(16);
   const kdf = { name: 'scrypt', ...KDF, salt: salt.toString('base64') };
   if (existing) {
@@ -227,7 +248,7 @@ export async function unlockVault(me: Me, password: string) {
   }
   state.failures.delete(me.id);
   // If VAULT_SERVER_KEY was rotated or lost, re-wrap the DEK for this server so runs keep working.
-  const sk = serverKey();
+  const sk = await serverKey();
   const viaServer = tryOpen(sk, row.dek_server, AAD_SERVER);
   if (!viaServer || !viaServer.equals(dek)) {
     must(await db().from('vault').update({ dek_server: seal(sk, dek, AAD_SERVER), updated_at: new Date().toISOString() }).eq('id', 1), 'Re-sealing vault');
@@ -309,7 +330,7 @@ export async function listCredentialOptions(): Promise<CredentialOption[]> {
   if (rows.length) {
     try {
       const v = await readVault();
-      dek = v ? tryOpen(serverKey(), v.dek_server, AAD_SERVER) : null;
+      if (v) { const sk = await serverKey(); dek = tryOpen(sk, v.dek_server, AAD_SERVER); sk.fill(0); }
     } catch { dek = null; } // no server key: options still list, without bucket names
   }
   try {
@@ -482,8 +503,10 @@ export function storageOf(c: Credential, g: StorageKind): Credential {
 export async function credentialForRun(id: string, kind: CredentialKind): Promise<Credential> {
   const v = await readVault();
   if (!v) throw new VaultError('The vault has not been set up yet — a super admin must create it and add credentials', 409);
-  const dek = tryOpen(serverKey(), v.dek_server, AAD_SERVER);
-  if (!dek) throw new VaultError('VAULT_SERVER_KEY does not match this vault — a super admin must unlock the vault once to re-seal it', 500);
+  const sk = await serverKey();
+  const dek = tryOpen(sk, v.dek_server, AAD_SERVER);
+  sk.fill(0);
+  if (!dek) throw new VaultError('The vault server key does not match this vault — a super admin must unlock the vault once (Credentials) to re-seal it', 500);
   try {
     const c = decode(dek, await row(id));
     if (c.kind !== kind) throw new VaultError(`Credential "${c.name}" is not a ${KINDS[kind].short} credential`);

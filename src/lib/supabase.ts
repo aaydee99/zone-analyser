@@ -7,10 +7,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 const REQUIRED = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'] as const;
 
 export function missingEnv(): string[] {
-  const missing: string[] = REQUIRED.filter((k) => !process.env[k]?.trim());
-  // The vault server key may be inline or (preferred) in a separate file.
-  if (!process.env.VAULT_SERVER_KEY_FILE?.trim() && !process.env.VAULT_SERVER_KEY?.trim()) missing.push('VAULT_SERVER_KEY');
-  return missing;
+  // The vault server key is kept in Supabase (public.vault_keys) and created on first use.
+  return REQUIRED.filter((k) => !process.env[k]?.trim());
 }
 
 export const isConfigured = () => missingEnv().length === 0;

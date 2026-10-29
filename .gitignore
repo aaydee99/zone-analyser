@@ -11,3 +11,5 @@ next-env.d.ts
 .env*.local
 .claude
 design-system/
+
+.vercel

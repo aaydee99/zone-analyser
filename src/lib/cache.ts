@@ -36,7 +36,7 @@ async function redis(): Promise<Client | null> {
   if (s.client?.isReady) return s.client;
   s.connecting ??= (async () => {
     try {
-      if (!s.key) s.key = (await import('./vault')).cacheKeyMaterial();
+      if (!s.key) s.key = await (await import('./vault')).cacheKeyMaterial();
       const c = createClient({ url: redisUrl(), socket: { connectTimeout: 3000, reconnectStrategy: false } });
       c.on('error', (err) => down(err));
       await c.connect();
