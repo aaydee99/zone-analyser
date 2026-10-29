@@ -1,7 +1,7 @@
 // Host and scheme rules shared by the request proxy and the API wrappers. No imports,
 // so the proxy can load it without pulling in the database client.
 
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]',]);
 
 const hostname = (h: string) => (h.startsWith('[') ? h.slice(0, h.indexOf(']') + 1) : h.split(':')[0]);
 
@@ -10,12 +10,16 @@ export function isLoopbackHost(host: string | null): boolean {
   return !!host && LOOPBACK_HOSTNAMES.has(hostname(host.trim().toLowerCase()));
 }
 
-/** Hosts the console answers to: loopback names on any port, plus CONSOLE_ALLOWED_HOSTS (comma-separated host[:port]). */
+/**
+ * Hosts the console answers to: any host, unless CONSOLE_ALLOWED_HOSTS lists some (comma-separated
+ * host[:port]); then only those and the loopback names on any port. `*` in the list also allows any host.
+ */
 export function isAllowedHost(host: string | null): boolean {
   if (!host) return false;
   const h = host.trim().toLowerCase();
-  const extra = (process.env.CONSOLE_ALLOWED_HOSTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return extra.includes(h) || isLoopbackHost(h);
+  const listed = (process.env.CONSOLE_ALLOWED_HOSTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (!listed.length || listed.includes('*')) return true;
+  return listed.includes(h) || isLoopbackHost(h);
 }
 
 /**

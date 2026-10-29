@@ -16,7 +16,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
    | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings › API › service_role / secret key. **Server only.** |
    | `VAULT_SERVER_KEY_FILE` | Path to the vault server key, kept **outside** the project. It's already set up at `%USERPROFILE%\.backup-console\vault-server.key`, readable only by your account. Back that file up. |
    | `REDIS_URL` | Optional. Redis for the shared cache of Cloudflare reads, e.g. `redis://127.0.0.1:6379` (`rediss://user:password@host:6380` when it's not on this machine). Without it the cache is kept in memory. See [Cache](#cache). |
-   | `CONSOLE_ALLOWED_HOSTS` | Optional. Extra host names the console answers to, behind a TLS proxy. By default it serves only `127.0.0.1`, `localhost` and `[::1]`. |
+   | `CONSOLE_ALLOWED_HOSTS` | Optional. By default the console answers to any host name. Set a comma-separated list (for example `backups.example.com`) to answer only to those and the loopback names. `*` allows any host. Names other than loopback must be reached over HTTPS through a TLS proxy. |
 
 5. **Run it**:
    ```bash
@@ -338,7 +338,7 @@ Sessions are opaque cookies set with `HttpOnly`, `Secure` and `SameSite=Strict`.
 
 Request protections:
 - **HTTPS**: plain HTTP is served only on loopback (`127.0.0.1`, `localhost`, `[::1]`), where traffic never leaves the machine. On any other host ([`src/proxy.ts`](src/proxy.ts)), GET requests are redirected to HTTPS and everything else is refused. HTTPS responses carry `Strict-Transport-Security: max-age=63072000; includeSubDomains`. Behind a TLS proxy, set `X-Forwarded-Proto: https`.
-- **Host check**: every request (pages and API) must use an allowed `Host` (loopback, or `CONSOLE_ALLOWED_HOSTS`). This blocks DNS-rebinding pages.
+- **Host check**: every request (pages and API) must use an allowed `Host`. Any host is allowed unless `CONSOLE_ALLOWED_HOSTS` lists some; set it to block DNS-rebinding pages. Mutating requests must still carry an `Origin` for the same host, and session cookies stay `SameSite=Strict` and tied to the host name you signed in on.
 - **Origin check**: requests that change data must carry a matching `Origin`.
 - **Response headers**: pages are served with a Content-Security-Policy, `frame-ancestors 'none'` and `nosniff`.
 - **Error responses**: unexpected server errors return a generic message with a reference number. The details go to the server log only.
