@@ -337,10 +337,29 @@ export default function ZoneExplorerPage() {
     return (zones ?? []).filter((z) => !s || [z.name, z.accountName, z.id, z.plan, z.status].some((x) => x.toLowerCase().includes(s)));
   }, [zones, q]);
   const byAccount = useMemo(() => {
-    const m = new Map<string, ZoneListItem[]>();
-    for (const z of shownZones) { const k = z.accountName || z.accountId || 'Unknown account'; m.set(k, [...(m.get(k) ?? []), z]); }
-    return [...m];
+    const m = new Map<string, { id: string; name: string; zones: ZoneListItem[] }>();
+    for (const z of shownZones) {
+      const id = z.accountId || z.accountName || 'unknown';
+      const g = m.get(id) ?? { id, name: z.accountName || z.accountId || 'Unknown account', zones: [] };
+      g.zones.push(z);
+      m.set(id, g);
+    }
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [shownZones]);
+
+  // Accounts as accordions: open when there is only one, for the open zone's account, and while
+  // searching. What you open or close is remembered in this browser.
+  const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try { setOpenAccounts(JSON.parse(localStorage.getItem('zx.openAccounts') ?? '{}') as Record<string, boolean>); } catch { /* storage blocked */ }
+  }, []);
+  const setAccountsOpen = (next: Record<string, boolean>) => {
+    setOpenAccounts(next);
+    try { localStorage.setItem('zx.openAccounts', JSON.stringify(next)); } catch { /* storage blocked */ }
+  };
+  const isOpen = (g: { id: string; zones: ZoneListItem[] }) =>
+    !!q.trim() || (openAccounts[g.id] ?? (byAccount.length === 1 || g.zones.some((z) => z.id === selected)));
+  const allOpen = byAccount.every(isOpen);
 
   const loaded = useMemo(() => (summary?.sections ?? []).map((x) => parts[x.key]?.data).filter((x): x is ZoneGroupReport => !!x), [summary, parts]);
   const allSections = useMemo(() => loaded.flatMap((p) => p.sections), [loaded]);
@@ -387,20 +406,46 @@ export default function ZoneExplorerPage() {
               <input className="input !pl-9" placeholder={zones ? `Find among ${zones.length} zones…` : 'Loading zones…'} value={q} onChange={(e) => setQ(e.target.value)} />
             </label>
             <div className="max-h-[60vh] overflow-y-auto lg:max-h-[calc(100vh-12rem)]">
-              {byAccount.map(([account, zs]) => (
-                <div key={account}>
-                  <p className="eyebrow px-4 pt-3 pb-1">{account}</p>
-                  {zs.map((z) => (
-                    <button key={z.id} type="button" onClick={() => open(z.id)} aria-pressed={selected === z.id} disabled={loading}
-                      title={loading ? 'Wait for the open zone to finish loading' : undefined}
-                      className={cx('flex w-full items-center gap-2 px-4 py-2 text-left text-[13px] transition-colors enabled:hover:bg-raised/60 disabled:cursor-not-allowed', selected === z.id ? 'bg-raised text-ink' : loading && 'opacity-50')}>
-                      <span className="min-w-0 flex-1 truncate">{z.name}</span>
-                      {z.status !== 'active' && <Badge tone="warn">{z.status}</Badge>}
-                      <span className="shrink-0 text-[11px] text-faint">{z.plan.replace(/ Website$/, '')}</span>
-                    </button>
-                  ))}
+              {byAccount.length > 1 && !q.trim() && (
+                <div className="flex items-center justify-between border-b border-line/60 px-4 py-2 text-[11px] text-muted">
+                  <span>{byAccount.length} accounts</span>
+                  <button type="button" className="hover:text-ink" onClick={() => setAccountsOpen(Object.fromEntries(byAccount.map((g) => [g.id, !allOpen])))}>
+                    {allOpen ? 'Collapse all' : 'Expand all'}
+                  </button>
                 </div>
-              ))}
+              )}
+              {byAccount.map((g) => {
+                const expanded = isOpen(g);
+                const inactive = g.zones.filter((z) => z.status !== 'active').length;
+                return (
+                  <section key={g.id} className="border-b border-line/60 last:border-0">
+                    <button type="button" aria-expanded={expanded} aria-controls={`zx-acct-${g.id}`}
+                      onClick={() => setAccountsOpen({ ...openAccounts, [g.id]: !expanded })}
+                      className="sticky top-0 z-10 flex w-full items-center gap-2 bg-surface/95 px-3 py-2.5 text-left backdrop-blur hover:bg-raised/60">
+                      <ChevronRight className={cx('size-4 shrink-0 text-faint transition-transform', expanded && 'rotate-90')} aria-hidden />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-ink">{g.name}</span>
+                        {g.name !== g.id && /^[0-9a-f]{32}$/.test(g.id) && <span className="block truncate font-mono text-[10.5px] text-faint">{g.id}</span>}
+                      </span>
+                      {inactive > 0 && <Badge tone="warn">{inactive} not active</Badge>}
+                      <Badge>{g.zones.length}</Badge>
+                    </button>
+                    {expanded && (
+                      <div id={`zx-acct-${g.id}`} className="pb-1">
+                        {g.zones.map((z) => (
+                          <button key={z.id} type="button" onClick={() => open(z.id)} aria-pressed={selected === z.id} disabled={loading}
+                            title={loading ? 'Wait for the open zone to finish loading' : undefined}
+                            className={cx('flex w-full items-center gap-2 py-2 pr-4 pl-9 text-left text-[13px] transition-colors enabled:hover:bg-raised/60 disabled:cursor-not-allowed', selected === z.id ? 'bg-raised text-ink' : loading && 'opacity-50')}>
+                            <span className="min-w-0 flex-1 truncate">{z.name}</span>
+                            {z.status !== 'active' && <Badge tone="warn">{z.status}</Badge>}
+                            <span className="shrink-0 text-[11px] text-faint">{z.plan.replace(/ Website$/, '')}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
               {zones && !shownZones.length && <p className="px-4 py-3 text-[13px] text-muted">No zone matches.</p>}
             </div>
           </Card>
