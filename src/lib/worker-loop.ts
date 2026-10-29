@@ -6,6 +6,9 @@ import crypto from 'node:crypto';
 import { db, missingEnv } from './supabase';
 import { DATA_DIR, ensureDir } from './store';
 import { ensureTools, toolStatus } from './tools';
+import { activeRunId } from './runner';
+import { activeRestore } from './job-lock';
+import { liveRestoreIds } from './restore';
 import { openRelay, sealRelay } from './vault';
 import { RELAY_CHUNK, RELAY_HEADER, type RelayRequest, type RelayResponse } from './worker-link';
 
@@ -17,6 +20,12 @@ import { RELAY_CHUNK, RELAY_HEADER, type RelayRequest, type RelayResponse } from
 const HEARTBEAT_MS = 5_000;
 const IP_REFRESH_MS = 10 * 60_000;
 const MAX_PARALLEL = 8;
+/** On GitHub Actions: stop after this long with nothing to do, and before the 6-hour job limit. 0: never. */
+const IDLE_MS = (Number(process.env.CONSOLE_WORKER_IDLE_MINUTES) || 0) * 60_000;
+const MAX_MS = (Number(process.env.CONSOLE_WORKER_MAX_MINUTES) || 0) * 60_000;
+const PROCESS_START = Date.now();
+/** A backup or restore is running, or a restore session is open (its plan and held key live in memory). */
+const busy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0;
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
 const g = globalThis as unknown as { __workerLoop?: boolean; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
@@ -136,6 +145,12 @@ async function run() {
       continue;
     }
     if (took || inflight) lastWork = Date.now();
+    const idle = IDLE_MS > 0 && Date.now() - lastWork > IDLE_MS;
+    const old = MAX_MS > 0 && Date.now() - PROCESS_START > MAX_MS;
+    if ((idle || old) && !inflight && !busy()) {
+      await retire(id, old ? `running for ${Math.round(MAX_MS / 60_000)} minutes` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
+      process.exit(0);
+    }
     // Quick to pick up while busy, gentler on Supabase when idle.
     await sleep(took ? 50 : Date.now() - lastWork < 30_000 ? 250 : 1_000);
   }
@@ -172,6 +187,13 @@ async function handle(callId: string, sealed: never) {
   } catch (err) {
     await db().from('worker_calls').update({ status: 'failed', error: err instanceof Error ? err.message : String(err), done_at: new Date().toISOString() }).eq('id', callId);
   }
+}
+
+/** Stops announcing itself and marks itself offline, so the web side starts a new worker when needed. */
+async function retire(id: string, why: string) {
+  if (g.__workerTimers) { clearInterval(g.__workerTimers.beat); clearInterval(g.__workerTimers.purge); }
+  await db().from('workers').update({ last_seen: new Date(Date.now() - 3_600_000).toISOString() }).eq('id', id);
+  log(`stopping: ${why}. The next visit to the console starts it again.`);
 }
 
 /** Calls nobody collected (the web side gave up), and workers not seen for a week. */

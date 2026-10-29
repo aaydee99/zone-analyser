@@ -96,17 +96,17 @@ function WorkerCard({ w }: { w: WorkerSummary }) {
     <Card className="mb-6">
       <SectionHeader title="Worker" description="This deployment hands backups, restores, the vault and every Cloudflare, R2 and S3 call to the worker, which runs them from its own server." />
       <dl className="grid gap-x-6 gap-y-3 p-5 text-[13px] sm:grid-cols-2 lg:grid-cols-4">
-        <div><dt className="text-muted">Status</dt><dd className="mt-0.5">{w.online ? <Badge tone="ok">online</Badge> : <Badge tone="bad">offline</Badge>}</dd></div>
+        <div><dt className="text-muted">Status</dt><dd className="mt-0.5">{w.online ? <Badge tone="ok">online</Badge> : w.startingSince ? <Badge tone="warn">starting</Badge> : <Badge tone="neutral">stopped</Badge>}</dd></div>
         <div><dt className="text-muted">Machine</dt><dd className="mt-0.5 font-mono text-xs break-all text-ink-2">{w.hostname ?? 'never started'}</dd></div>
         <div><dt className="text-muted">Public IP</dt><dd className="mt-0.5 font-mono text-xs break-all text-ink-2">{w.publicIp ?? '—'}</dd></div>
         <div><dt className="text-muted">Last seen</dt><dd className="mt-0.5 text-xs text-ink-2">{w.lastSeen ? new Date(w.lastSeen).toLocaleString() : '—'}</dd></div>
         <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Tools on the worker</dt><dd className="mt-0.5 text-xs text-ink-2">{w.tools?.length ? w.tools.map((t) => `${t.name} ${t.version ? `v${t.version}` : '(installing)'}`).join(' · ') : 'installed when the worker starts'}</dd></div>
       </dl>
       <p className="border-t border-line px-5 py-3 text-xs text-muted">
-        {w.id === 'cloudflare-container' || w.publicIp === null
-          ? 'Every Cloudflare, R2 and S3 call is made from the worker. On Cloudflare Containers its outgoing IP changes, so do not restrict the API tokens to client IPs.'
+        {w.id === 'github-actions' || w.publicIp === null
+          ? 'Every Cloudflare, R2 and S3 call is made from the worker. On GitHub Actions its outgoing IP changes with every run, so do not restrict the API tokens to client IPs.'
           : <>Every Cloudflare, R2 and S3 call is made from the worker, last seen at <span className="font-mono text-ink-2">{w.publicIp}</span>. Restrict tokens to that IP only if the worker has a fixed IP.</>}
-        {!w.online && <> Start the worker with <span className="font-mono">npm run worker</span> or <span className="font-mono">docker compose up -d</span> (README, Worker).</>}
+        {!w.online && (w.onDemand ? ' It starts on GitHub Actions when someone opens the console, and stops itself after 20 idle minutes.' : ' Set up starting it on GitHub Actions (README, Worker).')}
       </p>
     </Card>
   );

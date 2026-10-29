@@ -48,9 +48,9 @@ interface WorkerRow { id: string; hostname: string; public_ip: string | null; ve
 const g = globalThis as unknown as { __workerSeen?: { at: number; value: WorkerInfo | null } };
 
 /** The most recently seen worker (cached for 3 s), or null when none ever started. */
-export async function latestWorker(): Promise<WorkerInfo | null> {
+export async function latestWorker(fresh = false): Promise<WorkerInfo | null> {
   const hit = g.__workerSeen;
-  if (hit && Date.now() - hit.at < 3000) return hit.value;
+  if (!fresh && hit && Date.now() - hit.at < 3000) return hit.value;
   const { data, error } = await db().from('workers').select('id, hostname, public_ip, version, platform, tools, started_at, last_seen').order('last_seen', { ascending: false }).limit(1);
   if (error) {
     if (/workers|42P01|PGRST205/.test(`${error.code} ${error.message}`)) {
@@ -71,7 +71,26 @@ export class RelayError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-const OFFLINE = 'The worker is offline, so backups, restores, the vault and Cloudflare reads cannot run. Start it on your server with `npm run worker` (see the README, Worker)';
+const OFFLINE = 'The worker is offline, so backups, restores, the vault and Cloudflare reads cannot run. Start it (README, Worker)';
+const STARTING = 'The worker is starting (GitHub Actions, about 2–3 minutes). Try again in a moment';
+/** How long a request waits for a worker that is being started before it answers "starting". */
+const wakeWait = () => Math.max(0, Number(process.env.CONSOLE_WAKE_WAIT_MS) || 45_000);
+
+/** An online worker, starting one on GitHub Actions when that is set up (and waiting a little for it). */
+async function onlineWorker(me: Me): Promise<WorkerInfo> {
+  const w = await latestWorker();
+  if (w?.online) return w;
+  const { wakeWorker } = await import('./worker-wake');
+  const wake = await wakeWorker(me.email);
+  if (wake.result === 'unavailable') throw new RelayError(503, wake.message && !/not set up/.test(wake.message) ? `${OFFLINE}. Starting it on GitHub failed: ${wake.message}` : OFFLINE);
+  const until = Date.now() + wakeWait();
+  while (Date.now() < until) {
+    await sleep(2_000);
+    const now = await latestWorker(true);
+    if (now?.online) return now;
+  }
+  throw new RelayError(503, STARTING);
+}
 
 // ── Relaying a request (web side) ────────────────────────────────────────────
 
@@ -121,16 +140,16 @@ export async function relay(req: Request, me: Me, timeoutMs = relayTimeout()): P
 /** A JSON GET through the worker (used to add the worker's live state to /api/auth/me). */
 export async function relayJson<T>(me: Me, path: string, timeoutMs: number): Promise<T | null> {
   try {
-    const res = await send({ method: 'GET', path, headers: { accept: 'application/json' }, me }, timeoutMs);
+    const res = await send({ method: 'GET', path, headers: { accept: 'application/json' }, me }, timeoutMs, undefined, false);
     return res.ok ? ((await res.json()) as T) : null;
   } catch {
     return null;
   }
 }
 
-async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
-  const w = await latestWorker();
-  if (!w?.online) throw new RelayError(503, OFFLINE);
+async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal?: AbortSignal, wake = true): Promise<Response> {
+  if (wake) await onlineWorker(r.me);
+  else if (!(await latestWorker())?.online) throw new RelayError(503, OFFLINE);
   const id = crypto.randomUUID();
   const claims = JSON.stringify({ me: r.me, method: r.method, path: r.path, call: id, exp: Date.now() + timeoutMs + 60_000 });
   const identity = `${Buffer.from(claims).toString('base64url')}.${await signRelay(claims)}`;
@@ -152,7 +171,7 @@ async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal
       if (row.status === 'failed') throw new RelayError(502, `The worker could not run this: ${row.error ?? 'unknown error'}`);
       if (row.status !== 'done') {
         // Queued for long: the worker may have stopped since it was last seen.
-        if (row.status === 'queued' && Date.now() - started > 10_000 && !(await latestWorker())?.online) throw new RelayError(503, OFFLINE);
+        if (row.status === 'queued' && Date.now() - started > 10_000 && !(await latestWorker(true))?.online) throw new RelayError(503, OFFLINE);
         continue;
       }
       const answer = JSON.parse((await openRelay(row.response as never, aadFor(id, 'response'))).toString('utf8')) as RelayResponse;

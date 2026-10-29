@@ -224,12 +224,18 @@ export function Shell({ initial, children }: { initial: MeState; children: React
                 <b className="text-warn">Running in development mode.</b> Errors show stack traces in the browser and the security policy is relaxed. For real use, run <span className="font-mono">npm run build</span> then <span className="font-mono">npm start</span>.
               </div>
             )}
-            {me.worker && !me.worker.online && (
+            {me.worker && !me.worker.online && (me.worker.startingSince ? (
+              <div role="status" className="mb-6 flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/[0.07] px-4 py-3 text-[13px]">
+                <span className="live-dot size-2 shrink-0 rounded-full bg-warn" aria-hidden />
+                <span><b className="text-warn">Starting the worker…</b> It runs on GitHub Actions and takes about 2–3 minutes to start (asked {new Date(me.worker.startingSince).toLocaleTimeString()}). Backups, restores, the vault and Cloudflare pages work once it is online.</span>
+              </div>
+            ) : (
               <div role="alert" className="mb-6 rounded-xl border border-bad/40 bg-bad/[0.07] px-4 py-3 text-[13px]">
                 <b className="text-bad">The worker is offline.</b> Backups, restores, the vault and Cloudflare reads run on the worker, so they wait until it is back.{' '}
-                {me.worker.lastSeen ? `Last seen ${new Date(me.worker.lastSeen).toLocaleString()}.` : 'It has never started.'} Start it with <span className="font-mono">npm run worker</span> or <span className="font-mono">docker compose up -d</span> (README, Worker).
+                {me.worker.lastSeen ? `Last seen ${new Date(me.worker.lastSeen).toLocaleString()}.` : 'It has never started.'}{' '}
+                {me.worker.onDemand ? 'Starting it on GitHub Actions did not work: see Vercel › Logs, and the README (Worker).' : 'Set up starting it on GitHub Actions (README, Worker).'}
               </div>
-            )}
+            ))}
             {children}
           </main>
         </div>

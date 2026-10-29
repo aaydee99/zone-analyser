@@ -1,0 +1,68 @@
+# The Backup Console worker, on GitHub Actions (free: public repositories have unlimited minutes,
+# private ones 2,000 a month). The console on Vercel starts this when someone needs the worker;
+# it runs backups, restores and Cloudflare / R2 / S3 calls, and stops itself after 20 idle minutes
+# (never during a backup or an open restore). It can also be started by hand: Actions › Console
+# worker › Run workflow.
+#
+# Repository secrets (Settings › Secrets and variables › Actions):
+#   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY   the same values as on Vercel
+#   REDIS_URL                                                    optional
+name: Console worker
+
+on:
+  workflow_dispatch:
+
+# One worker at a time: a second start request waits for (or replaces a waiting) run.
+concurrency:
+  group: console-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    # GitHub stops a job after 6 hours; the worker stops itself (when not busy) before that.
+    timeout-minutes: 355
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      CONSOLE_ROLE: worker
+      CONSOLE_WORKER_ID: github-actions
+      CONSOLE_WORKER_IDLE_MINUTES: '20'
+      CONSOLE_WORKER_MAX_MINUTES: '330'
+      CONSOLE_DATA_DIR: ${{ github.workspace }}/.worker-data
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the secrets
+        run: |
+          for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            if [ -z "${!name}" ]; then echo "::error::Repository secret $name is not set (Settings › Secrets and variables › Actions)"; exit 1; fi
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The build cache and the downloaded Terraform / cf-terraforming, kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .next/cache
+            .worker-data/tools
+          key: worker-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            worker-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            worker-${{ runner.os }}-
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+      - name: Run the worker (stops itself when idle)
+        run: node scripts/worker.mjs

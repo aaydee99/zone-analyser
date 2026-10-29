@@ -60,6 +60,8 @@ const start = () => {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     if (signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
+    // Exit code 0: the worker stopped itself (idle, or its time limit on GitHub Actions).
+    if (code === 0) { log('stopped by itself'); process.exit(0); }
     // Ran for a while: start again at once; crashing on start: back off up to a minute.
     restarts = Date.now() - startedAt > 60_000 ? 0 : restarts + 1;
     const wait = Math.min(60_000, 1_000 * 2 ** restarts);
