@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { Role } from './rbac';
 import type { BackupConfig } from './config';
 import { DATA_DIR, newId } from './store';
+import { mirrorFile } from './state-mirror';
 
 // Approval requests: an operator's backup waits for an admin or super admin; an admin's restore apply
 // waits for a super admin. One record per request in data/approvals/<id>.json. Records hold no secrets:
@@ -44,6 +45,7 @@ export function saveApproval(a: Approval) {
   const tmp = `${file(a.id)}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(a), { mode: 0o600 });
   fs.renameSync(tmp, file(a.id));
+  mirrorFile(`approvals/${a.id}.json`, a);
 }
 
 export function newApproval(a: Omit<Approval, 'id' | 'status' | 'requestedAt'>): Approval {

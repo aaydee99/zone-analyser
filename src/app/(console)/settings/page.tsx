@@ -103,7 +103,9 @@ function WorkerCard({ w }: { w: WorkerSummary }) {
         <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Tools on the worker</dt><dd className="mt-0.5 text-xs text-ink-2">{w.tools?.length ? w.tools.map((t) => `${t.name} ${t.version ? `v${t.version}` : '(installing)'}`).join(' · ') : 'installed when the worker starts'}</dd></div>
       </dl>
       <p className="border-t border-line px-5 py-3 text-xs text-muted">
-        {w.publicIp ? <>Cloudflare API tokens restricted to client IPs must allow <span className="font-mono text-ink-2">{w.publicIp}</span>: every call is made from the worker.</> : 'The worker reports its public IP when it starts.'}
+        {w.id === 'cloudflare-container' || w.publicIp === null
+          ? 'Every Cloudflare, R2 and S3 call is made from the worker. On Cloudflare Containers its outgoing IP changes, so do not restrict the API tokens to client IPs.'
+          : <>Every Cloudflare, R2 and S3 call is made from the worker, last seen at <span className="font-mono text-ink-2">{w.publicIp}</span>. Restrict tokens to that IP only if the worker has a fixed IP.</>}
         {!w.online && <> Start the worker with <span className="font-mono">npm run worker</span> or <span className="font-mono">docker compose up -d</span> (README, Worker).</>}
       </p>
     </Card>

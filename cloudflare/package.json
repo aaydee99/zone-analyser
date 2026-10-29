@@ -1,0 +1,13 @@
+{
+  "name": "backup-console-worker-host",
+  "private": true,
+  "description": "Runs the Backup Console worker on Cloudflare Containers",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "0.3.7",
+    "wrangler": "4.150.0"
+  }
+}

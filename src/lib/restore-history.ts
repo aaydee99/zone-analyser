@@ -4,6 +4,7 @@ import path from 'node:path';
 import { HttpError } from './http';
 import { DATA_DIR } from './store';
 import { db, must } from './supabase';
+import { mirrorFile } from './state-mirror';
 
 // Restore history: one record per restore, kept in data/restore-history/<id>.json and updated at every
 // step (prepared, compared, planned, applying, applied / failed), so a restore stays visible after its
@@ -66,8 +67,10 @@ export function saveRecord(r: Omit<RestoreRecord, 'updatedAt'>) {
   try {
     fs.mkdirSync(HISTORY_DIR, { recursive: true });
     const tmp = `${file(r.id)}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ ...r, log: r.log.slice(-LOG_LINES), updatedAt: new Date().toISOString() }), { mode: 0o600 });
+    const rec = { ...r, log: r.log.slice(-LOG_LINES), updatedAt: new Date().toISOString() };
+    fs.writeFileSync(tmp, JSON.stringify(rec), { mode: 0o600 });
     fs.renameSync(tmp, file(r.id));
+    mirrorFile(`restore-history/${r.id}.json`, rec);
   } catch (err) {
     console.error('[restore-history] could not save the record:', err instanceof Error ? err.message : err);
   }

@@ -8,6 +8,8 @@ import type { Me } from './auth';
 /** Shown in the shell and on Settings when a worker runs the jobs (web role). */
 export interface WorkerSummary {
   online: boolean;
+  /** 'cloudflare-container' on Cloudflare Containers (no fixed outgoing IP). */
+  id: string | null;
   hostname: string | null;
   publicIp: string | null;
   lastSeen: string | null;
@@ -34,6 +36,6 @@ export async function liveState(me: Me): Promise<LiveState> {
     activeRunId: s?.activeRunId ?? null,
     activeRestore: s?.activeRestore ?? null,
     pendingApprovals: s?.pendingApprovals ?? 0,
-    worker: { online: !!w?.online && !!s, hostname: w?.hostname ?? null, publicIp: w?.publicIp ?? null, lastSeen: w?.lastSeen ?? null, tools: w?.tools ?? null },
+    worker: { online: !!w?.online && !!s, id: w?.id ?? null, hostname: w?.hostname ?? null, publicIp: w?.publicIp ?? null, lastSeen: w?.lastSeen ?? null, tools: w?.tools ?? null },
   };
 }

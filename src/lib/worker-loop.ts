@@ -25,8 +25,10 @@ const port = () => Number(process.env.PORT) || 4400;
 const base = () => `http://127.0.0.1:${port()}`;
 const log = (msg: string) => console.log(`[worker] ${msg}`);
 
-/** A stable id for this machine and folder (kept in the data folder). */
+/** A stable id: CONSOLE_WORKER_ID (containers, whose disk is fresh on every start), else one kept in the data folder. */
 function workerId(): string {
+  const fixed = process.env.CONSOLE_WORKER_ID?.trim();
+  if (fixed) return fixed;
   const file = path.join(DATA_DIR, 'worker-id');
   try { return fs.readFileSync(file, 'utf8').trim(); } catch { /* first start */ }
   ensureDir(DATA_DIR);
@@ -145,7 +147,8 @@ async function handle(callId: string, sealed: never) {
   }
 }
 
-/** Calls nobody collected (the web side gave up): deleted a few minutes after they expired. */
+/** Calls nobody collected (the web side gave up), and workers not seen for a week. */
 async function purge() {
   await db().from('worker_calls').delete().lt('expires_at', new Date(Date.now() - 5 * 60_000).toISOString());
+  await db().from('workers').delete().lt('last_seen', new Date(Date.now() - 7 * 86_400_000).toISOString());
 }

@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || '4400';
+// 127.0.0.1 normally; a container platform that checks the port from outside (Cloudflare) sets 0.0.0.0.
+const HOST = process.env.CONSOLE_LISTEN_HOST || '127.0.0.1';
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const log = (m) => console.log(`[worker] ${m}`);
 
@@ -48,9 +50,9 @@ if (stale) run(['run', 'build'], 'Building the console');
 const env = { ...process.env, CONSOLE_ROLE: 'worker', PORT };
 let restarts = 0;
 const start = () => {
-  log(`starting on http://127.0.0.1:${PORT} (worker role)`);
+  log(`starting on http://${HOST}:${PORT} (worker role)`);
   const startedAt = Date.now();
-  const child = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-H', '127.0.0.1', '-p', PORT], { cwd: ROOT, env, stdio: 'inherit' });
+  const child = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-H', HOST, '-p', PORT], { cwd: ROOT, env, stdio: 'inherit' });
   const stop = () => child.kill('SIGTERM');
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);

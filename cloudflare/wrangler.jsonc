@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "backup-console-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  // Starts the container again within a minute if Cloudflare stopped it.
+  "triggers": { "crons": ["* * * * *"] },
+  "containers": [
+    {
+      "class_name": "ConsoleWorker",
+      // The console's own Dockerfile (the folder above): built and pushed by `wrangler deploy`.
+      "image": "../Dockerfile",
+      "image_build_context": "..",
+      // 1/2 vCPU, 4 GiB memory, 8 GB disk: enough for the console, Terraform and its providers.
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "CONSOLE_WORKER", "class_name": "ConsoleWorker" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ConsoleWorker"] }],
+  "observability": { "enabled": true }
+}
