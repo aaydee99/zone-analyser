@@ -1,0 +1,13 @@
+node_modules/
+.next/
+data/
+runner/.env
+runner/r2_lock_rules.json
+next-env.d.ts
+*.tsbuildinfo
+
+# local secrets
+.env.local
+.env*.local
+.claude
+design-system/

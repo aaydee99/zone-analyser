@@ -1,0 +1,174 @@
+@import "tailwindcss";
+
+/* ── Design tokens ─────────────────────────────────────────────────────────
+   Layout/type/motion rules: design-system/backup-console/MASTER.md (ui-ux-pro-max).
+   Palette override: Cloudflare brand colours — Cloudflare Orange accent, the
+   logo's tangerine as its partner, neutrals built on Cloudflare Gray (#404041).
+   Three layers: primitives (raw values) → semantic (purpose) → components. */
+
+/* Primitives — never referenced by components directly. */
+:root {
+  /* Cloudflare brand */
+  --cf-orange: #f6821f;
+  --cf-orange-deep: #e06d10;
+  --cf-tangerine: #fbad41;
+  --cf-gray: #404041;
+
+  /* Neutrals derived from Cloudflare Gray */
+  --gray-975: #0b0b0c;
+  --gray-950: #111112;
+  --gray-925: #161617;
+  --gray-900: #1d1d1f;
+  --gray-850: #262628;
+  --gray-800: #303032;
+  --gray-750: #2b2b2d;
+  --gray-450: #8c8c91;
+  --gray-400: #a6a6ab;
+  --gray-300: #d6d6d9;
+  --gray-50: #f7f7f8;
+
+  --green-400: #3dd68c;
+  --yellow-400: #f5c451;
+  --red-400: #f87171;
+  --blue-400: #5aa2ff;
+  --cyan-400: #22d3ee;
+}
+
+/* Semantic — what the utilities (bg-surface, text-muted, …) resolve to. */
+@theme {
+  --font-sans: var(--font-fira-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-fira-code), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: var(--font-fira-code), ui-monospace, monospace;
+
+  --color-canvas: var(--gray-925);
+  --color-surface: var(--gray-900);
+  --color-raised: var(--gray-850);
+  --color-raised-2: var(--gray-800);
+  --color-sunken: var(--gray-950);
+  --color-terminal: var(--gray-975);
+  --color-line: var(--gray-750);
+  --color-line-strong: var(--cf-gray);
+  --color-ink: var(--gray-50);
+  --color-ink-2: var(--gray-300);
+  --color-muted: var(--gray-400);
+  --color-faint: var(--gray-450);
+  --color-ring: var(--cf-tangerine);
+
+  /* Accent / CTA — Cloudflare Orange for primary actions, selection, active nav. */
+  --color-signal: var(--cf-orange);
+  --color-signal-strong: var(--cf-orange-deep);
+  --color-signal-soft: var(--cf-tangerine);
+  --color-signal-ink: var(--gray-975);
+
+  /* Status — kept distinct from the accent so meaning never relies on one hue. */
+  --color-ok: var(--green-400);
+  --color-warn: var(--yellow-400);
+  --color-bad: var(--red-400);
+  --color-info: var(--blue-400);
+  --color-live: var(--blue-400);
+  --color-cyan: var(--cyan-400);
+
+  --radius-card: 14px;
+  --shadow-pop: 0 24px 60px -20px rgb(2 6 23 / 0.75), 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+/* Component tokens */
+:root {
+  --glass-bg: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  --glass-border: rgb(255 255 255 / 0.08);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --glass-blur: 14px;
+  --motion-fast: 150ms;
+  --motion-base: 220ms;
+}
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    background-color: var(--color-canvas);
+    /* Soft light sources behind the glass so blur reads as depth. */
+    background-image:
+      radial-gradient(900px 520px at 85% -10%, color-mix(in srgb, var(--color-signal) 10%, transparent), transparent 70%),
+      radial-gradient(700px 480px at -5% 105%, color-mix(in srgb, var(--color-signal-soft) 6%, transparent), transparent 70%);
+    background-attachment: fixed;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: var(--font-heading); letter-spacing: -0.01em; }
+  ::selection { background: color-mix(in srgb, var(--color-signal) 35%, transparent); }
+  :focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; border-radius: 6px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+  /* Tailwind v4 resets buttons to the default cursor; every clickable gets a pointer. */
+  button:not(:disabled), [role="button"], [role="checkbox"], [role="switch"], label[for], summary, select { cursor: pointer; }
+}
+
+@layer components {
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    font-weight: 600;
+  }
+  .panel {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-card);
+    box-shadow: var(--glass-highlight);
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    backdrop-filter: blur(var(--glass-blur));
+  }
+  .glass {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    backdrop-filter: blur(var(--glass-blur));
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.03) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .input {
+    width: 100%;
+    background: var(--color-sunken);
+    border: 1px solid var(--color-line);
+    border-radius: 9px;
+    padding: 0.55rem 0.75rem;
+    font-size: 14px;
+    color: var(--color-ink);
+    transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+  }
+  .input::placeholder { color: var(--color-faint); }
+  .input:hover { border-color: var(--color-line-strong); }
+  .input:focus { outline: none; border-color: var(--color-signal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-signal) 22%, transparent); }
+  .input:disabled { opacity: .5; cursor: not-allowed; }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-live) 55%, transparent); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+.live-dot { animation: pulse-ring 1.6s ease-out infinite; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .32s cubic-bezier(.2,.7,.2,1) both; }
+
+@keyframes stripes { to { background-position: 28px 0; } }
+.progress-live {
+  background-image: linear-gradient(135deg, rgb(255 255 255 / .18) 25%, transparent 25%, transparent 50%, rgb(255 255 255 / .18) 50%, rgb(255 255 255 / .18) 75%, transparent 75%);
+  background-size: 28px 28px;
+  animation: stripes 1s linear infinite;
+}
+
+/* Respect the OS motion preference: render the final state immediately. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

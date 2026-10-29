@@ -1,0 +1,33 @@
+{
+  "name": "cf-backup-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dashboard and encrypted secret vault for the Cloudflare Terraform backup script",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 4400",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 4400",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "lucide-react": "^1.62.0",
+    "next": "^16.4.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "redis": "^5.12.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2"
+  }
+}
