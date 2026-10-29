@@ -385,6 +385,22 @@ export async function getRun(id: string): Promise<RunMeta | null> {
   return r ? settleOrphan(fromRow(r)) : null;
 }
 
+/**
+ * A run as stored in Supabase, without settling it: on the web role (Vercel) runs live on the
+ * worker, so "not running in this process" says nothing about whether it is still running.
+ */
+export async function storedRun(id: string): Promise<RunMeta | null> {
+  if (!validId(id)) return null;
+  const r = must(await db().from('runs').select(RUN_COLS).eq('id', id).maybeSingle(), 'Reading run') as RunRow | null;
+  return r ? fromRow(r) : null;
+}
+
+/** Log lines from `seq` on (as stored in Supabase), with the seq to read from next. */
+export async function storedRunLog(id: string, seq: number): Promise<{ lines: string[]; next: number }> {
+  const rows = must(await db().from('run_logs').select('seq, line').eq('run_id', id).gte('seq', seq).order('seq').limit(1000), 'Reading run log') as { seq: number; line: string }[];
+  return { lines: rows.map((r) => r.line), next: rows.length ? rows[rows.length - 1].seq + 1 : seq };
+}
+
 export async function listRuns(limit = 200): Promise<RunMeta[]> {
   const rows = must(await db().from('runs').select(RUN_COLS).order('started_at', { ascending: false }).limit(limit), 'Listing runs') as RunRow[];
   return rows.map((r) => live.get(r.id)?.meta ?? settleOrphan(fromRow(r)));

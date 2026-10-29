@@ -36,17 +36,26 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
 
   useEffect(() => {
     api<{ run: RunMeta; approval: { requestedBy: string; approvedBy: string; approvedAt: string } | null }>(`/api/runs/${id}`).then((r) => { setMeta(r.run); setApproval(r.approval); }).catch(() => setNotFound(true));
-    const es = new EventSource(`/api/runs/${id}/stream`);
-    es.addEventListener('backlog', (e) => setLines(JSON.parse((e as MessageEvent).data)));
-    es.addEventListener('line', (e) => setLines((ls) => [...ls, JSON.parse((e as MessageEvent).data)]));
-    es.addEventListener('status', (e) => {
-      const m = JSON.parse((e as MessageEvent).data) as RunMeta | null;
-      if (m) setMeta(m);
-      es.close();
-      api<{ run: RunMeta; integrity: string | null }>(`/api/runs/${id}`).then((r) => { setMeta(r.run); setIntegrity(r.integrity); }).catch(() => {});
-    });
-    es.onerror = () => es.close();
-    return () => es.close();
+    let es: EventSource | null = null;
+    let done = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // A stream can end before the run does (on Vercel it is closed after a few minutes):
+    // connect again; the backlog brings the log up to date.
+    const connect = () => {
+      es = new EventSource(`/api/runs/${id}/stream`);
+      es.addEventListener('backlog', (e) => setLines(JSON.parse((e as MessageEvent).data)));
+      es.addEventListener('line', (e) => setLines((ls) => [...ls, JSON.parse((e as MessageEvent).data)]));
+      es.addEventListener('status', (e) => {
+        const m = JSON.parse((e as MessageEvent).data) as RunMeta | null;
+        if (m) setMeta(m);
+        done = true;
+        es?.close();
+        api<{ run: RunMeta; integrity: string | null }>(`/api/runs/${id}`).then((r) => { setMeta(r.run); setIntegrity(r.integrity); }).catch(() => {});
+      });
+      es.onerror = () => { es?.close(); if (!done) retry = setTimeout(connect, 3_000); };
+    };
+    connect();
+    return () => { done = true; clearTimeout(retry); es?.close(); };
   }, [id]);
 
   const running = meta?.status === 'running';

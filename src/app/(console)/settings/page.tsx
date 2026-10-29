@@ -7,6 +7,7 @@ import { Alert, Badge, Button, Card, Field, PageHeader, SectionHeader, cx } from
 import { useToast } from '@/components/toast';
 import { ToolsPanel } from '@/components/tools-panel';
 import { useMe } from '@/components/me';
+import type { WorkerSummary } from '@/lib/live-state';
 
 interface Settings { sessionIdleMinutes: number; vaultAutoLockMinutes: number; outputDir: string; pluginCacheDir: string }
 interface Check { ok: boolean; detail: string }
@@ -89,9 +90,29 @@ function MinutesField({ label, hint, value, onChange, max, disabled }: {
   );
 }
 
+/** On Vercel: the worker that runs backups, restores and Cloudflare reads, and the IP to allow on IP-restricted tokens. */
+function WorkerCard({ w }: { w: WorkerSummary }) {
+  return (
+    <Card className="mb-6">
+      <SectionHeader title="Worker" description="This deployment hands backups, restores, the vault and every Cloudflare, R2 and S3 call to the worker, which runs them from its own server." />
+      <dl className="grid gap-x-6 gap-y-3 p-5 text-[13px] sm:grid-cols-2 lg:grid-cols-4">
+        <div><dt className="text-muted">Status</dt><dd className="mt-0.5">{w.online ? <Badge tone="ok">online</Badge> : <Badge tone="bad">offline</Badge>}</dd></div>
+        <div><dt className="text-muted">Machine</dt><dd className="mt-0.5 font-mono text-xs break-all text-ink-2">{w.hostname ?? 'never started'}</dd></div>
+        <div><dt className="text-muted">Public IP</dt><dd className="mt-0.5 font-mono text-xs break-all text-ink-2">{w.publicIp ?? '—'}</dd></div>
+        <div><dt className="text-muted">Last seen</dt><dd className="mt-0.5 text-xs text-ink-2">{w.lastSeen ? new Date(w.lastSeen).toLocaleString() : '—'}</dd></div>
+        <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Tools on the worker</dt><dd className="mt-0.5 text-xs text-ink-2">{w.tools?.length ? w.tools.map((t) => `${t.name} ${t.version ? `v${t.version}` : '(installing)'}`).join(' · ') : 'installed when the worker starts'}</dd></div>
+      </dl>
+      <p className="border-t border-line px-5 py-3 text-xs text-muted">
+        {w.publicIp ? <>Cloudflare API tokens restricted to client IPs must allow <span className="font-mono text-ink-2">{w.publicIp}</span>: every call is made from the worker.</> : 'The worker reports its public IP when it starts.'}
+        {!w.online && <> Start the worker with <span className="font-mono">npm run worker</span> or <span className="font-mono">docker compose up -d</span> (README, Worker).</>}
+      </p>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const toast = useToast();
-  const { can } = useMe();
+  const { can, worker } = useMe();
   const editable = can('settings:write');
   const [s, setS] = useState<Settings | null>(null);
   const [defaultOut, setDefaultOut] = useState('');
@@ -122,6 +143,8 @@ export default function SettingsPage() {
   return (
     <div className="rise">
       <PageHeader eyebrow="Configuration" title="Settings" description={editable ? 'Runtime paths, session timeouts and prerequisite checks. Stored in Supabase.' : 'Read-only — only admins can change settings.'} />
+
+      {worker && <WorkerCard w={worker} />}
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <div className="space-y-6">

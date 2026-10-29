@@ -103,7 +103,9 @@ function parseKey(raw: string, where: string): Buffer {
   return key;
 }
 
-const gk = globalThis as unknown as { __vaultServerKey?: Buffer };
+/** How long a server instance reuses the key it read; a key changed in Supabase is picked up after this. */
+const SERVER_KEY_TTL_MS = 30_000;
+const gk = globalThis as unknown as { __vaultServerKey?: { key: Buffer; at: number } };
 
 /**
  * The vault server key, from Supabase (public.vault_keys, service role only). Created on first
@@ -113,7 +115,8 @@ const gk = globalThis as unknown as { __vaultServerKey?: Buffer };
 async function serverKey(): Promise<Buffer> {
   const inline = (process.env.VAULT_SERVER_KEY ?? '').trim();
   if (inline) return parseKey(inline, 'VAULT_SERVER_KEY');
-  if (gk.__vaultServerKey) return Buffer.from(gk.__vaultServerKey);
+  const hit = gk.__vaultServerKey;
+  if (hit && Date.now() - hit.at < SERVER_KEY_TTL_MS) return Buffer.from(hit.key);
   const read = async () => {
     const { data, error } = await db().from('vault_keys').select('server_key').eq('id', 1).maybeSingle();
     if (error) {
@@ -131,8 +134,36 @@ async function serverKey(): Promise<Buffer> {
     stored = await read();
     if (!stored) throw new VaultError('Creating the vault server key failed', 500);
   }
-  gk.__vaultServerKey = parseKey(stored, 'Supabase (vault_keys)');
-  return Buffer.from(gk.__vaultServerKey);
+  hit?.key.fill(0);
+  gk.__vaultServerKey = { key: parseKey(stored, 'Supabase (vault_keys)'), at: Date.now() };
+  return Buffer.from(gk.__vaultServerKey.key);
+}
+
+// ── Vercel ↔ worker queue ───────────────────────────────────────────────────
+// Requests and answers in public.worker_calls are sealed under a key derived from the server
+// key, and the worker's own server trusts a relayed request only with a valid HMAC from it.
+
+async function relayKey(info: string): Promise<Buffer> {
+  const sk = await serverKey();
+  try { return Buffer.from(crypto.hkdfSync('sha256', sk, Buffer.alloc(0), info, 32)); } finally { sk.fill(0); }
+}
+
+/** Seals bytes for worker_calls; `aad` ties it to one call (and chunk). */
+export async function sealRelay(data: Buffer, aad: string): Promise<Sealed> {
+  const k = await relayKey('backup-console relay seal v1');
+  try { return seal(k, data, aad); } finally { k.fill(0); }
+}
+
+/** Opens what sealRelay sealed; throws when it was changed or belongs to another call. */
+export async function openRelay(s: Sealed, aad: string): Promise<Buffer> {
+  const k = await relayKey('backup-console relay seal v1');
+  try { return open(k, s, aad); } finally { k.fill(0); }
+}
+
+/** HMAC-SHA256 (base64url) of a relayed request's identity, checked by the worker. */
+export async function signRelay(payload: string): Promise<string> {
+  const k = await relayKey('backup-console relay sign v1');
+  try { return crypto.createHmac('sha256', k).update(payload).digest('base64url'); } finally { k.fill(0); }
 }
 
 /** A key for the shared cache, derived from the server key (so cached data is unreadable without it). */
@@ -203,7 +234,11 @@ export async function initVault(me: Me, password: string) {
   if (existing) {
     const dek = tryOpen(sk, existing.dek_server, AAD_SERVER);
     sk.fill(0);
-    if (!dek) throw new VaultError('The vault server key does not match this vault, so its data key cannot be recovered for a new password. Use the server key the vault was created with', 409);
+    if (!dek) {
+      throw new VaultError('The vault server key in Supabase (vault_keys) is not the key this vault was sealed with, so the credentials cannot be opened for a new password. '
+        + 'Put the old key in vault_keys (the contents of the old vault-server.key file, or the old VAULT_SERVER_KEY) and try again within a minute, '
+        + 'or delete the vault with supabase/maintenance/reset_vault.sql and start again', 409);
+    }
     const kek = await deriveKey(password, salt);
     must(await db().from('vault').update({ kdf, dek_pw: seal(kek, dek, AAD_PW), updated_at: new Date().toISOString() }).eq('id', 1), 'Setting the new vault password');
     kek.fill(0);

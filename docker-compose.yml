@@ -1,0 +1,13 @@
+# The worker: `docker compose up -d --build`. Put SUPABASE_URL, SUPABASE_ANON_KEY and
+# SUPABASE_SERVICE_ROLE_KEY (the same as on Vercel) in .env.local next to this file.
+services:
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env.local
+    environment:
+      CONSOLE_ROLE: worker
+    volumes:
+      - worker-data:/data
+volumes:
+  worker-data:

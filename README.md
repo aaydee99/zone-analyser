@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql) and [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), in that order.
+2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql) and [`0004_worker.sql`](supabase/migrations/0004_worker.sql), in that order.
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -26,6 +26,44 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 6. **First super admin**: open the console. The setup page asks for a **setup token**, which the server prints in its terminal and saves to `data/setup-token.txt`. That proves you're at the server, not a web page. Everyone else is added under **Users & roles**.
 
 `terraform` and `cf-terraforming` are downloaded automatically the first time a backup needs them. terraform's checksums must carry a valid signature from HashiCorp's release key, pinned by fingerprint in [`src/lib/tools.ts`](src/lib/tools.ts). cf-terraforming publishes no signature, so it is checked against its checksums only. Only Node.js ≥ 18 is required.
+
+## Vercel + worker
+
+On Vercel the console runs as the **web** side: sign-in, pages, users and the audit log. Vercel can't do the rest: its disk is read-only, functions stop after a few minutes, and its outgoing IP changes. So everything else goes to a **worker**: backups, restores, tool installs, the vault and every Cloudflare, R2 and S3 call. The worker is the same console, started with `npm run worker` on a machine or container you control.
+
+```text
+browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (sealed) ◄── worker (npm run worker) ──► Cloudflare / R2 / S3
+```
+
+- **How a call travels**:
+  1. The web side checks the session, the role and the rate limits.
+  2. It queues the request in `worker_calls`, sealed with AES-256-GCM under the vault server key and signed with the caller's identity.
+  3. The worker claims it, replays it on its own server over loopback, and writes the answer back, also sealed. Large answers such as downloads come back in 512 KB chunks.
+  4. The web side reads the answer and deletes the row.
+
+  The worker trusts a replayed request only with a valid signature, for that exact method and path, before it expires.
+- **No inbound access**: the worker only connects out (Supabase, Cloudflare, R2/S3, the Terraform release site). It needs no public URL, open port or tunnel.
+- **IP-restricted Cloudflare tokens**: every Cloudflare call comes from the worker's IP. **Settings › Worker** shows that public IP. Add it to tokens that are restricted to client IPs, and give the worker a fixed IP (a VM, a home or office machine, a container host).
+- **Live logs**: the worker writes each run's log to Supabase as it goes. The run page on Vercel follows it there and reconnects every few minutes.
+- **Worker offline**: a banner on every page says so. Backups, restores, the vault and Cloudflare pages answer "The worker is offline". Sign-in, users and the audit log keep working.
+
+### Deploy to Vercel
+
+1. Apply the migrations above, including `0004_worker.sql`.
+2. In the Vercel project, set `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. `CONSOLE_ROLE=web` is the default on Vercel.
+3. Deploy. [`vercel.json`](vercel.json) gives API routes up to 300 s, so a slow call such as a full zone read can wait for the worker.
+
+### Start the worker
+
+Use the same three Supabase variables in `.env.local` on the worker machine. Never set `VAULT_SERVER_KEY` on only one side: both must use the key in Supabase, or the same override.
+
+- **With Node.js 18.18 or newer** (Windows, macOS or Linux): copy the project, then run `npm run worker`. It installs the dependencies, builds the console if the source changed, starts it on `127.0.0.1:4400`, and restarts it if it stops. On first start it downloads Terraform and cf-terraforming, checksum-verified.
+- **With Docker** (any machine): `docker compose up -d --build`. The image installs everything itself, and the tools and backups are kept in the `worker-data` volume.
+- **To keep it running after a reboot**: Docker's `restart: unless-stopped` does this. Without Docker, start `npm run worker` as a service (Task Scheduler or NSSM on Windows, systemd on Linux, launchd on macOS).
+
+Running one worker is the normal setup. With several, each call is still handled exactly once, but a backup or restore and its follow-up calls may land on different workers. A run started on one is only visible on that one while it runs.
+
+The first super admin: on Vercel the setup token is printed in the function log (Vercel › Logs), because `data/` there is temporary.
 
 ## Roles
 

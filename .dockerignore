@@ -1,0 +1,11 @@
+node_modules
+.next
+data
+.env
+.env.local
+.env*.local
+.claude
+design-system
+.vercel
+*.tsbuildinfo
+runner/.env

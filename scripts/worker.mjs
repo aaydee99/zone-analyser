@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+// npm run worker — runs this console as the worker for a Vercel deployment.
+//
+// Installs the dependencies and builds the app when needed, then starts it with CONSOLE_ROLE=worker
+// on 127.0.0.1 (it needs no inbound access: it only connects out to Supabase, Cloudflare, R2 / S3).
+// On start it downloads Terraform and cf-terraforming (checksum-verified) if they are missing, and
+// takes the backups, restores and Cloudflare reads the Vercel side queues in Supabase.
+// It restarts the server if it stops. Settings come from .env.local (or the environment):
+// SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY — the same values as on Vercel.
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PORT = process.env.PORT || '4400';
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const log = (m) => console.log(`[worker] ${m}`);
+
+const [major, minor] = process.versions.node.split('.').map(Number);
+if (major < 18 || (major === 18 && minor < 18)) {
+  console.error(`[worker] Node.js 18.18 or newer is needed (this is ${process.versions.node}). Install it from https://nodejs.org or use the Docker image (see the README, Worker).`);
+  process.exit(1);
+}
+
+const run = (args, what) => {
+  log(`${what}…`);
+  const r = spawnSync(NPM, args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
+  if (r.status !== 0) { console.error(`[worker] ${what} failed`); process.exit(r.status ?? 1); }
+};
+
+/** Newest modification time under a folder (to see whether the build is older than the source). */
+const newest = (dir) => {
+  let t = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    t = Math.max(t, e.isDirectory() ? newest(p) : fs.statSync(p).mtimeMs);
+  }
+  return t;
+};
+
+if (!fs.existsSync(path.join(ROOT, 'node_modules', 'next'))) run(['ci', '--no-audit', '--no-fund'], 'Installing dependencies');
+const buildId = path.join(ROOT, '.next', 'BUILD_ID');
+const stale = !fs.existsSync(buildId) || process.argv.includes('--build')
+  || Math.max(newest(path.join(ROOT, 'src')), fs.statSync(path.join(ROOT, 'package.json')).mtimeMs) > fs.statSync(buildId).mtimeMs;
+if (stale) run(['run', 'build'], 'Building the console');
+
+const env = { ...process.env, CONSOLE_ROLE: 'worker', PORT };
+let restarts = 0;
+const start = () => {
+  log(`starting on http://127.0.0.1:${PORT} (worker role)`);
+  const startedAt = Date.now();
+  const child = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-H', '127.0.0.1', '-p', PORT], { cwd: ROOT, env, stdio: 'inherit' });
+  const stop = () => child.kill('SIGTERM');
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  child.on('exit', (code, signal) => {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+    if (signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
+    // Ran for a while: start again at once; crashing on start: back off up to a minute.
+    restarts = Date.now() - startedAt > 60_000 ? 0 : restarts + 1;
+    const wait = Math.min(60_000, 1_000 * 2 ** restarts);
+    log(`stopped (${code ?? signal}); starting again in ${Math.round(wait / 1000)} s`);
+    setTimeout(start, wait);
+  });
+};
+start();

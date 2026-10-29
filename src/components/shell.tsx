@@ -224,6 +224,12 @@ export function Shell({ initial, children }: { initial: MeState; children: React
                 <b className="text-warn">Running in development mode.</b> Errors show stack traces in the browser and the security policy is relaxed. For real use, run <span className="font-mono">npm run build</span> then <span className="font-mono">npm start</span>.
               </div>
             )}
+            {me.worker && !me.worker.online && (
+              <div role="alert" className="mb-6 rounded-xl border border-bad/40 bg-bad/[0.07] px-4 py-3 text-[13px]">
+                <b className="text-bad">The worker is offline.</b> Backups, restores, the vault and Cloudflare reads run on the worker, so they wait until it is back.{' '}
+                {me.worker.lastSeen ? `Last seen ${new Date(me.worker.lastSeen).toLocaleString()}.` : 'It has never started.'} Start it with <span className="font-mono">npm run worker</span> or <span className="font-mono">docker compose up -d</span> (README, Worker).
+              </div>
+            )}
             {children}
           </main>
         </div>

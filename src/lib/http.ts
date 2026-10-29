@@ -8,6 +8,7 @@ import { NotConfiguredError } from './supabase';
 import { can, type Permission } from './rbac';
 import { isAllowedHost } from './hosts';
 import { audit } from './audit';
+import { RelayError, relay, relayed, relayedMe } from './worker-link';
 
 export const SESSION_COOKIE = 'cfbc_session';
 const SESSION_MAX_AGE = 12 * 3600;
@@ -101,7 +102,7 @@ export function requirePerm(me: Me, perm: Permission) {
  * internal details never reach the client.
  */
 function errorResponse(err: unknown) {
-  if (err instanceof HttpError || err instanceof VaultError || err instanceof AuthError || err instanceof NotConfiguredError) {
+  if (err instanceof HttpError || err instanceof VaultError || err instanceof AuthError || err instanceof NotConfiguredError || err instanceof RelayError) {
     if (err.status >= 500) console.error(err);
     return NextResponse.json({ error: err.message }, { status: err.status, headers: err instanceof HttpError ? err.headers : undefined });
   }
@@ -116,7 +117,7 @@ function errorResponse(err: unknown) {
  */
 const lastLogged = new Map<string, number>();
 async function logRefusal(me: Me, err: unknown, req: Request) {
-  const status = err instanceof HttpError || err instanceof VaultError || err instanceof AuthError ? err.status : 0;
+  const status = err instanceof HttpError || err instanceof VaultError || err instanceof AuthError || err instanceof RelayError ? err.status : 0;
   if (status !== 403 && status !== 429) return;
   const reason = (err as Error).message;
   const kind = status === 429 ? 'security.rate_limited' : 'security.denied';
@@ -140,14 +141,20 @@ export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; li
     let who: Me | null = null;
     try {
       checkRequest(req);
+      // On a worker: a request the worker loop replays for the web side, already checked there.
+      const fromWeb = await relayedMe(req);
       const peek = req.method === 'GET' && new URL(req.url).searchParams.get('peek') === '1';
-      const me = await getMe(await sessionToken(), !peek);
+      const me = fromWeb ?? await getMe(await sessionToken(), !peek);
       if (!me) throw new HttpError(401, 'Your session has ended — sign in again');
       who = me;
-      rateLimit(`user:${me.id}`, LIMIT_ALL * SCALE);
-      if (req.method !== 'GET' && req.method !== 'HEAD') rateLimit(`user:${me.id}:write`, LIMIT_WRITE * SCALE);
+      if (!fromWeb) {
+        rateLimit(`user:${me.id}`, LIMIT_ALL * SCALE);
+        if (req.method !== 'GET' && req.method !== 'HEAD') rateLimit(`user:${me.id}:write`, LIMIT_WRITE * SCALE);
+      }
       if (opts.perm) requirePerm(me, opts.perm);
-      if (opts.limit) rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
+      if (opts.limit && !fromWeb) rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
+      // On Vercel (web role): the worker runs it, from its own server and IP.
+      if (!fromWeb && relayed(req)) return await relay(req, me);
       return toResponse(await fn(req, ctx, me));
     } catch (err) {
       if (who) await logRefusal(who, err, req);

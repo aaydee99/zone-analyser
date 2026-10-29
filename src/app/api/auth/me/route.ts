@@ -1,8 +1,6 @@
 import { route } from '@/lib/http';
 import { PERMISSIONS } from '@/lib/rbac';
-import { activeRunId } from '@/lib/runner';
-import { activeRestore } from '@/lib/job-lock';
-import { pendingFor } from '@/lib/approvals';
+import { liveState } from '@/lib/live-state';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,8 +9,6 @@ export const GET = route(async (_req, _ctx, me) => ({
   user: { id: me.id, email: me.email, name: me.name, role: me.role },
   permissions: [...PERMISSIONS[me.role]],
   expiresAt: me.expiresAt,
-  activeRunId: activeRunId(),
-  activeRestore: activeRestore(),
-  /** Requests waiting for this person to approve or reject. */
-  pendingApprovals: pendingFor(me),
+  /** The active run and restore, and the requests waiting for this person to approve or reject. */
+  ...(await liveState(me)),
 }));

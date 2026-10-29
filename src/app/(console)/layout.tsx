@@ -5,9 +5,7 @@ import { SESSION_COOKIE } from '@/lib/http';
 import { getMe, type Me } from '@/lib/auth';
 import { isConfigured } from '@/lib/supabase';
 import { PERMISSIONS } from '@/lib/rbac';
-import { activeRunId } from '@/lib/runner';
-import { activeRestore } from '@/lib/job-lock';
-import { pendingFor } from '@/lib/approvals';
+import { liveState } from '@/lib/live-state';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,9 +23,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
     user: { id: me.id, email: me.email, name: me.name, role: me.role },
     permissions: [...PERMISSIONS[me.role]],
     expiresAt: me.expiresAt,
-    activeRunId: activeRunId(),
-    activeRestore: activeRestore(),
-    pendingApprovals: pendingFor(me),
+    ...(await liveState(me)),
   };
   return <Shell initial={initial}>{children}</Shell>;
 }

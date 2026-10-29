@@ -3,6 +3,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { Permission, Role } from '@/lib/rbac';
 import type { ActiveRestore } from '@/lib/job-lock';
+import type { WorkerSummary } from '@/lib/live-state';
 
 export interface MeUser { id: string; email: string; name: string; role: Role }
 
@@ -15,6 +16,8 @@ export interface MeState {
   activeRestore: ActiveRestore | null;
   /** Requests waiting for this person to approve or reject. */
   pendingApprovals?: number;
+  /** On Vercel: the worker that runs backups, restores and Cloudflare reads. */
+  worker?: WorkerSummary;
 }
 
 interface Ctx extends MeState {

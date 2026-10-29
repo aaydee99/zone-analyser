@@ -2,11 +2,14 @@ import 'server-only';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 export const APP_ROOT = process.cwd();
+// On Vercel the app folder is read-only: only the temporary folder can be written (and it is
+// per instance; the worker keeps everything that must last).
 export const DATA_DIR = process.env.CONSOLE_DATA_DIR
   ? path.resolve(process.env.CONSOLE_DATA_DIR)
-  : path.join(APP_ROOT, 'data');
+  : process.env.VERCEL ? path.join(os.tmpdir(), 'backup-console') : path.join(APP_ROOT, 'data');
 export const RUNS_DIR = path.join(DATA_DIR, 'runs');
 export const RUNNER_DIR = path.join(APP_ROOT, 'runner');
 export const RUNNER_SCRIPT = path.join(RUNNER_DIR, 'backup.js');
