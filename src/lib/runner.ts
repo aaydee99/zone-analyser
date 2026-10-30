@@ -386,6 +386,9 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
 
     const env = augmentedEnvPath({ ...process.env });
     for (const k of Object.keys(env)) if (SCRIPT_ENV_KEYS.includes(k.toUpperCase()) || CONSOLE_ENV_RE.test(k)) delete env[k];
+    // GitHub Actions (the worker) sets CI=true, and cf-terraforming then skips creating its API
+    // client (meant for its own test recordings) and crashes on the first call.
+    delete env.CI;
     Object.assign(env, vars);
     env.HOME ||= os.homedir();
     env.TF_PLUGIN_CACHE_DIR = settings.pluginCacheDir || env.TF_PLUGIN_CACHE_DIR || path.join(DATA_DIR, 'plugin-cache');

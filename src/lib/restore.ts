@@ -332,6 +332,8 @@ function terraformCliConfig() {
 async function terraformEnv(auth: CfAuth, guard?: ReadOnlyProxy) {
   const env = augmentedEnvPath({ ...process.env });
   for (const k of Object.keys(env)) if (CONSOLE_ENV_RE.test(k) || STRIP_ENV.includes(k.toUpperCase())) delete env[k];
+  // GitHub Actions (the worker) sets CI=true, and cf-terraforming then skips creating its API client.
+  delete env.CI;
   const settings = await getSettings();
   Object.assign(env, 'token' in auth ? { CLOUDFLARE_API_TOKEN: auth.token } : { CLOUDFLARE_EMAIL: auth.email, CLOUDFLARE_API_KEY: auth.apiKey });
   if (guard) env.CLOUDFLARE_BASE_URL = guard.baseUrl;
