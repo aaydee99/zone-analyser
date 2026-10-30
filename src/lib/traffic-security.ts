@@ -2,8 +2,9 @@ import 'server-only';
 import { inBackground, type Pending, type Progress } from './bg-job';
 import { cached, cacheBackend } from './cache';
 import { HttpError } from './http';
-import { CLOSED_TTL, GRAPHQL, RUNNING_TTL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, type GqlError } from './traffic';
-import type { DatasetDetail, DetailFilter, DetailRow, FirewallEvent, ZoneDetail, ZoneDetailPending } from './traffic-types';
+import { CLOSED_TTL, GRAPHQL, RUNNING_TTL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
+import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
+import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
 import { credentialForRun } from './vault';
 import { rulesetNames } from './zone-explorer';
 
@@ -11,7 +12,7 @@ import { rulesetNames } from './zone-explorer';
 // rate-limiting rules matched, what they did, which IPs, paths, countries …) and its requests (top
 // IPs, paths, status codes, cache status …), from Cloudflare's adaptive GraphQL datasets
 // (firewallEventsAdaptiveGroups, firewallEventsAdaptive, httpRequestsAdaptiveGroups). Read only for
-// the zone someone chose, optionally narrowed to one IP or one rule.
+// the zone someone chose (or an account's busiest zones, added up), optionally narrowed to one IP or one rule.
 //
 // Cloudflare limits these datasets per zone plan, and says how in its `settings` node: how far back
 // (notOlderThan), how long one query's range may be (maxDuration), how many fields one query may use,
@@ -21,7 +22,8 @@ import { rulesetNames } from './zone-explorer';
 
 const MAX_PARTS = 12;
 const PARALLEL = 3;
-const EVENTS = 100;
+/** Single events and requests shown: more as the window gets smaller. */
+const listSize = (f: DetailFilter | null) => (f?.hour !== undefined ? 1000 : f?.day ? 500 : 100);
 const DEFAULT_LIMITS = { enabled: true, maxDuration: 259_200, notOlderThan: 2_678_400, maxNumberOfFields: 25, maxPageSize: 10_000, availableFields: null as string[] | null };
 type Limits = typeof DEFAULT_LIMITS;
 
@@ -31,7 +33,6 @@ interface Spec { alias: string; dims: string[]; limit: number; bytes?: boolean }
 
 /** WAF / firewall events, grouped. */
 const SECURITY_SPECS: Spec[] = [
-  { alias: 'daily', dims: ['date'], limit: 40 },
   { alias: 'actions', dims: ['action'], limit: 25 },
   { alias: 'sources', dims: ['source'], limit: 30 },
   { alias: 'rules', dims: ['ruleId', 'rulesetId', 'description', 'source', 'action'], limit: 200 },
@@ -46,7 +47,6 @@ const SECURITY_SPECS: Spec[] = [
 
 /** All HTTP requests, grouped (with bytes). */
 const REQUEST_SPECS: Spec[] = [
-  { alias: 'daily', dims: ['date'], limit: 40, bytes: true },
   { alias: 'ips', dims: ['clientIP', 'clientCountryName', 'clientASNDescription'], limit: 200, bytes: true },
   { alias: 'paths', dims: ['clientRequestPath'], limit: 100, bytes: true },
   { alias: 'hosts', dims: ['clientRequestHTTPHost'], limit: 50, bytes: true },
@@ -61,12 +61,24 @@ const REQUEST_SPECS: Spec[] = [
   { alias: 'protocols', dims: ['clientRequestHTTPProtocol'], limit: 10 },
 ];
 
+/** The time series of a window: per day for the month, per hour for a day, per minute for an hour. */
+export const TIME_DIM: Record<string, string> = { daily: 'date', hourly: 'datetimeHour', minutes: 'datetimeMinute' };
+function timeSpec(f: DetailFilter | null, bytes: boolean): Spec {
+  if (f?.hour !== undefined) return { alias: 'minutes', dims: ['datetimeMinute'], limit: 70, bytes };
+  if (f?.day) return { alias: 'hourly', dims: ['datetimeHour'], limit: 30, bytes };
+  return { alias: 'daily', dims: ['date'], limit: 40, bytes };
+}
+const timeRowsOf = (b: Record<string, DetailRow[]>) => b.daily ?? b.hourly ?? b.minutes;
+
 /** Shown per breakdown, after the parts are added up. */
-const SHOW: Record<string, number> = { rules: 100, ips: 100, paths: 50 };
+const SHOW: Record<string, number> = { rules: 250, ips: 100, paths: 50 };
 
 const EVENT_FIELDS = ['datetime', 'action', 'source', 'ruleId', 'rulesetId', 'description', 'clientIP', 'clientCountryName', 'clientAsn', 'clientASNDescription',
   'clientRequestHTTPMethodName', 'clientRequestHTTPHost', 'clientRequestPath', 'clientRequestQuery', 'userAgent', 'edgeResponseStatus', 'rayName'];
 const EVENT_FIELDS_MIN = ['datetime', 'action', 'source', 'ruleId', 'description', 'clientIP', 'clientRequestPath'];
+const REQUEST_FIELDS = ['datetime', 'clientIP', 'clientCountryName', 'clientASNDescription', 'clientRequestHTTPMethodName', 'clientRequestHTTPHost', 'clientRequestPath',
+  'clientRequestQuery', 'clientRequestHTTPProtocol', 'edgeResponseStatus', 'cacheStatus', 'edgeResponseBytes', 'userAgent', 'rayName'];
+const REQUEST_FIELDS_MIN = ['datetime', 'clientIP', 'clientRequestPath', 'edgeResponseStatus'];
 
 // ── GraphQL ─────────────────────────────────────────────────────────────────
 
@@ -89,7 +101,7 @@ const zoneQuery = (zoneId: string, body: string) => `{ viewer { zones(filter: { 
 
 // ── What the zone's plan allows ─────────────────────────────────────────────
 
-const DATASETS = ['firewallEventsAdaptiveGroups', 'firewallEventsAdaptive', 'httpRequestsAdaptiveGroups'] as const;
+const DATASETS = ['firewallEventsAdaptiveGroups', 'firewallEventsAdaptive', 'httpRequestsAdaptiveGroups', 'httpRequestsAdaptive'] as const;
 type Dataset = (typeof DATASETS)[number];
 
 async function limitsOf(token: string, zoneId: string): Promise<Record<Dataset, Limits>> {
@@ -118,12 +130,22 @@ function offered(limits: Limits, field: string) {
 
 // ── Reading one dataset over the month ──────────────────────────────────────
 
-/** The part of the month this dataset still has, in parts of at most maxDuration. */
-function windowOf(month: string, limits: Limits, now = Date.now()) {
+/** The month, or the chosen day / hour of it. */
+function spanOf(month: string, f: DetailFilter | null, now = Date.now()) {
+  if (f?.day) {
+    const from = Date.parse(`${f.day}T00:00:00Z`) + (f.hour ?? 0) * 3_600_000;
+    return { from, to: from + (f.hour !== undefined ? 3_600_000 : 86_400_000) };
+  }
   const { since, until } = rangeOf(month, new Date(now));
-  const end = Math.min(Date.parse(`${until}T00:00:00Z`), now);
+  return { from: Date.parse(`${since}T00:00:00Z`), to: Date.parse(`${until}T00:00:00Z`) };
+}
+
+/** The part of the window this dataset still has, in parts of at most maxDuration. */
+function windowOf(month: string, limits: Limits, f: DetailFilter | null, now = Date.now()) {
+  const span = spanOf(month, f, now);
+  const end = Math.min(span.to, now);
   const keptFrom = now - limits.notOlderThan * 1000 + 60_000;
-  let start = Math.max(Date.parse(`${since}T00:00:00Z`), keptFrom);
+  let start = Math.max(span.from, keptFrom);
   const step = limits.maxDuration * 1000;
   let trimmed = false;
   if (end - start > step * MAX_PARTS) { start = end - step * MAX_PARTS; trimmed = true; }
@@ -146,8 +168,11 @@ function pack(specs: Spec[], maxFields: number): Spec[][] {
   return out;
 }
 
-const filterOf = (dataset: Dataset, f: DetailFilter | null) =>
-  f?.ip ? `, clientIP: ${J(f.ip)}` : f?.rule && dataset !== 'httpRequestsAdaptiveGroups' ? `, ruleId: ${J(f.rule)}` : '';
+const filterOf = (dataset: Dataset, f: DetailFilter | null) => {
+  if (f?.ip) return `, clientIP: ${J(f.ip)}`;
+  if (dataset === 'httpRequestsAdaptiveGroups' || dataset === 'httpRequestsAdaptive') return '';
+  return f?.rule ? `, ruleId: ${J(f.rule)}` : f?.ruleset ? `, rulesetId: ${J(f.ruleset)}` : '';
+};
 
 function groupsQuery(dataset: Dataset, zoneId: string, part: { since: string; until: string }, specs: Spec[], f: DetailFilter | null, pageSize: number) {
   return zoneQuery(zoneId, specs.map((s) =>
@@ -191,8 +216,8 @@ const days = (seconds: number) => Math.round(seconds / 86_400);
 async function readDataset(token: string, dataset: Dataset, zoneId: string, month: string, all: Spec[], f: DetailFilter | null, limits: Limits, progress: Progress): Promise<DatasetDetail> {
   const base: DatasetDetail = { available: false, notes: [], retentionDays: days(limits.notOlderThan), parts: 0, total: 0, breakdowns: {} };
   if (!limits.enabled) return { ...base, message: "Not available on this zone's plan" };
-  const w = windowOf(month, limits);
-  if (!w.parts.length) return { ...base, message: `Cloudflare keeps this for ${days(limits.notOlderThan)} days on this zone's plan — choose a more recent month` };
+  const w = windowOf(month, limits, f);
+  if (!w.parts.length) return { ...base, message: `Cloudflare keeps this for ${days(limits.notOlderThan)} days on this zone's plan — choose a more recent ${f?.day ? 'day' : 'month'}` };
   const specs = all.filter((s) => s.dims.every((d) => offered(limits, d)));
   const notOffered = all.filter((s) => !specs.includes(s)).map((s) => s.alias);
   const queries = pack(specs, Math.max(3, limits.maxNumberOfFields));
@@ -212,77 +237,224 @@ async function readDataset(token: string, dataset: Dataset, zoneId: string, mont
     return { ...base, message: permissionError(errs, 0) ? `The token cannot read this — it needs "Zone › Analytics › Read" (${errorText(errs)})` : errorText(errs) };
   }
   const breakdowns = Object.fromEntries(ok.map((s) => {
-    const rows = [...merged.get(s.alias)!.values()].sort((a, b) => (s.alias === 'daily' ? a.dims.date.localeCompare(b.dims.date) : b.count - a.count));
-    return [s.alias, s.alias === 'daily' ? rows : rows.slice(0, SHOW[s.alias] ?? 25)];
+    const t = TIME_DIM[s.alias];
+    const rows = [...merged.get(s.alias)!.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : b.count - a.count));
+    return [s.alias, t ? rows : rows.slice(0, SHOW[s.alias] ?? 25)];
   }));
   const notes: string[] = [];
   if (w.trimmed) notes.push(`Covers the last ${days((Date.parse(w.until!) - Date.parse(w.since!)) / 1000)} days of the month (read in at most ${MAX_PARTS} parts)`);
   if (notOffered.length) notes.push(`Not offered on this zone's plan: ${notOffered.join(', ')}`);
   for (const [alias, msg] of failed) notes.push(`${alias} could not be read: ${msg}`);
-  const total = (breakdowns.daily ?? breakdowns.actions ?? breakdowns.statuses ?? []).reduce((n, r) => n + r.count, 0);
+  const total = (timeRowsOf(breakdowns) ?? breakdowns.actions ?? breakdowns.statuses ?? []).reduce((n, r) => n + r.count, 0);
   return { available: true, notes, retentionDays: days(limits.notOlderThan), since: w.since, until: w.until, parts: w.parts.length, total, breakdowns };
 }
 
-/** The latest individual security events (newest part of the month only). */
-async function readEvents(token: string, zoneId: string, month: string, f: DetailFilter | null, limits: Limits): Promise<{ events: FirewallEvent[]; since?: string; note?: string }> {
-  if (!limits.enabled) return { events: [], note: "Single events are not available on this zone's plan" };
-  const w = windowOf(month, limits);
+/** The newest single records of a raw dataset (security events or requests) in the newest part of the window. */
+async function readSingles(token: string, dataset: 'firewallEventsAdaptive' | 'httpRequestsAdaptive', zoneId: string, month: string, f: DetailFilter | null, limits: Limits,
+  fields: string[], minimal: string[], what: string): Promise<{ list: FirewallEvent[]; since?: string; note?: string }> {
+  if (!limits.enabled) return { list: [], note: `Single ${what} are not available on this zone's plan` };
+  const w = windowOf(month, limits, f);
   const last = w.parts[w.parts.length - 1];
-  if (!last) return { events: [] };
-  const ask = (fields: string[]) => gql(token, zoneQuery(zoneId,
-    `events: firewallEventsAdaptive(limit: ${Math.min(EVENTS, limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf('firewallEventsAdaptive', f)} }, orderBy: [datetime_DESC]) { ${fields.join(' ')} }`));
-  let r = await ask(EVENT_FIELDS.filter((x) => offered(limits, x)));
-  if (r.errors.length && !r.data) r = await ask(EVENT_FIELDS_MIN.filter((x) => offered(limits, x)));
-  if (r.errors.length && !r.data) return { events: [], note: `Single events could not be read: ${errorText(r.errors)}` };
-  return { events: Array.isArray(r.data?.events) ? (r.data!.events as FirewallEvent[]) : [], since: last.since };
+  if (!last) return { list: [] };
+  const ask = (x: string[]) => gql(token, zoneQuery(zoneId,
+    `rows: ${dataset}(limit: ${Math.min(listSize(f), limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf(dataset, f)} }, orderBy: [datetime_DESC]) { ${x.join(' ')} }`));
+  let r = await ask(fields.filter((x) => offered(limits, x)));
+  if (r.errors.length && !r.data) r = await ask(minimal.filter((x) => offered(limits, x)));
+  if (r.errors.length && !r.data) return { list: [], note: `Single ${what} could not be read: ${errorText(r.errors)}` };
+  return { list: Array.isArray(r.data?.rows) ? (r.data!.rows as FirewallEvent[]) : [], since: last.since };
 }
 
 // ── The zone detail ─────────────────────────────────────────────────────────
 
 const IP = /^[0-9A-Fa-f:.]{2,45}$/;
 const RULE = /^[A-Za-z0-9_.:-]{1,128}$/;
+/** At account level: the busiest zones of the month, at most this many. */
+const ACCOUNT_ZONES = 25;
+const ZONES_AT_ONCE = 2;
+
+const filterKey = (f: DetailFilter | null) =>
+  `${f?.day ? `&day=${f.day}` : ''}${f?.hour !== undefined ? `&hour=${f.hour}` : ''}${f?.ip ? `&ip=${encodeURIComponent(f.ip)}` : ''}${f?.rule ? `&rule=${encodeURIComponent(f.rule)}` : ''}${f?.ruleset ? `&ruleset=${encodeURIComponent(f.ruleset)}` : ''}`;
+const NO_RULE_REQUESTS = (): DatasetDetail => ({ available: false, message: 'Requests are not linked to rules', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} });
+
+// ── Managed rulesets deployed on the zone ───────────────────────────────────
+
+interface ExecuteRule {
+  description?: string; expression?: string; action?: string; enabled?: boolean;
+  action_parameters?: { id?: string; overrides?: { action?: string; enabled?: boolean; categories?: { category?: string; enabled?: boolean; action?: string }[]; rules?: { id?: string; enabled?: boolean; action?: string; score_threshold?: number }[] } };
+}
+
+/** GET (read-only) the zone's managed-rules entrypoint: which managed rulesets run, where, and how they are tuned. */
+async function readManaged(token: string, zoneId: string, names: Record<string, string>): Promise<{ list: ManagedDeployment[]; note?: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/rulesets/phases/http_request_firewall_managed/entrypoint`,
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000), cache: 'no-store' });
+  } catch {
+    return { list: [], note: 'Managed rules could not be read: the Cloudflare API was not reachable' };
+  }
+  if (res.status === 404) return { list: [] };
+  const body = (await res.json().catch(() => null)) as { success?: boolean; result?: { rules?: ExecuteRule[] }; errors?: GqlError[] } | null;
+  if (!res.ok || !body?.success) {
+    return { list: [], note: `Managed rules could not be read${res.status === 403 ? ' — the token needs "Zone › Zone WAF › Read"' : ''} (${errorText(body?.errors ?? [{ message: `HTTP ${res.status}` }])})` };
+  }
+  const list = (body.result?.rules ?? []).filter((r) => r.action === 'execute' && r.action_parameters?.id).map((r): ManagedDeployment => {
+    const id = r.action_parameters!.id!;
+    const o = r.action_parameters!.overrides ?? {};
+    const categories = (o.categories ?? []).filter((c) => c.category).map((c) => ({ category: c.category!, ...(c.enabled !== undefined ? { enabled: c.enabled } : {}), ...(c.action ? { action: c.action } : {}) }));
+    const rules = (o.rules ?? []).filter((x) => x.id).map((x) => ({ id: x.id!, ...(x.enabled !== undefined ? { enabled: x.enabled } : {}), ...(x.action ? { action: x.action } : {}), ...(x.score_threshold !== undefined ? { scoreThreshold: x.score_threshold } : {}) }));
+    const d: ManagedDeployment = {
+      rulesetId: id, name: names[id] ?? MANAGED_RULESETS[id] ?? id, ...(r.description ? { description: r.description } : {}),
+      enabled: r.enabled !== false, expression: r.expression ?? 'true', ...(o.action ? { action: o.action } : {}), categoryOverrides: categories, ruleOverrides: rules,
+    };
+    if (id === OWASP_RULESET) {
+      // The highest paranoia level whose category is turned on (PL1 is always on).
+      d.paranoiaLevel = [4, 3, 2].find((n) => categories.some((c) => c.category === `paranoia-level-${n}` && c.enabled === true)) ?? 1;
+      const anomaly = rules.find((x) => x.id === OWASP_ANOMALY_RULE);
+      if (anomaly?.scoreThreshold !== undefined) d.scoreThreshold = anomaly.scoreThreshold;
+      d.anomalyAction = anomaly?.action ?? o.action ?? 'block';
+    }
+    return d;
+  });
+  return { list };
+}
+
+/** One zone's detail for the month (cached per zone, month and IP / rule). */
+function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFilter | null, fresh: boolean, progress: Progress): Promise<ZoneDetail> {
+  const zone = scope.zones.find((z) => z.id === zoneId)!;
+  const { partial } = rangeOf(month);
+  return cached(`path:/api/traffic/detail?month=${month}&zone=${encodeURIComponent(zoneId)}${filterKey(f)}`, partial ? RUNNING_TTL : CLOSED_TTL, async (): Promise<ZoneDetail> => {
+    const cred = scope.credentialOf[zoneId];
+    let token = '';
+    try { token = cred ? (await credentialForRun(cred.id, 'cloudflare')).fields.apiToken : ''; } catch { /* below */ }
+    if (!token) throw new HttpError(409, 'The stored credential for this zone could not be decrypted');
+    progress.total += 1;
+    const limits = await limitsOf(token, zoneId).finally(() => { progress.done++; });
+    const [security, requests, events, names, samples] = await Promise.all([
+      readDataset(token, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
+      f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS())
+        : readDataset(token, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
+      readSingles(token, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
+      rulesetNames(zoneId).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),
+      f?.rule || f?.ruleset ? Promise.resolve(null)
+        : readSingles(token, 'httpRequestsAdaptive', zoneId, month, f, limits.httpRequestsAdaptive, REQUEST_FIELDS, REQUEST_FIELDS_MIN, 'requests'),
+    ]);
+    if (events.note) security.notes.push(events.note);
+    // The deployed managed rulesets belong to the zone, not to an IP or a rule: only read unnarrowed.
+    const managed = f && (f.ip || f.rule || f.ruleset || f.day) ? null : await readManaged(token, zoneId, names);
+    return {
+      month, accountId: scope.accountId, accountName: scope.accountName, zoneId, zoneName: zone.name, filter: f,
+      security: { ...security, events: events.list, ...(events.since ? { eventsSince: events.since } : {}) },
+      requests: { ...requests, ...(samples ? { samples: samples.list, ...(samples.since ? { samplesSince: samples.since } : {}), ...(samples.note ? { samplesNote: samples.note } : {}) } : {}) },
+      rulesetNames: names, generatedAt: new Date().toISOString(),
+      ...(managed ? { managed: managed.list, ...(managed.note ? { managedNote: managed.note } : {}) } : {}),
+    };
+  }, fresh);
+}
+
+/** The zones' datasets added up: breakdowns by their values, with a "zones" breakdown of each zone's total. */
+function mergeDatasets(parts: { name: string; ds: DatasetDetail }[]): DatasetDetail {
+  const ok = parts.filter((p) => p.ds.available);
+  if (!ok.length) return { available: false, message: parts[0]?.ds.message ?? 'Not available', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} };
+  const rows = new Map<string, Map<string, DetailRow>>();
+  for (const { ds } of ok) {
+    for (const [alias, list] of Object.entries(ds.breakdowns)) {
+      const m = rows.get(alias) ?? new Map<string, DetailRow>();
+      for (const r of list) {
+        const key = JSON.stringify(r.dims);
+        const cur = m.get(key) ?? { dims: r.dims, count: 0 };
+        cur.count += r.count;
+        if (r.bytes !== undefined) cur.bytes = (cur.bytes ?? 0) + r.bytes;
+        m.set(key, cur);
+      }
+      rows.set(alias, m);
+    }
+  }
+  const breakdowns: Record<string, DetailRow[]> = Object.fromEntries([...rows].map(([alias, m]) => {
+    const t = TIME_DIM[alias];
+    const list = [...m.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : b.count - a.count));
+    return [alias, t ? list : list.slice(0, SHOW[alias] ?? 25)];
+  }));
+  breakdowns.zones = ok.map((p) => {
+    const bytes = (timeRowsOf(p.ds.breakdowns) ?? []).reduce((n, r) => n + (r.bytes ?? 0), 0);
+    return { dims: { zone: p.name }, count: p.ds.total, ...(bytes ? { bytes } : {}) };
+  }).sort((a, b) => b.count - a.count);
+  const since = ok.map((p) => p.ds.since).filter(Boolean).sort()[0];
+  const until = ok.map((p) => p.ds.until).filter(Boolean).sort().at(-1);
+  const kept = ok.map((p) => p.ds.retentionDays).filter((x): x is number => x !== null);
+  const notes = [...new Set(ok.flatMap((p) => p.ds.notes.map((n) => `${p.name}: ${n}`)))];
+  for (const p of parts.filter((x) => !x.ds.available)) notes.push(`${p.name}: ${p.ds.message ?? 'not available'}`);
+  return {
+    available: true, notes, retentionDays: kept.length ? Math.min(...kept) : null, ...(since ? { since } : {}), ...(until ? { until } : {}),
+    parts: Math.max(...ok.map((p) => p.ds.parts)), total: ok.reduce((n, p) => n + p.ds.total, 0), breakdowns,
+  };
+}
+
+/** An account: its busiest zones of the month read one by one (each cached), then added up. */
+async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | null, fresh: boolean, progress: Progress): Promise<ZoneDetail> {
+  // The month's totals (usually cached already) say which zones had traffic, busiest first.
+  const report = await trafficReport(month, scope.accountId, undefined, false, 90_000).catch(() => null);
+  const totals = report && !('pending' in report) ? new Map(report.zones.map((z) => [z.id, z])) : null;
+  const order = [...scope.zones].sort((a, b) => (totals?.get(b.id)?.totals.requests ?? 0) - (totals?.get(a.id)?.totals.requests ?? 0) || a.name.localeCompare(b.name));
+  const zones: DetailZone[] = [];
+  const pick: typeof scope.zones = [];
+  for (const z of order) {
+    const t = totals?.get(z.id);
+    if (t && t.status === 'ok' && !t.totals.requests) zones.push({ id: z.id, name: z.name, status: 'no traffic' });
+    else if (pick.length >= ACCOUNT_ZONES) zones.push({ id: z.id, name: z.name, status: 'left out', message: `Only the ${ACCOUNT_ZONES} busiest zones are added up — choose this zone to see it` });
+    else pick.push(z);
+  }
+  const read = await inParallel(pick, ZONES_AT_ONCE, async (z) => {
+    try { return { z, d: await readZoneDetail(scope, z.id, month, f, fresh, progress) }; } catch (e) { return { z, error: e instanceof Error ? e.message : String(e) }; }
+  });
+  const got = read.filter((x): x is { z: (typeof pick)[number]; d: ZoneDetail } => 'd' in x && !!x.d);
+  for (const x of read) {
+    const ok = 'd' in x && x.d && (x.d.security.available || x.d.requests.available);
+    zones.push({ id: x.z.id, name: x.z.name, status: ok ? 'read' : 'unavailable', ...(!ok ? { message: 'error' in x ? x.error : (x.d?.security.message ?? 'Not available') } : {}) });
+  }
+  const events = got.flatMap((x) => x.d.security.events.map((e): FirewallEvent => ({ ...e, zone: x.z.name })))
+    .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? ''))).slice(0, listSize(f));
+  const samples = got.flatMap((x) => (x.d.requests.samples ?? []).map((e): FirewallEvent => ({ ...e, zone: x.z.name })))
+    .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? ''))).slice(0, listSize(f));
+  const samplesSince = got.map((x) => x.d.requests.samplesSince).filter(Boolean).sort()[0];
+  const eventsSince = got.map((x) => x.d.security.eventsSince).filter(Boolean).sort()[0];
+  const security = mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.security })));
+  const requests = f?.rule || f?.ruleset ? NO_RULE_REQUESTS()
+    : { ...mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.requests }))), samples, ...(samplesSince ? { samplesSince } : {}) };
+  return {
+    month, accountId: scope.accountId, accountName: scope.accountName, filter: f, zones: zones.sort((a, b) => a.name.localeCompare(b.name)),
+    security: { ...security, events, ...(eventsSince ? { eventsSince } : {}) }, requests,
+    rulesetNames: Object.assign({ ...MANAGED_RULESETS }, ...got.map((x) => x.d.rulesetNames)),
+    ...(f && (f.ip || f.rule || f.ruleset || f.day) ? {} : {
+      managed: got.flatMap((x) => (x.d.managed ?? []).map((m) => ({ ...m, zone: x.z.name }))),
+      ...(got.some((x) => x.d.managedNote) ? { managedNote: got.filter((x) => x.d.managedNote).map((x) => `${x.z.name}: ${x.d.managedNote}`).join(' · ') } : {}),
+    }),
+    generatedAt: got.map((x) => x.d.generatedAt).sort()[0] ?? new Date().toISOString(),
+  };
+}
 
 /**
- * GET /api/traffic/detail?month=YYYY-MM&account=ID&zone=ID[&ip=…|&rule=…]: the zone's security events and
- * requests for the month (as far back as its plan keeps them), or how far reading got.
+ * GET /api/traffic/detail?month=YYYY-MM&account=ID[&zone=ID][&ip=…|&rule=…]: one zone's security events and
+ * requests for the month (as far back as its plan keeps them) — or, without a zone, the account's busiest
+ * zones added up — or how far reading got.
  */
 export async function zoneDetail(month: string, accountId: string, zoneId: string, filter: DetailFilter, fresh = false, waitMs = WAIT_MS): Promise<ZoneDetail | ZoneDetailPending> {
   if (!trafficMonths().includes(month)) throw new HttpError(400, 'Pick a month from the last 12 (YYYY-MM)');
-  if (!zoneId) throw new HttpError(400, 'Choose a zone: the detail is read for one zone');
   if (filter.ip && !IP.test(filter.ip)) throw new HttpError(400, 'Not an IP address');
   if (filter.rule && !RULE.test(filter.rule)) throw new HttpError(400, 'Not a rule ID');
-  if (filter.ip && filter.rule) throw new HttpError(400, 'Narrow to an IP or a rule, not both');
-  const scope = await scopeOf(accountId, zoneId);
-  const zone = scope.zones[0];
-  const f: DetailFilter | null = filter.ip ? { ip: filter.ip } : filter.rule ? { rule: filter.rule } : null;
-  const key = `month=${month}&zone=${encodeURIComponent(zoneId)}${f?.ip ? `&ip=${encodeURIComponent(f.ip)}` : ''}${f?.rule ? `&rule=${encodeURIComponent(f.rule)}` : ''}`;
-  const { partial } = rangeOf(month);
+  if (filter.ruleset && !RULE.test(filter.ruleset)) throw new HttpError(400, 'Not a ruleset ID');
+  if ([filter.ip, filter.rule, filter.ruleset].filter(Boolean).length > 1) throw new HttpError(400, 'Narrow to one IP, rule or ruleset at a time');
+  if (filter.day && (!/^\d{4}-\d{2}-\d{2}$/.test(filter.day) || !filter.day.startsWith(`${month}-`) || Number.isNaN(Date.parse(`${filter.day}T00:00:00Z`)))) throw new HttpError(400, 'Pick a day of the chosen month (YYYY-MM-DD)');
+  if (filter.hour !== undefined && (!filter.day || !Number.isInteger(filter.hour) || filter.hour < 0 || filter.hour > 23)) throw new HttpError(400, 'An hour (0–23) needs a day');
+  const scope = await scopeOf(accountId, zoneId || undefined);
+  const narrow: DetailFilter = filter.ip ? { ip: filter.ip } : filter.rule ? { rule: filter.rule } : filter.ruleset ? { ruleset: filter.ruleset } : {};
+  const time: DetailFilter = filter.day ? { day: filter.day, ...(filter.hour !== undefined ? { hour: filter.hour } : {}) } : {};
+  const f: DetailFilter | null = Object.keys(narrow).length || Object.keys(time).length ? { ...narrow, ...time } : null;
+  const key = `detail:month=${month}&account=${encodeURIComponent(accountId)}${zoneId ? `&zone=${encodeURIComponent(zoneId)}` : ''}${filterKey(f)}`;
 
-  const out = await inBackground<ZoneDetail>(`detail:${key}`, async (progress) => {
+  const out = await inBackground<ZoneDetail>(key, async (progress) => {
     const asked = Date.now();
-    const d = await cached(`path:/api/traffic/detail?${key}`, partial ? RUNNING_TTL : CLOSED_TTL, async (): Promise<ZoneDetail> => {
-      const cred = scope.credentialOf[zoneId];
-      let token = '';
-      try { token = cred ? (await credentialForRun(cred.id, 'cloudflare')).fields.apiToken : ''; } catch { /* below */ }
-      if (!token) throw new HttpError(409, 'The stored credential for this zone could not be decrypted');
-      progress.total += 1;
-      const limits = await limitsOf(token, zoneId).finally(() => { progress.done++; });
-      const [security, requests, events, names] = await Promise.all([
-        readDataset(token, 'firewallEventsAdaptiveGroups', zoneId, month, SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules')), f, limits.firewallEventsAdaptiveGroups, progress),
-        f?.rule
-          ? Promise.resolve<DatasetDetail>({ available: false, message: 'Requests are not linked to rules', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} })
-          : readDataset(token, 'httpRequestsAdaptiveGroups', zoneId, month, REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips')), f, limits.httpRequestsAdaptiveGroups, progress),
-        readEvents(token, zoneId, month, f, limits.firewallEventsAdaptive),
-        rulesetNames(zoneId).catch(() => ({} as Record<string, string>)),
-      ]);
-      if (events.note) security.notes.push(events.note);
-      return {
-        month, zoneId, zoneName: zone.name, accountName: scope.accountName, filter: f,
-        security: { ...security, events: events.events, ...(events.since ? { eventsSince: events.since } : {}) },
-        requests, rulesetNames: names, generatedAt: new Date().toISOString(),
-      };
-    }, fresh);
+    const d = zoneId ? await readZoneDetail(scope, zoneId, month, f, fresh, progress) : await readAccountDetail(scope, month, f, fresh, progress);
     return Date.parse(d.generatedAt) < asked ? { ...d, cachedIn: cacheBackend() } : d;
   }, waitMs);
-  return 'pending' in out ? { ...(out as Pending), month, zoneId, filter: f } : out;
+  return 'pending' in out ? { ...(out as Pending), month, accountId: scope.accountId, ...(zoneId ? { zoneId } : {}), filter: f } : out;
 }

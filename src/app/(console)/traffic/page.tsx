@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BarChart3, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
@@ -8,7 +8,7 @@ import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat
 import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { bytes, dayLabel, num, pct, whole } from './format';
-import { ZoneDetailView } from './zone-detail';
+import { DetailHost, ZoneDetailView, useOpenDetail, type Target } from './zone-detail';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -34,17 +34,30 @@ function Change({ now, before, month, short }: { now: number; before: number | u
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
-function Totals({ s, month, partial }: { s: TrafficSlice; month: string; partial: boolean }) {
+/** A stat card that opens the details window behind it. */
+function OpenCard({ label, onOpen, children }: { label: string; onOpen?: () => void; children: ReactNode }) {
+  if (!onOpen) return <>{children}</>;
+  return (
+    <button type="button" onClick={onOpen} aria-label={`${label}: open the details`} title="Open the details"
+      className="rounded-[var(--radius-card)] text-left transition-shadow hover:ring-1 hover:ring-signal/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+      {children}
+    </button>
+  );
+}
+
+function Totals({ s, month, partial, target }: { s: TrafficSlice; month: string; partial: boolean; target?: Target }) {
   const t = s.totals, p = s.previous;
   const vs = partial ? ' (same days)' : '';
+  const open = useOpenDetail();
+  const go = (label: string, focus: 'security' | 'requests') => (target ? () => open({ t: target, focus, label }) : undefined);
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-      <Stat label="Requests" value={num(t.requests)} sub={<Change now={t.requests} before={p?.requests} month={month} />} />
-      <Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} />
-      <Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} />
-      <Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} />
-      <Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} />
-      <Stat label="Visitors / day" value={num(perDay(t))} sub={<span title={`Average of the daily unique visitors${vs}`}>daily average</span>} />
+      <OpenCard label="Requests" onOpen={go('Requests', 'requests')}><Stat label="Requests" value={num(t.requests)} sub={<Change now={t.requests} before={p?.requests} month={month} />} /></OpenCard>
+      <OpenCard label="Bandwidth" onOpen={go('Bandwidth', 'requests')}><Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} /></OpenCard>
+      <OpenCard label="Served from cache" onOpen={go('Cache', 'requests')}><Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} /></OpenCard>
+      <OpenCard label="Threats" onOpen={go('Threats', 'security')}><Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} /></OpenCard>
+      <OpenCard label="Page views" onOpen={go('Page views', 'requests')}><Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} /></OpenCard>
+      <OpenCard label="Visitors" onOpen={go('Visitors', 'requests')}><Stat label="Visitors / day" value={num(perDay(t))} sub={<span title={`Average of the daily unique visitors${vs}`}>daily average</span>} /></OpenCard>
     </div>
   );
 }
@@ -61,8 +74,9 @@ function fillDays(daily: TrafficDay[], since: string, until: string): TrafficDay
 }
 
 /** Requests per day: served from cache (orange) on top of those that went to the origin (grey). */
-function DailyChart({ daily, since, until }: { daily: TrafficDay[]; since: string; until: string }) {
+function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; since: string; until: string; target?: Target }) {
   const days = useMemo(() => fillDays(daily, since, until), [daily, since, until]);
+  const open = useOpenDetail();
   const max = Math.max(1, ...days.map((d) => d.requests));
   const [hover, setHover] = useState<number | null>(null);
   const h = hover !== null ? days[hover] : null;
@@ -70,7 +84,7 @@ function DailyChart({ daily, since, until }: { daily: TrafficDay[]; since: strin
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-        <span className="font-medium text-ink-2">Requests per day</span>
+        <span className="font-medium text-ink-2">Requests per day</span>{target && <span className="text-faint">click a bar for that day&apos;s detail</span>}
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-signal" />From cache</span>
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-faint" />From origin</span>
       </div>
@@ -84,7 +98,8 @@ function DailyChart({ daily, since, until }: { daily: TrafficDay[]; since: strin
             return (
               <button key={d.date} type="button" aria-label={`${dayLabel(d.date)}: ${whole.format(d.requests)} requests`}
                 onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
-                className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus:outline-none', hover === i && 'bg-raised/60')}>
+                onClick={() => target && open({ t: target, filter: { day: d.date }, label: 'All traffic' })}
+                className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus:outline-none', hover === i && 'bg-raised/60', target && 'cursor-pointer')}>
                 <span className="flex w-full flex-col gap-[2px] overflow-hidden rounded-t-[4px]" style={{ height: `${(d.requests / max) * 100}%` }}>
                   {d.cachedRequests > 0 && <span className="w-full bg-signal" style={{ flexGrow: d.cachedRequests }} />}
                   {origin > 0 && <span className="w-full bg-faint" style={{ flexGrow: origin }} />}
@@ -188,11 +203,11 @@ function Countries({ list, total }: { list: TrafficCountry[]; total: number }) {
 }
 
 /** Totals, the daily chart, status codes and countries of one slice. */
-function SliceBody({ s, r, totals = true }: { s: TrafficSlice; r: TrafficReport; totals?: boolean }) {
+function SliceBody({ s, r, totals = true, target }: { s: TrafficSlice; r: TrafficReport; totals?: boolean; target?: Target }) {
   return (
     <div className="space-y-5">
-      {totals && <Totals s={s} month={r.month} partial={r.partial} />}
-      <DailyChart daily={s.daily} since={r.since} until={r.until} />
+      {totals && <Totals s={s} month={r.month} partial={r.partial} target={target} />}
+      <DailyChart daily={s.daily} since={r.since} until={r.until} target={target} />
       <div className="grid gap-5 lg:grid-cols-2">
         <div><div className="eyebrow mb-2">Status codes</div><Statuses s={s.statuses} /></div>
         <div><div className="eyebrow mb-2">Top countries</div><Countries list={s.countries} total={s.totals.requests} /></div>
@@ -240,7 +255,12 @@ function ZoneTable({ zones, r }: { zones: TrafficZone[]; r: TrafficReport }) {
                   )}
                 </tr>
                 {expanded && (
-                  <tr className="border-t border-line/50 bg-sunken/40"><td colSpan={7} className="px-4 py-4"><SliceBody s={z} r={r} /></td></tr>
+                  <tr className="border-t border-line/50 bg-sunken/40">
+                    <td colSpan={7} className="space-y-5 px-4 py-4">
+                      <SliceBody s={z} r={r} target={{ month: r.month, account: r.scope.accountId, zone: z.id }} />
+                      <ZoneDetailView month={r.month} account={r.scope.accountId} zone={z.id} />
+                    </td>
+                  </tr>
                 )}
               </Fragment>
             );
@@ -335,7 +355,7 @@ export default function TrafficPage() {
   const zoneName = (id: string) => zoneList?.find((z) => z.id === id)?.name ?? id;
 
   return (
-    <div>
+    <DetailHost>
       <PageHeader eyebrow="Cloudflare" title="Traffic analytics"
         description="Monthly HTTP traffic for one account (all of its zones, then each zone) or one zone. Only what you choose is read from Cloudflare's analytics (UTC days)." />
 
@@ -411,21 +431,21 @@ export default function TrafficPage() {
             <div className="p-5">
               {shown.unavailable === shown.zones.length ? (
                 <p className="text-sm text-muted">No analytics could be read for {shown.scope.zoneId ? 'this zone' : 'any zone of this account'}.</p>
-              ) : <SliceBody s={shown} r={shown} />}
+              ) : <SliceBody s={shown} r={shown} target={{ month: shown.month, account: shown.scope.accountId, zone: shown.scope.zoneId }} />}
               <p className="mt-4 text-[11px] text-faint">Read {fmtDate(shown.generatedAt)}{shown.cachedIn ? ' (cached — Refresh reads again)' : ''}</p>
             </div>
           </Card>
 
-          {shown.scope.zoneId && <ZoneDetailView month={shown.month} account={shown.scope.accountId} zone={shown.scope.zoneId} />}
+          <ZoneDetailView month={shown.month} account={shown.scope.accountId} zone={shown.scope.zoneId} />
 
           {!shown.scope.zoneId && shown.zones.length > 0 && (
             <Card>
-              <SectionHeader title="Zones" description="Busiest first. Open a zone for its own days, status codes and countries; choose it above as the zone for its security events, rules and top IPs." />
+              <SectionHeader title="Zones" description="Busiest first. Open a zone for its own days, status codes, countries, security events, rules and top IPs." />
               <div className="p-5"><ZoneTable zones={shown.zones} r={shown} /></div>
             </Card>
           )}
         </div>
       )}
-    </div>
+    </DetailHost>
   );
 }

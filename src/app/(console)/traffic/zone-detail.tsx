@@ -1,16 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { RefreshCw, Search, ShieldAlert, Network } from 'lucide-react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ArrowLeft, Network, RefreshCw, Search, ShieldAlert, X } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import type { DatasetDetail, DetailFilter, DetailRow, FirewallEvent, ZoneDetail, ZoneDetailPending } from '@/lib/traffic-types';
+import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET, type DatasetDetail, type DetailFilter, type DetailRow, type FirewallEvent, type ZoneDetail, type ZoneDetailPending } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, Modal, SectionHeader, cx } from '@/components/ui';
 import { bytes, dayLabel, num, pct, whole } from './format';
 
-// One zone's security events and requests, read for the chosen zone only (see src/lib/traffic-security.ts).
-// An IP or a rule opens the same view narrowed to it.
+// One zone's (or account's) security events and requests (see src/lib/traffic-security.ts). Any card, bar, IP,
+// rule or ruleset opens the details window, narrowed to it; days open per hour, hours per minute.
 
-interface Target { month: string; account: string; zone: string }
+/** No zone: the account, its busiest zones added up. */
+export interface Target { month: string; account: string; zone?: string }
 
 // ── Labels ──────────────────────────────────────────────────────────────────
 
@@ -52,7 +53,7 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
-  const qs = useMemo(() => new URLSearchParams({ month: t.month, account: t.account, zone: t.zone, ...(filter?.ip ? { ip: filter.ip } : {}), ...(filter?.rule ? { rule: filter.rule } : {}) }).toString(), [t.month, t.account, t.zone, filter?.ip, filter?.rule]);
+  const qs = useMemo(() => new URLSearchParams({ month: t.month, account: t.account, ...(t.zone ? { zone: t.zone } : {}), ...(filter?.ip ? { ip: filter.ip } : {}), ...(filter?.rule ? { rule: filter.rule } : {}), ...(filter?.ruleset ? { ruleset: filter.ruleset } : {}), ...(filter?.day ? { day: filter.day } : {}), ...(filter?.hour !== undefined ? { hour: String(filter.hour) } : {}) }).toString(), [t.month, t.account, t.zone, filter?.ip, filter?.rule, filter?.ruleset, filter?.day, filter?.hour]);
   const lastRefresh = useRef(refresh);
 
   useEffect(() => {
@@ -108,7 +109,7 @@ function Coverage({ ds }: { ds: DatasetDetail }) {
   return (
     <div className="space-y-1 text-[11.5px] text-muted">
       <p>
-        {ds.since && ds.until && <>Covers {fmtDate(ds.since)} – {fmtDate(ds.until)}</>}
+        {ds.since && ds.until && <>Covers {utc(ds.since)} – {utc(ds.until)}</>}
         {ds.retentionDays !== null && <> · Cloudflare keeps this for {ds.retentionDays} days on this zone&apos;s plan</>}
         {ds.parts > 1 && <> · read in {ds.parts} parts (top lists are the best of each part)</>}
       </p>
@@ -117,35 +118,79 @@ function Coverage({ ds }: { ds: DatasetDetail }) {
   );
 }
 
-/** Events or requests per day: one series, with the exact number on hover. */
-function PerDay({ rows, label }: { rows: DetailRow[]; label: string }) {
+// The time series of a window: per day (month), per hour (a day) or per minute (an hour).
+type TimeAlias = 'daily' | 'hourly' | 'minutes';
+const TIME_KEY: Record<TimeAlias, string> = { daily: 'date', hourly: 'datetimeHour', minutes: 'datetimeMinute' };
+const timeAliasOf = (b: Record<string, DetailRow[]>): TimeAlias | null => (b.minutes ? 'minutes' : b.hourly ? 'hourly' : b.daily ? 'daily' : null);
+const timeLabel = (alias: TimeAlias, v: string) => (alias === 'daily' ? dayLabel(v) : alias === 'hourly' ? `${v.slice(11, 13)}:00` : v.slice(11, 16));
+const PER: Record<TimeAlias, string> = { daily: 'day', hourly: 'hour', minutes: 'minute' };
+
+/** Every slot of the window with zero where nothing happened: all 24 hours of a day, all 60 minutes of an hour, every day in between. */
+function fillTime(alias: TimeAlias, rows: DetailRow[]): DetailRow[] {
+  const key = TIME_KEY[alias];
+  const at = (prefix: string) => rows.find((r) => r.dims[key].startsWith(prefix));
+  const zero = (v: string): DetailRow => ({ dims: { [key]: v }, count: 0, ...(rows[0].bytes !== undefined ? { bytes: 0 } : {}) });
+  if (alias === 'hourly') {
+    const day = rows[0].dims[key].slice(0, 10);
+    return Array.from({ length: 24 }, (_, h) => { const p = `${day}T${String(h).padStart(2, '0')}`; return at(p) ?? zero(`${p}:00:00Z`); });
+  }
+  if (alias === 'minutes') {
+    const hour = rows[0].dims[key].slice(0, 13);
+    return Array.from({ length: 60 }, (_, m) => { const p = `${hour}:${String(m).padStart(2, '0')}`; return at(p) ?? zero(`${p}:00Z`); });
+  }
+  const out: DetailRow[] = [];
+  for (let t = Date.parse(`${rows[0].dims[key]}T00:00:00Z`); t <= Date.parse(`${rows[rows.length - 1].dims[key]}T00:00:00Z`); t += 86_400_000) {
+    const d = new Date(t).toISOString().slice(0, 10);
+    out.push(at(d) ?? zero(d));
+  }
+  return out;
+}
+
+/** An ISO time as "29 Oct 05:00 UTC" (the windows are UTC days and hours). */
+const utc = (iso: string) => `${dayLabel(iso)} ${iso.slice(11, 16)} UTC`;
+
+/** Events or requests over time: one series, the exact number on hover; a day or an hour opens its own detail. */
+function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label: string; onPick?: (alias: TimeAlias, row: DetailRow) => void }) {
   const [hover, setHover] = useState<number | null>(null);
-  if (!rows.length) return null;
+  const alias = timeAliasOf(b);
+  if (!alias || !b[alias].length) return null;
+  const rows = fillTime(alias, b[alias]);
+  const key = TIME_KEY[alias];
+  const clickable = !!onPick && alias !== 'minutes';
   const max = Math.max(1, ...rows.map((r) => r.count));
   const h = hover !== null ? rows[hover] : null;
   return (
     <div>
-      <div className="mb-1 flex justify-between text-xs text-muted"><span className="font-medium text-ink-2">{label} per day</span><span className="text-faint tabular-nums">{num(max)}</span></div>
+      <div className="mb-1 flex justify-between gap-3 text-xs text-muted">
+        <span><span className="font-medium text-ink-2">{label} per {PER[alias]}</span>{clickable && <span className="text-faint"> · click a bar for that {PER[alias]}&apos;s detail</span>}</span>
+        <span className="text-faint tabular-nums">{num(max)}</span>
+      </div>
       <div className="relative">
         <div className="flex h-24 items-end gap-0.5 border-b border-line-strong" onMouseLeave={() => setHover(null)}>
           {rows.map((r, i) => (
-            <button key={r.dims.date} type="button" aria-label={`${dayLabel(r.dims.date)}: ${whole.format(r.count)}`} onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
-              className={cx('flex h-full min-w-0 flex-1 items-end rounded-t-sm focus:outline-none', hover === i && 'bg-raised/60')}>
-              <span className="w-full rounded-t-sm bg-signal" style={{ height: `${(r.count / max) * 100}%` }} />
+            <button key={r.dims[key]} type="button" aria-label={`${timeLabel(alias, r.dims[key])}: ${whole.format(r.count)}`} disabled={!clickable}
+              onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)} onClick={() => clickable && onPick!(alias, r)}
+              className={cx('flex h-full min-w-0 flex-1 items-end rounded-t-sm focus:outline-none', hover === i && 'bg-raised/60', clickable && 'cursor-pointer')}>
+              <span className={cx('w-full rounded-t-sm bg-signal', clickable && hover === i && 'bg-signal-soft')} style={{ height: `${(r.count / max) * 100}%` }} />
             </button>
           ))}
         </div>
         {h && hover !== null && (
-          <div className="pointer-events-none absolute bottom-full z-20 mb-1 rounded-md border border-line-strong bg-surface px-2.5 py-1.5 text-xs shadow-pop"
+          <div className="pointer-events-none absolute bottom-full z-20 mb-1 rounded-md border border-line-strong bg-surface px-2.5 py-1.5 text-xs whitespace-nowrap shadow-pop"
             style={{ left: `${((hover + 0.5) / rows.length) * 100}%`, transform: `translateX(${hover < rows.length / 3 ? '-10%' : hover > (rows.length * 2) / 3 ? '-90%' : '-50%'})` }}>
-            <span className="text-muted">{dayLabel(h.dims.date)}</span> <span className="tabular-nums text-ink">{whole.format(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
+            <span className="text-muted">{alias === 'daily' ? dayLabel(h.dims[key]) : `${dayLabel(h.dims[key])} ${timeLabel(alias, h.dims[key])}`}</span>{' '}
+            <span className="tabular-nums text-ink">{whole.format(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
+            {clickable && <div className="text-[10.5px] text-faint">Click for this {PER[alias]}&apos;s detail</div>}
           </div>
         )}
       </div>
-      <div className="mt-1 flex justify-between text-[10.5px] text-faint"><span>{dayLabel(rows[0].dims.date)}</span><span>{dayLabel(rows[rows.length - 1].dims.date)}</span></div>
+      <div className="mt-1 flex justify-between text-[10.5px] text-faint"><span>{timeLabel(alias, rows[0].dims[key])}</span><span>{timeLabel(alias, rows[rows.length - 1].dims[key])}</span></div>
     </div>
   );
 }
+
+/** What a click opens: an IP, a rule, a ruleset, or a time (day / hour) — with the time already chosen kept. */
+interface On { ip: (ip: string) => void; rule: (rule: string) => void; ruleset: (ruleset: string) => void; time?: (alias: TimeAlias, row: DetailRow) => void }
 
 /** A ranked list with a share bar; long lists open on request. */
 function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'Nothing' }: {
@@ -250,21 +295,23 @@ function IpTable({ rows, total, withBytes, onPick, what }: { rows: DetailRow[]; 
 }
 
 function EventsTable({ events, names, onIp, onRule }: { events: FirewallEvent[]; names: Record<string, string>; onIp: (ip: string) => void; onRule: (rule: string) => void }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? events : events.slice(0, 20);
-  if (!events.length) return <p className="text-xs text-faint">No events in the newest part of the month.</p>;
+  const withZone = events.some((e) => e.zone);
+  const [n, setN] = useState(25);
+  const shown = events.slice(0, n);
+  if (!events.length) return <p className="text-xs text-faint">No security events in this time.</p>;
   const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
   return (
     <div>
       <div className="overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[980px] text-left text-[11.5px]">
-          <thead className="bg-raised/50 text-muted"><tr>{['Time (UTC)', 'Action', 'Rule', 'Client', 'Request', 'Status', 'Ray ID'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+          <thead className="bg-raised/50 text-muted"><tr>{['Time (UTC)', ...(withZone ? ['Zone'] : []), 'Action', 'Rule', 'Client', 'Request', 'Status', 'Ray ID'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
           <tbody className="align-top">
             {shown.map((e, i) => {
               const a = s(e.action);
               return (
                 <tr key={`${s(e.rayName)}-${i}`} className="border-t border-line/50">
                   <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-ink-2">{s(e.datetime).replace('T', ' ').replace(/(\.\d+)?Z$/, '')}</td>
+                  {withZone && <td className="px-3 py-1.5 text-ink-2">{s(e.zone)}</td>}
                   <td className="px-3 py-1.5"><Badge tone={actionTone(a) === 'neutral' ? 'neutral' : actionTone(a) as 'bad' | 'warn' | 'info' | 'ok'}>{actionLabel(a)}</Badge></td>
                   <td className="max-w-[240px] px-3 py-1.5">
                     <button type="button" disabled={!e.ruleId} onClick={() => e.ruleId && onRule(s(e.ruleId))} className="text-left text-ink-2 enabled:hover:text-ink enabled:hover:underline">
@@ -288,20 +335,257 @@ function EventsTable({ events, names, onIp, onRule }: { events: FirewallEvent[];
           </tbody>
         </table>
       </div>
-      {events.length > 20 && <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${events.length} events`}</button>}
+      <More shown={shown.length} total={events.length} onMore={() => setN(n + 100)} onLess={() => setN(25)} what="events" />
+    </div>
+  );
+}
+
+function More({ shown, total, onMore, onLess, what }: { shown: number; total: number; onMore: () => void; onLess: () => void; what: string }) {
+  if (total <= 25) return null;
+  return (
+    <div className="mt-2 flex items-center gap-3 text-xs text-muted">
+      <span className="tabular-nums">Showing {whole.format(shown)} of {whole.format(total)} {what}</span>
+      {shown < total && <button type="button" onClick={onMore} className="hover:text-ink">Show {Math.min(100, total - shown)} more</button>}
+      {shown > 25 && <button type="button" onClick={onLess} className="hover:text-ink">Show fewer</button>}
+    </div>
+  );
+}
+
+/** Single requests, newest first: who asked for what, and what the edge answered. */
+function RequestsTable({ rows, onIp }: { rows: FirewallEvent[]; onIp: (ip: string) => void }) {
+  const withZone = rows.some((e) => e.zone);
+  const [n, setN] = useState(25);
+  const shown = rows.slice(0, n);
+  if (!rows.length) return <p className="text-xs text-faint">No requests in this time.</p>;
+  const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+  return (
+    <div>
+      <div className="overflow-x-auto rounded-lg border border-line">
+        <table className="w-full min-w-[980px] text-left text-[11.5px]">
+          <thead className="bg-raised/50 text-muted"><tr>{['Time (UTC)', ...(withZone ? ['Zone'] : []), 'Client', 'Request', 'Status', 'Cache', 'Bytes', 'Ray ID'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+          <tbody className="align-top">
+            {shown.map((e, i) => (
+              <tr key={`${s(e.rayName)}-${i}`} className="border-t border-line/50">
+                <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-ink-2">{s(e.datetime).replace('T', ' ').replace(/(\.\d+)?Z$/, '')}</td>
+                {withZone && <td className="px-3 py-1.5 text-ink-2">{s(e.zone)}</td>}
+                <td className="px-3 py-1.5">
+                  <button type="button" onClick={() => e.clientIP && onIp(s(e.clientIP))} className="font-mono text-ink hover:underline">{s(e.clientIP)}</button>
+                  <div className="text-[10.5px] text-faint">{[s(e.clientCountryName), s(e.clientASNDescription)].filter(Boolean).join(' · ')}</div>
+                </td>
+                <td className="max-w-[360px] px-3 py-1.5">
+                  <div className="break-all font-mono text-ink-2"><span className="text-faint">{s(e.clientRequestHTTPMethodName)} </span>{s(e.clientRequestHTTPHost)}{s(e.clientRequestPath)}{s(e.clientRequestQuery)}</div>
+                  <div className="truncate text-[10.5px] text-faint" title={s(e.userAgent)}>{[s(e.clientRequestHTTPProtocol), s(e.userAgent)].filter(Boolean).join(' · ')}</div>
+                </td>
+                <td className="px-3 py-1.5 tabular-nums text-ink-2">{s(e.edgeResponseStatus) || '—'}</td>
+                <td className="px-3 py-1.5 text-ink-2">{CACHE_LABEL[s(e.cacheStatus)] ?? (s(e.cacheStatus) || '—')}</td>
+                <td className="px-3 py-1.5 tabular-nums text-ink-2">{e.edgeResponseBytes !== undefined && e.edgeResponseBytes !== null ? bytes(Number(e.edgeResponseBytes)) : '—'}</td>
+                <td className="px-3 py-1.5 font-mono text-[10.5px] text-faint">{s(e.rayName) || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <More shown={shown.length} total={rows.length} onMore={() => setN(n + 100)} onLess={() => setN(25)} what="requests" />
+    </div>
+  );
+}
+
+// ── Managed rules and OWASP ─────────────────────────────────────────────────
+
+/** OWASP Core Rule Set categories, by the first three digits of the rule number. */
+const CRS: Record<string, string> = {
+  '911': 'Method enforcement', '913': 'Scanner detection', '920': 'Protocol enforcement', '921': 'Protocol attack', '922': 'Multipart attack',
+  '930': 'Local file inclusion (LFI)', '931': 'Remote file inclusion (RFI)', '932': 'Remote code execution (RCE)', '933': 'PHP injection',
+  '934': 'Generic / Node.js injection', '941': 'Cross-site scripting (XSS)', '942': 'SQL injection (SQLi)', '943': 'Session fixation',
+  '944': 'Java injection', '949': 'Inbound anomaly score', '950': 'Data leakage', '951': 'SQL error leakage', '952': 'Java leakage', '953': 'PHP leakage',
+  '954': 'IIS leakage', '959': 'Outbound anomaly score', '980': 'Correlation',
+};
+const crsOf = (description: string) => /^(\d{6})\b/.exec(description.trim())?.[1] ?? '';
+const crsCategory = (n: string) => (n ? CRS[n.slice(0, 3)] ?? `CRS ${n.slice(0, 3)}` : 'Other');
+const sensitivity = (t?: number) => (t === undefined ? 'default' : t >= 60 ? `${t} (low)` : t >= 40 ? `${t} (medium)` : `${t} (high)`);
+const isManaged = (r: DetailRow, names: Record<string, string>) => r.dims.source === 'firewallManaged' || r.dims.source === 'waf' || (!!r.dims.rulesetId && r.dims.rulesetId in MANAGED_RULESETS) || (!!r.dims.rulesetId && /managed|owasp/i.test(names[r.dims.rulesetId] ?? ''));
+
+function Deployed({ d }: { d: ZoneDetail }) {
+  if (!d.managed && !d.managedNote) return null;
+  const list = d.managed ?? [];
+  return (
+    <div>
+      <div className="eyebrow mb-2">Managed rulesets deployed</div>
+      {d.managedNote && <p className="mb-2 text-xs text-warn">{d.managedNote}</p>}
+      {!list.length ? <p className="text-xs text-faint">No managed ruleset is deployed{d.zoneId ? ' on this zone' : ' on these zones'}.</p> : (
+        <div className="overflow-x-auto rounded-lg border border-line">
+          <table className="w-full min-w-[820px] text-left text-[12px]">
+            <thead className="bg-raised/50 text-muted"><tr>{[...(d.zoneId ? [] : ['Zone']), 'Ruleset', 'Status', 'Applies to', 'Tuning', 'Overrides'].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="align-top">
+              {list.map((m, i) => {
+                const owasp = m.rulesetId === OWASP_RULESET;
+                const off = m.ruleOverrides.filter((x) => x.enabled === false).length;
+                const changed = m.ruleOverrides.length - off;
+                return (
+                  <tr key={`${m.zone ?? ''}-${m.rulesetId}-${i}`} className="border-t border-line/50">
+                    {!d.zoneId && <td className="px-3 py-2 text-ink-2">{m.zone}</td>}
+                    <td className="px-3 py-2"><div className="text-ink">{m.name}</div>{m.description && m.description !== m.name && <div className="text-[10.5px] text-faint">{m.description}</div>}</td>
+                    <td className="px-3 py-2"><Badge tone={m.enabled ? 'ok' : 'neutral'}>{m.enabled ? 'Enabled' : 'Disabled'}</Badge></td>
+                    <td className="max-w-[260px] px-3 py-2 font-mono text-[11px] break-all text-ink-2">{m.expression === 'true' ? <span className="font-sans text-muted">All requests</span> : m.expression}</td>
+                    <td className="px-3 py-2 text-ink-2">
+                      {owasp ? (
+                        <div className="space-y-0.5">
+                          <div>Paranoia level <span className="text-ink">PL{m.paranoiaLevel}</span></div>
+                          <div>Score threshold <span className="text-ink">{sensitivity(m.scoreThreshold)}</span></div>
+                          <div>When exceeded <span className="text-ink">{actionLabel(m.anomalyAction ?? 'block')}</span></div>
+                        </div>
+                      ) : m.action ? <>All rules: <span className="text-ink">{actionLabel(m.action)}</span></> : <span className="text-muted">Default actions</span>}
+                    </td>
+                    <td className="px-3 py-2 text-ink-2">
+                      {!off && !changed && !m.categoryOverrides.length ? <span className="text-muted">None</span> : (
+                        <div className="space-y-0.5">
+                          {off > 0 && <div>{off} rule{off === 1 ? '' : 's'} turned off</div>}
+                          {changed > 0 && <div>{changed} rule{changed === 1 ? '' : 's'} changed</div>}
+                          {m.categoryOverrides.map((c) => <div key={c.category} className="text-[11px] text-muted">{c.category}: {c.enabled === false ? 'off' : c.enabled ? 'on' : ''}{c.action ? ` ${actionLabel(c.action)}` : ''}</div>)}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule: string) => void; onRuleset: (ruleset: string) => void }) {
+  const rules = d.security.breakdowns.rules ?? [];
+  const managed = rules.filter((r) => isManaged(r, d.rulesetNames));
+  // Hits per managed ruleset, with the action mix and its busiest rules.
+  interface Hit { id: string; name: string; count: number; actions: Map<string, number>; rules: DetailRow[] }
+  const byRuleset = new Map<string, Hit>();
+  for (const r of managed) {
+    const id = r.dims.rulesetId || r.dims.source;
+    const g: Hit = byRuleset.get(id) ?? { id: r.dims.rulesetId, name: d.rulesetNames[r.dims.rulesetId] ?? sourceLabel(r.dims.source), count: 0, actions: new Map<string, number>(), rules: [] };
+    g.count += r.count;
+    g.actions.set(r.dims.action, (g.actions.get(r.dims.action) ?? 0) + r.count);
+    g.rules.push(r);
+    byRuleset.set(id, g);
+  }
+  const groups = [...byRuleset.values()].sort((a, b) => b.count - a.count);
+  const owasp = rules.filter((r) => r.dims.rulesetId === OWASP_RULESET || /^9[1-8]\d{4}\b/.test(r.dims.description) && r.dims.source === 'firewallManaged');
+  const anomaly = owasp.filter((r) => r.dims.ruleId === OWASP_ANOMALY_RULE || crsOf(r.dims.description).startsWith('949'));
+  const contributing = owasp.filter((r) => !anomaly.includes(r));
+  const byCategory = new Map<string, number>();
+  for (const r of contributing) byCategory.set(crsCategory(crsOf(r.dims.description)), (byCategory.get(crsCategory(crsOf(r.dims.description))) ?? 0) + r.count);
+  const anomalyByAction = new Map<string, number>();
+  for (const r of anomaly) anomalyByAction.set(r.dims.action, (anomalyByAction.get(r.dims.action) ?? 0) + r.count);
+  const deployedOwasp = (d.managed ?? []).filter((m) => m.rulesetId === OWASP_RULESET);
+
+  return (
+    <div className="space-y-6">
+      <Deployed d={d} />
+      <div>
+        <div className="eyebrow mb-2">Managed rulesets hit</div>
+        {!groups.length ? <p className="text-xs text-faint">No managed rule matched.</p> : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {groups.map((g) => (
+              <div key={g.id || g.name} className="rounded-lg border border-line p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-medium text-ink">{g.name}</div>
+                    {g.id && <div className="font-mono text-[10.5px] text-faint">{g.id}</div>}
+                  </div>
+                  <div className="text-right"><div className="text-[18px] font-semibold tabular-nums">{num(g.count)}</div><div className="text-[10.5px] text-faint">events</div></div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {[...g.actions].sort((a, b) => b[1] - a[1]).map(([a, n]) => { const tone = actionTone(a); return <Badge key={a} tone={tone}>{actionLabel(a)} · {num(n)}</Badge>; })}
+                </div>
+                <ul className="mt-2 space-y-0.5 text-[11.5px]">
+                  {g.rules.slice(0, 4).map((r, i) => (
+                    <li key={i}><button type="button" onClick={() => r.dims.ruleId && onRule(r.dims.ruleId)} className="flex w-full gap-2 text-left hover:text-ink">
+                      <span className="min-w-0 flex-1 truncate text-ink-2">{r.dims.description || r.dims.ruleId}</span><span className="tabular-nums text-muted">{num(r.count)}</span>
+                    </button></li>
+                  ))}
+                </ul>
+                {g.id && <button type="button" onClick={() => onRuleset(g.id)} className="mt-2 text-xs text-signal hover:underline">Who triggers it →</button>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {(owasp.length > 0 || deployedOwasp.length > 0) && (
+        <div className="rounded-lg border border-line p-4">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <div className="text-[13px] font-semibold text-ink">OWASP Core Ruleset</div>
+            {deployedOwasp[0] && <div className="text-xs text-muted">PL{deployedOwasp[0].paranoiaLevel} · threshold {sensitivity(deployedOwasp[0].scoreThreshold)} · {actionLabel(deployedOwasp[0].anomalyAction ?? 'block')} when exceeded</div>}
+          </div>
+          <p className="mb-3 text-xs text-muted">
+            OWASP rules add to a request&apos;s anomaly score; only &ldquo;949110: Inbound Anomaly Score Exceeded&rdquo; acts on the request, once the score reaches the threshold. The rules below show what pushed requests up.
+          </p>
+          {!owasp.length ? <p className="text-xs text-faint">No OWASP rule matched this month.</p> : (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+                <div><div className="eyebrow">Requests over the threshold</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{whole.format(anomaly.reduce((n, r) => n + r.count, 0))}</div></div>
+                <div className="flex flex-wrap gap-1">{[...anomalyByAction].map(([a, n]) => <Badge key={a} tone={actionTone(a)}>{actionLabel(a)} · {num(n)}</Badge>)}</div>
+                <div><div className="eyebrow">Rule matches adding to scores</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{whole.format(contributing.reduce((n, r) => n + r.count, 0))}</div></div>
+              </div>
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                <BarList title="Attack categories" rows={[...byCategory].sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ dims: { category: c }, count: n }))} label={(r) => r.dims.category} total={contributing.reduce((n, r) => n + r.count, 0)} />
+                <div className="min-w-0">
+                  <div className="eyebrow mb-2">OWASP rules that matched</div>
+                  <div className="overflow-x-auto rounded-lg border border-line">
+                    <table className="w-full min-w-[520px] text-left text-[12px]">
+                      <thead className="bg-raised/50 text-muted"><tr>{['Rule', 'Category', 'Action', 'Matches'].map((h, i) => <th key={h} className={cx('px-3 py-2 font-medium', i === 3 && 'text-right')}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {owasp.slice(0, 40).map((r, i) => (
+                          <tr key={i} className="cursor-pointer border-t border-line/50 hover:bg-raised/40" onClick={() => r.dims.ruleId && onRule(r.dims.ruleId)}>
+                            <td className="px-3 py-1.5 text-ink">{r.dims.description || r.dims.ruleId}</td>
+                            <td className="px-3 py-1.5 text-ink-2">{crsCategory(crsOf(r.dims.description))}</td>
+                            <td className="px-3 py-1.5"><Badge tone={actionTone(r.dims.action)}>{actionLabel(r.dims.action)}</Badge></td>
+                            <td className="px-3 py-1.5 text-right tabular-nums text-ink">{whole.format(r.count)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={() => onRuleset(OWASP_RULESET)} className="text-xs text-signal hover:underline">Who triggers OWASP rules →</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── The two sections ────────────────────────────────────────────────────────
 
-function SecurityBody({ d, onIp, onRule }: { d: ZoneDetail; onIp: (ip: string) => void; onRule: (rule: string) => void }) {
+/** Account level: which zones are added up, and which are not (no traffic, too many, no access). */
+function ZonesRead({ d }: { d: ZoneDetail }) {
+  if (!d.zones) return null;
+  const by = (st: string) => d.zones!.filter((z) => z.status === st);
+  const read = by('read'), quiet = by('no traffic'), out = by('left out'), bad = by('unavailable');
+  return (
+    <div className="text-[11.5px] text-muted">
+      Added up from {read.length} zone{read.length === 1 ? '' : 's'}{read.length ? `: ${read.map((z) => z.name).join(', ')}` : ''}.
+      {quiet.length > 0 && <> {quiet.length} without traffic this month.</>}
+      {out.length > 0 && <> {out.length} quieter zone{out.length === 1 ? '' : 's'} left out — choose one as the zone to see it.</>}
+      {bad.length > 0 && <span className="text-warn"> Not readable: {bad.map((z) => `${z.name} (${z.message ?? 'no access'})`).join('; ')}.</span>}
+    </div>
+  );
+}
+
+
+function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
+  const { ip: onIp, rule: onRule, ruleset: onRuleset } = on;
   const s = d.security;
   if (!s.available) return <Alert tone="info">{s.message ?? 'Not available'}</Alert>;
   const b = s.breakdowns;
   return (
     <div className="space-y-6">
       <Coverage ds={s} />
+      <ZonesRead d={d} />
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
         <div><div className="eyebrow">Security events</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(s.total)}</div></div>
         <div className="flex flex-wrap gap-1.5">
@@ -311,7 +595,7 @@ function SecurityBody({ d, onIp, onRule }: { d: ZoneDetail; onIp: (ip: string) =
           })}
         </div>
       </div>
-      {b.daily && <PerDay rows={b.daily} label="Events" />}
+      <TimeChart b={b} label="Events" onPick={on.time} />
       {b.rules && (
         <div>
           <div className="eyebrow mb-2">Rules that matched</div>
@@ -319,6 +603,7 @@ function SecurityBody({ d, onIp, onRule }: { d: ZoneDetail; onIp: (ip: string) =
           <RulesTable rows={b.rules} names={d.rulesetNames} total={s.total} onPick={onRule} />
         </div>
       )}
+      <ManagedSection d={d} onRule={onRule} onRuleset={onRuleset} />
       {b.ips && (
         <div>
           <div className="eyebrow mb-2">Top client IPs</div>
@@ -326,6 +611,7 @@ function SecurityBody({ d, onIp, onRule }: { d: ZoneDetail; onIp: (ip: string) =
         </div>
       )}
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {b.zones && <BarList title="By zone" rows={b.zones} label={(r) => r.dims.zone} total={s.total} />}
         <BarList title="By source" rows={b.sources} label={(r) => sourceLabel(r.dims.source)} total={s.total} />
         <BarList title="Paths" rows={b.paths} label={(r) => <span className="font-mono">{r.dims.clientRequestPath || '/'}</span>} total={s.total} />
         <BarList title="Hosts" rows={b.hosts} label={(r) => r.dims.clientRequestHTTPHost || '—'} total={s.total} />
@@ -335,19 +621,21 @@ function SecurityBody({ d, onIp, onRule }: { d: ZoneDetail; onIp: (ip: string) =
       </div>
       <BarList title="User agents" rows={b.userAgents} label={(r) => <span className="font-mono text-[11px]">{r.dims.userAgent || '(none)'}</span>} total={s.total} />
       <div>
-        <div className="eyebrow mb-2">Latest events</div>
-        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {s.events.length} events since {fmtDate(s.eventsSince)}.</p>}
+        <div className="eyebrow mb-2">Single events</div>
+        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(s.events.length)} events since {fmtDate(s.eventsSince)} — open a day or an hour on the chart for every event in it.</p>}
         <EventsTable events={s.events} names={d.rulesetNames} onIp={onIp} onRule={onRule} />
       </div>
     </div>
   );
 }
 
-function RequestsBody({ d, onIp }: { d: ZoneDetail; onIp: (ip: string) => void }) {
+function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
+  const onIp = on.ip;
   const q = d.requests;
   if (!q.available) return <Alert tone="info">{q.message ?? 'Not available'}</Alert>;
   const b = q.breakdowns;
-  const totalBytes = (b.daily ?? []).reduce((n, r) => n + (r.bytes ?? 0), 0);
+  const alias = timeAliasOf(b);
+  const totalBytes = (alias ? b[alias] : []).reduce((n, r) => n + (r.bytes ?? 0), 0);
   return (
     <div className="space-y-6">
       <Coverage ds={q} />
@@ -355,7 +643,7 @@ function RequestsBody({ d, onIp }: { d: ZoneDetail; onIp: (ip: string) => void }
         <div><div className="eyebrow">Requests</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(q.total)}</div></div>
         {totalBytes > 0 && <div><div className="eyebrow">Bandwidth</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{bytes(totalBytes)}</div></div>}
       </div>
-      {b.daily && <PerDay rows={b.daily} label="Requests" />}
+      <TimeChart b={b} label="Requests" onPick={on.time} />
       {b.ips && (
         <div>
           <div className="eyebrow mb-2">Top client IPs</div>
@@ -363,6 +651,7 @@ function RequestsBody({ d, onIp }: { d: ZoneDetail; onIp: (ip: string) => void }
         </div>
       )}
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {b.zones && <BarList title="By zone" rows={b.zones} label={(r) => r.dims.zone} total={q.total} withBytes />}
         <BarList title="Paths" rows={b.paths} label={(r) => <span className="font-mono">{r.dims.clientRequestPath || '/'}</span>} total={q.total} withBytes />
         <BarList title="Hosts" rows={b.hosts} label={(r) => r.dims.clientRequestHTTPHost || '—'} total={q.total} withBytes />
         <BarList title="Status codes" rows={b.statuses} label={(r) => r.dims.edgeResponseStatus || '—'} total={q.total} />
@@ -375,58 +664,133 @@ function RequestsBody({ d, onIp }: { d: ZoneDetail; onIp: (ip: string) => void }
         <BarList title="HTTP protocol" rows={b.protocols} label={(r) => r.dims.clientRequestHTTPProtocol || 'Unknown'} total={q.total} />
       </div>
       <BarList title="User agents" rows={b.userAgents} label={(r) => <span className="font-mono text-[11px]">{r.dims.userAgent || '(none)'}</span>} total={q.total} />
+      {(q.samples || q.samplesNote) && (
+        <div>
+          <div className="eyebrow mb-2">Single requests</div>
+          {q.samplesNote && <p className="mb-2 text-xs text-muted">{q.samplesNote}</p>}
+          {q.samples && (
+            <>
+              {q.samplesSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(q.samples.length)} requests since {fmtDate(q.samplesSince)} (Cloudflare samples busy times) — open a day or an hour on the chart for more of them.</p>}
+              <RequestsTable rows={q.samples} onIp={onIp} />
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/** An IP or a rule, narrowed: what it did / who triggered it. */
-function DrillModal({ t, filter, onClose, onFilter }: { t: Target; filter: DetailFilter; onClose: () => void; onFilter: (f: DetailFilter) => void }) {
-  const { d, pending, error, busy } = useDetail(t, filter, 0);
-  const ruleName = d?.security.events.find((e) => e.ruleId === filter.rule)?.description;
-  const title = filter.ip ? `Client IP ${filter.ip}` : `Rule ${ruleName ? `“${ruleName}”` : filter.rule}`;
+// ── The details window: opened from any card, bar, IP, rule or ruleset ─────
+
+/** What to show: whose (account or zone), narrowed how (IP / rule / ruleset, day / hour), and which section first. */
+export interface DetailRequest { t: Target; filter?: DetailFilter; focus?: 'security' | 'requests'; label?: string }
+
+const OpenCtx = createContext<(r: DetailRequest) => void>(() => {});
+/** Opens the details window (inside <DetailHost>). */
+export const useOpenDetail = () => useContext(OpenCtx);
+
+const timeOf = (f?: DetailFilter): DetailFilter => (f?.day ? { day: f.day, ...(f.hour !== undefined ? { hour: f.hour } : {}) } : {});
+
+/** Clicks inside a detail: an IP, rule or ruleset keeps the time; a bar narrows the time and keeps the IP / rule / ruleset. */
+function handlersFor(req: DetailRequest, open: (r: DetailRequest) => void): On {
+  const f = req.filter ?? {};
+  const narrow: DetailFilter = f.ip ? { ip: f.ip } : f.rule ? { rule: f.rule } : f.ruleset ? { ruleset: f.ruleset } : {};
+  return {
+    ip: (ip) => open({ t: req.t, filter: { ...timeOf(f), ip } }),
+    rule: (rule) => open({ t: req.t, filter: { ...timeOf(f), rule } }),
+    ruleset: (ruleset) => open({ t: req.t, filter: { ...timeOf(f), ruleset } }),
+    time: (alias, row) => {
+      if (alias === 'daily') open({ t: req.t, filter: { ...narrow, day: row.dims.date }, focus: req.focus, label: req.label });
+      else if (alias === 'hourly') open({ t: req.t, filter: { ...narrow, day: row.dims.datetimeHour.slice(0, 10), hour: Number(row.dims.datetimeHour.slice(11, 13)) }, focus: req.focus, label: req.label });
+    },
+  };
+}
+
+function titleOf(req: DetailRequest, d: ZoneDetail | null) {
+  const f = req.filter ?? {};
+  const who = d ? (d.zoneName ?? d.accountName) : req.t.zone ? 'Zone' : 'Account';
+  const when = f.day ? `${dayLabel(f.day)}${f.hour !== undefined ? `, ${String(f.hour).padStart(2, '0')}:00–${String(f.hour + 1).padStart(2, '0')}:00 UTC` : ''}` : new Date(`${req.t.month}-01T00:00:00Z`).toLocaleString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const what = f.ip ? `Client IP ${f.ip}` : f.ruleset ? `Ruleset “${d?.rulesetNames[f.ruleset] ?? MANAGED_RULESETS[f.ruleset] ?? f.ruleset}”`
+    : f.rule ? `Rule “${d?.security.events.find((e) => e.ruleId === f.rule)?.description ?? f.rule}”` : req.label ?? 'All traffic';
+  return { title: `${what} · ${who}`, when };
+}
+
+function DetailWindow({ req, onClose, onBack, open }: { req: DetailRequest; onClose: () => void; onBack?: () => void; open: (r: DetailRequest) => void }) {
+  const f = req.filter && Object.keys(req.filter).length ? req.filter : null;
+  const { d, pending, error, busy } = useDetail(req.t, f, 0);
+  const on = handlersFor(req, open);
+  const { title, when } = titleOf(req, d);
+  const reqFirst = req.focus === 'requests';
+  const security = d && (
+    <section key="s">
+      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="size-4 text-signal" />Security events</h3>
+      <SecurityBody d={d} on={on} />
+    </section>
+  );
+  const requests = d && d.requests.message !== 'Requests are not linked to rules' && (
+    <section key="r">
+      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Network className="size-4 text-signal" />Requests</h3>
+      <RequestsBody d={d} on={on} />
+    </section>
+  );
+  // Chips: what this window is narrowed to; each can be dropped.
+  const chips: { label: string; drop: DetailFilter }[] = [];
+  if (f?.day) chips.push({ label: dayLabel(f.day), drop: { ...f, day: undefined, hour: undefined } });
+  if (f?.hour !== undefined) chips.push({ label: `Hour ${String(f.hour).padStart(2, '0')}:00`, drop: { ...f, hour: undefined } });
+  if (f?.ip) chips.push({ label: `IP ${f.ip}`, drop: { ...f, ip: undefined } });
+  if (f?.rule) chips.push({ label: 'This rule', drop: { ...f, rule: undefined } });
+  if (f?.ruleset) chips.push({ label: 'This ruleset', drop: { ...f, ruleset: undefined } });
   return (
     <Modal open onClose={onClose} width="max-w-6xl" title={title}
-      description={filter.ip ? 'Everything this IP did on the zone this month: rules it triggered, actions taken, paths and requests.' : `Who triggered this rule and where. Rule ID ${filter.rule}.`}>
+      description={`${when}${req.t.zone ? '' : ' · all zones of the account with traffic'} — click any IP, rule, ruleset, day or hour to go deeper.`}>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {onBack && <Button size="sm" variant="ghost" onClick={onBack} icon={<ArrowLeft className="size-3.5" />}>Back</Button>}
+        {chips.map((c) => (
+          <button key={c.label} type="button" onClick={() => open({ ...req, filter: Object.fromEntries(Object.entries(c.drop).filter(([, v]) => v !== undefined)) })}
+            className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-raised px-2.5 py-0.5 text-xs text-ink-2 hover:border-faint hover:text-ink" title="Remove this">
+            {c.label}<X className="size-3" />
+          </button>
+        ))}
+      </div>
       {error && <Alert tone="bad" title="Could not be read">{error}</Alert>}
-      {busy && !d && <Reading what={filter.ip ? 'this IP' : 'this rule'} pending={pending} />}
-      {d && (
-        <div className="space-y-8">
-          <section>
-            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="size-4 text-signal" />Security events</h3>
-            <SecurityBody d={d} onIp={(ip) => onFilter({ ip })} onRule={(rule) => onFilter({ rule })} />
-          </section>
-          {filter.ip && (
-            <section>
-              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Network className="size-4 text-signal" />Requests</h3>
-              <RequestsBody d={d} onIp={() => { /* already this IP */ }} />
-            </section>
-          )}
-        </div>
-      )}
+      {busy && !d && <Reading what={f?.hour !== undefined ? 'this hour' : f?.day ? 'this day' : f?.ip ? 'this IP' : f?.ruleset ? 'this ruleset' : f?.rule ? 'this rule' : 'the details'} pending={pending} />}
+      {d && <div className="space-y-10">{reqFirst ? [requests, security] : [security, requests]}</div>}
     </Modal>
   );
 }
 
-// ── Exported: the zone's detail, below its monthly totals ───────────────────
+/** Holds the details window and its Back history; anything inside can open it with useOpenDetail(). */
+export function DetailHost({ children }: { children: ReactNode }) {
+  const [stack, setStack] = useState<DetailRequest[]>([]);
+  const open = useCallback((r: DetailRequest) => setStack((s) => [...s, r]), []);
+  const top = stack[stack.length - 1];
+  return (
+    <OpenCtx.Provider value={open}>
+      {children}
+      {top && <DetailWindow key={stack.length + JSON.stringify(top)} req={top} open={open} onClose={() => setStack([])} onBack={stack.length > 1 ? () => setStack((s) => s.slice(0, -1)) : undefined} />}
+    </OpenCtx.Provider>
+  );
+}
+
+// ── Exported: the security and request sections, below the monthly totals ──
 
 export function ZoneDetailView({ month, account, zone }: Target) {
   const t = useMemo(() => ({ month, account, zone }), [month, account, zone]);
   const [refresh, setRefresh] = useState(0);
   const { d, pending, error, busy } = useDetail(t, null, refresh);
-  const [drill, setDrill] = useState<DetailFilter | null>(null);
+  const open = useOpenDetail();
   const [ipQuery, setIpQuery] = useState('');
-  const onIp = useCallback((ip: string) => setDrill({ ip }), []);
-  const onRule = useCallback((rule: string) => setDrill({ rule }), []);
+  const on = useMemo(() => handlersFor({ t }, open), [t, open]);
 
   return (
     <>
       <Card>
-        <SectionHeader title="Security events" description="WAF and other security features on this zone: which rules matched (managed, custom, rate limiting …), what they did, and which IPs triggered them."
+        <SectionHeader title="Security events" description={`WAF and other security features on ${zone ? 'this zone' : 'the account\'s zones'}: which rules matched (managed, custom, rate limiting …), what they did, and which IPs triggered them. Click anything for its detail.`}
           aside={(
             <div className="flex items-center gap-2">
-              <form className="hidden items-center gap-1 sm:flex" onSubmit={(e) => { e.preventDefault(); const ip = ipQuery.trim(); if (ip) setDrill({ ip }); }}>
-                <label htmlFor="traffic-ip" className="sr-only">Look up an IP</label>
-                <input id="traffic-ip" className="input h-8 w-40 text-xs" placeholder="Look up an IP…" value={ipQuery} onChange={(e) => setIpQuery(e.target.value)} />
+              <form className="hidden items-center gap-1 sm:flex" onSubmit={(e) => { e.preventDefault(); const ip = ipQuery.trim(); if (ip) on.ip(ip); }}>
+                <label htmlFor={`traffic-ip-${zone ?? 'account'}`} className="sr-only">Look up an IP</label>
+                <input id={`traffic-ip-${zone ?? 'account'}`} className="input h-8 w-40 text-xs" placeholder="Look up an IP…" value={ipQuery} onChange={(e) => setIpQuery(e.target.value)} />
                 <Button type="submit" size="sm" variant="ghost" icon={<Search className="size-3.5" />} aria-label="Look up" />
               </form>
               <Button variant="ghost" size="sm" onClick={() => setRefresh((n) => n + 1)} disabled={busy} icon={<RefreshCw className="size-3.5" />}>Refresh</Button>
@@ -435,18 +799,17 @@ export function ZoneDetailView({ month, account, zone }: Target) {
         <div className="p-5">
           {error && <Alert tone="bad" title="Security events could not be read">{error}</Alert>}
           {busy && !d && <Reading what="security events and requests" pending={pending} />}
-          {d && <SecurityBody d={d} onIp={onIp} onRule={onRule} />}
+          {d && <SecurityBody d={d} on={on} />}
         </div>
       </Card>
       <Card>
-        <SectionHeader title="Requests" description="All HTTP requests to this zone: top client IPs, paths, hosts, status codes, cache status, networks and clients." />
+        <SectionHeader title="Requests" description={`All HTTP requests to ${zone ? 'this zone' : 'the account\'s zones'}: top client IPs, paths, hosts, status codes, cache status, networks, clients and single requests.`} />
         <div className="p-5">
           {busy && !d && <Reading what="requests" pending={pending} />}
-          {d && <RequestsBody d={d} onIp={onIp} />}
+          {d && <RequestsBody d={d} on={on} />}
           {d && <p className="mt-6 text-[11px] text-faint">Read {fmtDate(d.generatedAt)}{d.cachedIn ? ' (cached — Refresh reads again)' : ''}</p>}
         </div>
       </Card>
-      {drill && <DrillModal key={JSON.stringify(drill)} t={t} filter={drill} onClose={() => setDrill(null)} onFilter={setDrill} />}
     </>
   );
 }

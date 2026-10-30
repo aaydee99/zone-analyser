@@ -96,25 +96,75 @@ export interface DatasetDetail {
   breakdowns: Record<string, DetailRow[]>;
 }
 
-/** Narrows the detail to one client IP or one rule. */
-export interface DetailFilter { ip?: string; rule?: string }
+/** Narrows the detail to one client IP, one rule or one (managed) ruleset. */
+export interface DetailFilter {
+  ip?: string;
+  rule?: string;
+  ruleset?: string;
+  /** One day of the month (YYYY-MM-DD, UTC), and optionally one hour of it (0–23): everything is read for just that time. */
+  day?: string;
+  hour?: number;
+}
 
+/** A managed ruleset deployed on the zone (an execute rule in its managed-rules phase) and how it is tuned. */
+export interface ManagedDeployment {
+  /** Account level: the zone it is deployed on. */
+  zone?: string;
+  rulesetId: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  /** Where it applies (the execute rule's expression); "true" means every request. */
+  expression: string;
+  /** Action for all its rules, when overridden. */
+  action?: string;
+  /** OWASP only: the highest paranoia level turned on (PL1 when not overridden). */
+  paranoiaLevel?: number;
+  /** OWASP only: the anomaly score threshold (60 low, 40 medium, 25 high) and the action when it is exceeded. */
+  scoreThreshold?: number;
+  anomalyAction?: string;
+  categoryOverrides: { category: string; enabled?: boolean; action?: string }[];
+  ruleOverrides: { id: string; enabled?: boolean; action?: string; scoreThreshold?: number }[];
+}
+
+/** At account level: each zone of the account and whether its detail is in the totals. */
+export interface DetailZone { id: string; name: string; status: 'read' | 'unavailable' | 'no traffic' | 'left out'; message?: string }
+
+/** One zone's detail, or (no zoneId) an account's: its zones' breakdowns added up, with a "zones" breakdown. */
 export interface ZoneDetail {
   month: string;
-  zoneId: string;
-  zoneName: string;
+  accountId: string;
   accountName: string;
+  zoneId?: string;
+  zoneName?: string;
+  /** Account level only. */
+  zones?: DetailZone[];
   filter: DetailFilter | null;
   /** WAF / firewall events: which rules matched, what they did, who triggered them. */
   security: DatasetDetail & { events: FirewallEvent[]; eventsSince?: string };
-  /** All HTTP requests (not available when the detail is narrowed to a rule). */
-  requests: DatasetDetail;
+  /** All HTTP requests (not available when the detail is narrowed to a rule), and single requests, newest first. */
+  requests: DatasetDetail & { samples?: FirewallEvent[]; samplesSince?: string; samplesNote?: string };
   /** Ruleset IDs → names (managed rulesets included), for the rules table. */
   rulesetNames: Record<string, string>;
+  /** Managed rulesets deployed (not read when the detail is narrowed), and why they could not be read. */
+  managed?: ManagedDeployment[];
+  managedNote?: string;
   generatedAt: string;
   cachedIn?: 'redis' | 'memory';
 }
 
-export interface ZoneDetailPending { pending: true; month: string; zoneId: string; filter: DetailFilter | null; done: number; total: number; startedAt: string }
+export interface ZoneDetailPending { pending: true; month: string; accountId: string; zoneId?: string; filter: DetailFilter | null; done: number; total: number; startedAt: string }
+
+/** Cloudflare's managed rulesets (the same IDs in every account), named even when the zone's list is unreadable. */
+export const MANAGED_RULESETS: Record<string, string> = {
+  efb7b8c949ac4650a09736fc376e9aee: 'Cloudflare Managed Ruleset',
+  '4814384a9e5d4991b9815dcfc25d2f1f': 'Cloudflare OWASP Core Ruleset',
+  c2e184081120413c86c3ab7e14069605: 'Cloudflare Exposed Credentials Check',
+  '77454fe2d30c4220b5701f6fdfb893ba': 'Cloudflare Free Managed Ruleset',
+  '4d21379b4f9f4bb088e0729962c8b3cf': 'HTTP DDoS attack protection',
+};
+export const OWASP_RULESET = '4814384a9e5d4991b9815dcfc25d2f1f';
+/** OWASP's "949110: Inbound Anomaly Score Exceeded": its threshold and action are the ruleset's tuning. */
+export const OWASP_ANOMALY_RULE = '6179ae15870a4bb7b2d480d4843b323c';
 
 export const EMPTY_TOTALS: TrafficTotals = { requests: 0, cachedRequests: 0, bytes: 0, cachedBytes: 0, threats: 0, pageViews: 0, uniquesSum: 0, days: 0 };
