@@ -153,7 +153,7 @@ export interface ZoneDetail {
   cachedIn?: 'redis' | 'memory';
 }
 
-export interface ZoneDetailPending { pending: true; month: string; accountId: string; zoneId?: string; filter: DetailFilter | null; done: number; total: number; startedAt: string }
+export interface ZoneDetailPending { pending: true; month: string; accountId: string; zoneId?: string; filter: DetailFilter | null; done: number; total: number; startedAt: string; note?: string }
 
 /** Cloudflare's managed rulesets (the same IDs in every account), named even when the zone's list is unreadable. */
 export const MANAGED_RULESETS: Record<string, string> = {

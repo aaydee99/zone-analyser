@@ -99,6 +99,7 @@ function Reading({ what, pending }: { what: string; pending: ZoneDetailPending |
           <div className="mt-1 text-xs tabular-nums text-faint">{pending.done} of {pending.total} queries done</div>
         </div>
       )}
+      {pending?.note && <div className="mx-auto mt-2 max-w-md text-xs text-warn">{pending.note}</div>}
     </div>
   );
 }

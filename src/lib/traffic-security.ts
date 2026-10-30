@@ -1,6 +1,6 @@
 import 'server-only';
 import { inBackground, type Pending, type Progress } from './bg-job';
-import { cached, cacheBackend } from './cache';
+import { cached, cacheBackend, tag } from './cache';
 import { HttpError } from './http';
 import { CLOSED_TTL, GRAPHQL, RUNNING_TTL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
 import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
@@ -83,18 +83,69 @@ const REQUEST_FIELDS_MIN = ['datetime', 'clientIP', 'clientRequestPath', 'edgeRe
 // ── GraphQL ─────────────────────────────────────────────────────────────────
 
 interface Answer { status: number; data: Record<string, unknown> | null; errors: GqlError[] }
+/** One GraphQL query for a zone read (with the read's token and progress). */
+type Ask = (text: string) => Promise<Answer>;
 
-async function gql(token: string, text: string): Promise<Answer> {
+// Cloudflare allows about 300 GraphQL queries per 5 minutes per user. Queries for one token wait
+// for room under a budget below that, and when Cloudflare still says the budget is spent, they
+// wait for it to refill and try once more, instead of failing (or splitting into more queries).
+// TRAFFIC_GQL_BUDGET lowers (or raises) the budget, e.g. when other tools share the token.
+const WINDOW_MS = Number(process.env.TRAFFIC_GQL_WINDOW_MS) || 300_000;
+const BUDGET = Number(process.env.TRAFFIC_GQL_BUDGET) || 240;
+const COOL_MS = Number(process.env.TRAFFIC_GQL_COOL_MS) || 300_000;
+interface Budget { sent: number[]; coolUntil: number; queue: Promise<void> }
+const gb = globalThis as unknown as { __gqlBudgets?: Map<string, Budget> };
+const budgets = (gb.__gqlBudgets ??= new Map());
+function budgetOf(token: string) {
+  const k = tag(token);
+  let b = budgets.get(k);
+  if (!b) budgets.set(k, (b = { sent: [], coolUntil: 0, queue: Promise.resolve() }));
+  return b;
+}
+const utcTime = (t: number) => `${new Date(t).toISOString().slice(11, 16)} UTC`;
+const LIMITED = /budget|rate.?limit|too many (requests|queries)|quota|limit exceeded/i;
+const isLimited = (a: Answer) => a.status === 429 || a.errors.some((e) => LIMITED.test(`${e.message ?? ''} ${e.extensions?.code ?? ''}`));
+const LIMIT_CODE = 'query-limit';
+
+/** Waits (in turn) until the budget has room and any cool-down is over. */
+function slot(b: Budget, progress?: Progress): Promise<void> {
+  const turn = b.queue.then(async () => {
+    for (;;) {
+      const now = Date.now();
+      b.sent = b.sent.filter((t) => t > now - WINDOW_MS);
+      const free = b.coolUntil > now ? b.coolUntil : b.sent.length >= BUDGET ? b.sent[0] + WINDOW_MS : 0;
+      if (!free) { b.sent.push(now); if (progress) delete progress.note; return; }
+      if (progress) progress.note = `Waiting for Cloudflare's analytics query limit (about 300 queries per 5 minutes) — continuing at ${utcTime(free)}`;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(free - now + 50, 30_000)));
+    }
+  });
+  b.queue = turn.catch(() => undefined);
+  return turn;
+}
+
+async function gql(token: string, text: string, progress?: Progress, tries = 2): Promise<Answer> {
+  const b = budgetOf(token);
+  await slot(b, progress);
+  let a: Answer;
   try {
     const res = await fetch(GRAPHQL, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: text }), signal: AbortSignal.timeout(60_000), cache: 'no-store',
     });
     const body = (await res.json().catch(() => null)) as { data?: { viewer?: { zones?: Record<string, unknown>[] } } | null; errors?: GqlError[] | null } | null;
-    return { status: res.status, data: body?.data?.viewer?.zones?.[0] ?? null, errors: body?.errors ?? (res.ok ? [] : [{ message: `HTTP ${res.status}` }]) };
+    const errors = Array.isArray(body?.errors) ? body.errors : [];
+    if (!res.ok && !errors.some((e) => e.message)) errors.push({ message: `HTTP ${res.status}` });
+    a = { status: res.status, data: body?.data?.viewer?.zones?.[0] ?? null, errors };
   } catch {
     return { status: 0, data: null, errors: [{ message: 'Could not reach the Cloudflare API' }] };
   }
+  if (a.errors.length) console.warn(`[traffic] Cloudflare GraphQL answered ${a.status} with errors: ${JSON.stringify(a.errors).slice(0, 600)}`);
+  if (isLimited(a)) {
+    b.coolUntil = Math.max(b.coolUntil, Date.now() + COOL_MS);
+    if (tries > 1) return gql(token, text, progress, tries - 1);
+    return { status: a.status, data: null, errors: [{ message: `Cloudflare's analytics query limit was reached (${errorText(a.errors)}) — try again after ${utcTime(b.coolUntil)}`, extensions: { code: LIMIT_CODE } }] };
+  }
+  return a;
 }
 
 const zoneQuery = (zoneId: string, body: string) => `{ viewer { zones(filter: { zoneTag: ${J(zoneId)} }) { ${body} } } }`;
@@ -104,8 +155,8 @@ const zoneQuery = (zoneId: string, body: string) => `{ viewer { zones(filter: { 
 const DATASETS = ['firewallEventsAdaptiveGroups', 'firewallEventsAdaptive', 'httpRequestsAdaptiveGroups', 'httpRequestsAdaptive'] as const;
 type Dataset = (typeof DATASETS)[number];
 
-async function limitsOf(token: string, zoneId: string): Promise<Record<Dataset, Limits>> {
-  const ask = (fields: string) => gql(token, zoneQuery(zoneId, `settings { ${DATASETS.map((d) => `${d} { ${fields} }`).join(' ')} }`));
+async function limitsOf(gq: Ask, zoneId: string): Promise<Record<Dataset, Limits>> {
+  const ask = (fields: string) => gq(zoneQuery(zoneId, `settings { ${DATASETS.map((d) => `${d} { ${fields} }`).join(' ')} }`));
   let r = await ask('enabled maxDuration notOlderThan maxNumberOfFields maxPageSize availableFields');
   if (r.errors.length) r = await ask('enabled maxDuration notOlderThan maxNumberOfFields maxPageSize');
   const settings = (r.data?.settings ?? {}) as Partial<Record<Dataset, Partial<Limits> | null>>;
@@ -182,22 +233,31 @@ function groupsQuery(dataset: Dataset, zoneId: string, part: { since: string; un
 
 interface Group { count?: number; sum?: { edgeResponseBytes?: number }; dimensions?: Record<string, unknown> }
 
-/** One query; a failing query is split until each failure is down to one breakdown, which is then left out. */
-async function readGroups(token: string, dataset: Dataset, zoneId: string, part: { since: string; until: string }, specs: Spec[], f: DetailFilter | null,
+/**
+ * One query. A failing query is split until each failure is down to one breakdown, which is then
+ * left out; breakdowns Cloudflare answers with an error next to others' data are read again on their
+ * own. A spent query limit or a missing permission is not split (more queries would not help).
+ */
+async function readGroups(ask: Ask, dataset: Dataset, zoneId: string, part: { since: string; until: string }, specs: Spec[], f: DetailFilter | null,
   limits: Limits, failed: Map<string, string>): Promise<Record<string, Group[]>> {
   const live = specs.filter((s) => !failed.has(s.alias));
   if (!live.length) return {};
-  const r = await gql(token, groupsQuery(dataset, zoneId, part, live, f, limits.maxPageSize));
-  if (r.errors.length && !r.data) {
-    if (live.length > 1) {
-      const half = Math.ceil(live.length / 2);
-      const parts = await Promise.all([live.slice(0, half), live.slice(half)].map((x) => readGroups(token, dataset, zoneId, part, x, f, limits, failed)));
-      return Object.assign({}, ...parts);
-    }
-    failed.set(live[0].alias, errorText(r.errors));
+  const r = await ask(groupsQuery(dataset, zoneId, part, live, f, limits.maxPageSize));
+  const missing = r.errors.length ? live.filter((s) => !Array.isArray(r.data?.[s.alias])) : [];
+  const split = (x: Spec[]) => {
+    const half = Math.ceil(x.length / 2);
+    return Promise.all([x.slice(0, half), x.slice(half)].map((y) => readGroups(ask, dataset, zoneId, part, y, f, limits, failed))).then((p) => Object.assign({}, ...p) as Record<string, Group[]>);
+  };
+  const final = r.errors.some((e) => e.extensions?.code === LIMIT_CODE) || permissionError(r.errors, r.status);
+  if (r.errors.length && (!r.data || missing.length === live.length)) {
+    if (live.length > 1 && !final) return split(live);
+    for (const s of live) failed.set(s.alias, errorText(r.errors));
     return {};
   }
-  return Object.fromEntries(live.map((s) => [s.alias, Array.isArray(r.data?.[s.alias]) ? (r.data![s.alias] as Group[]) : []]));
+  const got: Record<string, Group[]> = Object.fromEntries(live.filter((s) => !missing.includes(s)).map((s) => [s.alias, Array.isArray(r.data?.[s.alias]) ? (r.data![s.alias] as Group[]) : []]));
+  if (missing.length === 1 || (missing.length && final)) for (const s of missing) failed.set(s.alias, errorText(r.errors));
+  else if (missing.length) Object.assign(got, await split(missing));
+  return got;
 }
 
 function addUp(into: Map<string, DetailRow>, groups: Group[]) {
@@ -213,7 +273,7 @@ function addUp(into: Map<string, DetailRow>, groups: Group[]) {
 
 const days = (seconds: number) => Math.round(seconds / 86_400);
 
-async function readDataset(token: string, dataset: Dataset, zoneId: string, month: string, all: Spec[], f: DetailFilter | null, limits: Limits, progress: Progress): Promise<DatasetDetail> {
+async function readDataset(ask: Ask, dataset: Dataset, zoneId: string, month: string, all: Spec[], f: DetailFilter | null, limits: Limits, progress: Progress): Promise<DatasetDetail> {
   const base: DatasetDetail = { available: false, notes: [], retentionDays: days(limits.notOlderThan), parts: 0, total: 0, breakdowns: {} };
   if (!limits.enabled) return { ...base, message: "Not available on this zone's plan" };
   const w = windowOf(month, limits, f);
@@ -227,7 +287,7 @@ async function readDataset(token: string, dataset: Dataset, zoneId: string, mont
   const merged = new Map<string, Map<string, DetailRow>>(specs.map((s) => [s.alias, new Map()]));
   const jobs = w.parts.flatMap((part) => queries.map((q) => ({ part, q })));
   const answers = await inParallel(jobs, PARALLEL, async (j) => {
-    try { return await readGroups(token, dataset, zoneId, j.part, j.q, f, limits, failed); } finally { progress.done++; }
+    try { return await readGroups(ask, dataset, zoneId, j.part, j.q, f, limits, failed); } finally { progress.done++; }
   });
   for (const a of answers) for (const [alias, groups] of Object.entries(a)) addUp(merged.get(alias)!, groups);
 
@@ -250,16 +310,16 @@ async function readDataset(token: string, dataset: Dataset, zoneId: string, mont
 }
 
 /** The newest single records of a raw dataset (security events or requests) in the newest part of the window. */
-async function readSingles(token: string, dataset: 'firewallEventsAdaptive' | 'httpRequestsAdaptive', zoneId: string, month: string, f: DetailFilter | null, limits: Limits,
+async function readSingles(gq: Ask, dataset: 'firewallEventsAdaptive' | 'httpRequestsAdaptive', zoneId: string, month: string, f: DetailFilter | null, limits: Limits,
   fields: string[], minimal: string[], what: string): Promise<{ list: FirewallEvent[]; since?: string; note?: string }> {
   if (!limits.enabled) return { list: [], note: `Single ${what} are not available on this zone's plan` };
   const w = windowOf(month, limits, f);
   const last = w.parts[w.parts.length - 1];
   if (!last) return { list: [] };
-  const ask = (x: string[]) => gql(token, zoneQuery(zoneId,
+  const ask = (x: string[]) => gq(zoneQuery(zoneId,
     `rows: ${dataset}(limit: ${Math.min(listSize(f), limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf(dataset, f)} }, orderBy: [datetime_DESC]) { ${x.join(' ')} }`));
   let r = await ask(fields.filter((x) => offered(limits, x)));
-  if (r.errors.length && !r.data) r = await ask(minimal.filter((x) => offered(limits, x)));
+  if (r.errors.length && !r.data && !r.errors.some((e) => e.extensions?.code === LIMIT_CODE)) r = await ask(minimal.filter((x) => offered(limits, x)));
   if (r.errors.length && !r.data) return { list: [], note: `Single ${what} could not be read: ${errorText(r.errors)}` };
   return { list: Array.isArray(r.data?.rows) ? (r.data!.rows as FirewallEvent[]) : [], since: last.since };
 }
@@ -318,25 +378,33 @@ async function readManaged(token: string, zoneId: string, names: Record<string, 
   return { list };
 }
 
+/** Something could not be read for a reason that may pass (an error, not the plan): kept a minute, not hours. */
+const SHAKY_TTL = 60_000;
+const PLAN_ONLY = /plan|keeps this|not linked to rules/i;
+const shaky = (d: ZoneDetail) => [d.security, d.requests].some((x) => !x.available && !PLAN_ONLY.test(x.message ?? ''))
+  || [...d.security.notes, ...d.requests.notes, d.requests.samplesNote ?? ''].some((n) => /could not be read/.test(n));
+
 /** One zone's detail for the month (cached per zone, month and IP / rule). */
 function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFilter | null, fresh: boolean, progress: Progress): Promise<ZoneDetail> {
   const zone = scope.zones.find((z) => z.id === zoneId)!;
   const { partial } = rangeOf(month);
-  return cached(`path:/api/traffic/detail?month=${month}&zone=${encodeURIComponent(zoneId)}${filterKey(f)}`, partial ? RUNNING_TTL : CLOSED_TTL, async (): Promise<ZoneDetail> => {
+  const ttl = (d: ZoneDetail) => (shaky(d) ? SHAKY_TTL : partial ? RUNNING_TTL : CLOSED_TTL);
+  return cached(`path:/api/traffic/detail?month=${month}&zone=${encodeURIComponent(zoneId)}${filterKey(f)}`, ttl, async (): Promise<ZoneDetail> => {
     const cred = scope.credentialOf[zoneId];
     let token = '';
     try { token = cred ? (await credentialForRun(cred.id, 'cloudflare')).fields.apiToken : ''; } catch { /* below */ }
     if (!token) throw new HttpError(409, 'The stored credential for this zone could not be decrypted');
     progress.total += 1;
-    const limits = await limitsOf(token, zoneId).finally(() => { progress.done++; });
+    const ask: Ask = (text) => gql(token, text, progress);
+    const limits = await limitsOf(ask, zoneId).finally(() => { progress.done++; });
     const [security, requests, events, names, samples] = await Promise.all([
-      readDataset(token, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
+      readDataset(ask, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
       f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS())
-        : readDataset(token, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
-      readSingles(token, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
+        : readDataset(ask, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
+      readSingles(ask, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
       rulesetNames(zoneId).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),
       f?.rule || f?.ruleset ? Promise.resolve(null)
-        : readSingles(token, 'httpRequestsAdaptive', zoneId, month, f, limits.httpRequestsAdaptive, REQUEST_FIELDS, REQUEST_FIELDS_MIN, 'requests'),
+        : readSingles(ask, 'httpRequestsAdaptive', zoneId, month, f, limits.httpRequestsAdaptive, REQUEST_FIELDS, REQUEST_FIELDS_MIN, 'requests'),
     ]);
     if (events.note) security.notes.push(events.note);
     // The deployed managed rulesets belong to the zone, not to an IP or a rule: only read unnarrowed.

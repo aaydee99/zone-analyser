@@ -105,10 +105,10 @@ async function write(name: string, value: unknown, ttlMs: number) {
 }
 
 /**
- * The cached value for `name`, or `load()`'s result (then cached for `ttlMs`). Concurrent callers
+ * The cached value for `name`, or `load()`'s result (then cached for `ttlMs`, or for what `ttlMs(value)` says). Concurrent callers
  * share one load. `fresh` skips the cached value and replaces it. Values must be plain JSON.
  */
-export async function cached<T>(name: string, ttlMs: number, load: () => Promise<T>, fresh = false): Promise<T> {
+export async function cached<T>(name: string, ttlMs: number | ((value: T) => number), load: () => Promise<T>, fresh = false): Promise<T> {
   if (!fresh) {
     const hit = await read<T>(name);
     if (hit !== undefined) return hit;
@@ -118,7 +118,7 @@ export async function cached<T>(name: string, ttlMs: number, load: () => Promise
   const p = (async () => {
     try {
       const value = await load();
-      await write(name, value, ttlMs);
+      await write(name, value, typeof ttlMs === 'function' ? ttlMs(value) : ttlMs);
       return value;
     } finally {
       s.inflight.delete(name);

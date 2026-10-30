@@ -5,8 +5,9 @@ import 'server-only';
 // worker-relay timeouts. Later requests for the same key join the read that is running; it keeps
 // going when nobody waits, and its result usually lands in the cache for the next request.
 
-export interface Progress { done: number; total: number }
-export interface Pending { pending: true; done: number; total: number; startedAt: string }
+/** `note`: what the read is waiting for, if anything (e.g. a rate limit). */
+export interface Progress { done: number; total: number; note?: string }
+export interface Pending { pending: true; done: number; total: number; startedAt: string; note?: string }
 
 interface Job extends Progress { p: Promise<unknown>; startedAt: string }
 const g = globalThis as unknown as { __bgJobs?: Map<string, Job> };
@@ -23,5 +24,5 @@ export async function inBackground<T>(key: string, build: (progress: Progress) =
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const out = await Promise.race([job.p as Promise<T>, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); })]).finally(() => clearTimeout(timer));
-  return out ?? { pending: true, done: job.done, total: job.total, startedAt: job.startedAt };
+  return out ?? { pending: true, done: job.done, total: job.total, startedAt: job.startedAt, ...(job.note ? { note: job.note } : {}) };
 }

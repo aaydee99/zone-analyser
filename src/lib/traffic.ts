@@ -49,7 +49,7 @@ export function rangeOf(month: string, now = new Date()) {
 
 // ── Cloudflare GraphQL ──────────────────────────────────────────────────────
 
-export interface GqlError { message?: string }
+export interface GqlError { message?: string; path?: unknown[]; extensions?: { code?: string } }
 interface Group {
   dimensions?: { date?: string };
   sum?: {
@@ -83,7 +83,9 @@ function zonesQuery(tags: string[], since: string, until: string, fields: string
     + `httpRequests1dGroups(limit: 62, filter: { date_geq: "${since}", date_lt: "${until}" }, orderBy: [date_ASC]) { dimensions { date } ${fields} } } } }`;
 }
 
-export const errorText = (errors: GqlError[]) => [...new Set(errors.map((e) => e.message).filter(Boolean))].join('; ') || 'Cloudflare returned an error';
+/** An error message, or (when Cloudflare sends none) its code or the error itself, so the cause is never hidden. */
+const textOf = (e: GqlError) => e.message || (e.extensions?.code ? `Cloudflare error code ${e.extensions.code}` : Object.keys(e ?? {}).length ? `Cloudflare returned ${JSON.stringify(e).slice(0, 300)}` : '');
+export const errorText = (errors: GqlError[]) => [...new Set(errors.map(textOf).filter(Boolean))].join('; ') || 'Cloudflare returned an error';
 /** The breakdown fields are unknown to this API (schema change): fall back to the totals. */
 const schemaError = (errors: GqlError[]) => errors.some((e) => /unknown field|cannot query field|not defined|does not exist|undefined field/i.test(e.message ?? ''));
 export const permissionError = (errors: GqlError[], status: number) => status === 401 || status === 403 || errors.some((e) => /not authori[sz]ed|permission|access/i.test(e.message ?? ''));

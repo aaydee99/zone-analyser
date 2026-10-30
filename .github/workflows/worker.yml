@@ -7,6 +7,8 @@
 # Repository secrets (Settings › Secrets and variables › Actions):
 #   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY   the same values as on Vercel
 #   REDIS_URL                                                    optional
+# Repository variable (same page, Variables tab), optional:
+#   TRAFFIC_GQL_BUDGET   traffic-analytics GraphQL queries per 5 minutes per Cloudflare token (default 240)
 name: Console worker
 
 on:
@@ -36,6 +38,8 @@ jobs:
       CONSOLE_WORKER_MAX_MINUTES: '330'
       CONSOLE_DATA_DIR: ${{ github.workspace }}/.worker-data
       NEXT_TELEMETRY_DISABLED: '1'
+      # Optional repository variable: traffic-analytics GraphQL queries per 5 minutes per token (default 240).
+      TRAFFIC_GQL_BUDGET: ${{ vars.TRAFFIC_GQL_BUDGET }}
     steps:
       - name: Get the code
         uses: actions/checkout@v4
