@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -392,25 +392,38 @@ function BackupBuilder() {
                   const st = creds.find((x) => x.id === v)?.storage ?? {};
                   return { ...c, cloudflareCredentialId: v, accountId: '', zoneIds: [], r2: { enabled: c.r2.enabled && !!st.r2, bucket: '' }, aws: { enabled: c.aws.enabled && !!st.aws, bucket: '' } };
                 })} />
-              {/* A set without an account ID covers every account its token can access: pick one, or all. */}
-              {zoneList.allAccounts && (
-                <div className="mt-5">
-                  <Field label="Account" htmlFor="backup-account" hint="This account set has no account ID: it covers every account its token can access. Each account is backed up into its own folder.">
-                    <select id="backup-account" className="input" value={cfg.accountId} onChange={(e) => chooseAccount(e.target.value)}>
-                      <option value="">All {zoneList.accounts.length} accounts{zoneList.zones ? ` (${zoneList.zones.length} zones)` : ''}</option>
-                      {zoneList.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
-                      {cfg.accountId && !chosenAccount && zoneList.zones && <option value={cfg.accountId}>{cfg.accountId} (not accessible to this token)</option>}
-                    </select>
-                  </Field>
-                </div>
-              )}
-              {zoneList.loading && !zoneList.zones && <p className="mt-3 flex items-center gap-2 text-xs text-muted"><Loader2 className="size-3.5 animate-spin" /> Reading the accounts and zones…</p>}
             </div>
           </Card>
 
-          {/* 2 — Zones */}
+          {/* 2 — Account */}
           <Card>
-            <SectionHeader step="02" title="Zones"
+            <SectionHeader step="02" title="Account"
+              description={zoneList.allAccounts
+                ? 'This account set has no account ID: it covers every account its token can access. Back up one of them, or all (each into its own folder).'
+                : 'The Cloudflare account this account set is for.'} />
+            <div className="p-5">
+              {!cfg.cloudflareCredentialId ? (
+                <p className="text-[13px] text-muted">Choose an account set first.</p>
+              ) : zoneList.loading && !zoneList.zones ? (
+                <p className="flex items-center gap-2 text-[13px] text-muted"><Loader2 className="size-4 animate-spin" /> Reading the accounts and zones from Cloudflare…</p>
+              ) : zoneList.error && !zoneList.zones ? (
+                <Alert tone="bad" title="Could not read the accounts">{zoneList.error}</Alert>
+              ) : (
+                <Field label="Account" htmlFor="backup-account">
+                  <select id="backup-account" className="input" value={zoneList.allAccounts ? cfg.accountId : zoneList.accounts[0]?.id ?? ''}
+                    onChange={(e) => chooseAccount(e.target.value)} disabled={!zoneList.allAccounts}>
+                    {zoneList.allAccounts && <option value="">All {zoneList.accounts.length} accounts{zoneList.zones ? ` (${zoneList.zones.length} zones)` : ''}</option>}
+                    {zoneList.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
+                    {zoneList.allAccounts && cfg.accountId && !chosenAccount && zoneList.zones && <option value={cfg.accountId}>{cfg.accountId} (not accessible to this token)</option>}
+                  </select>
+                </Field>
+              )}
+            </div>
+          </Card>
+
+          {/* 3 — Zones */}
+          <Card>
+            <SectionHeader step="03" title="Zones"
               description={chosenAccount ? `Back up every zone of ${chosenAccount.name}, or pick specific ones.` : zoneList.allAccounts ? 'Back up every zone of every account, or pick specific ones.' : 'Back up every zone on the account, or pick specific ones.'} />
             <div className="space-y-5 p-5">
               <Segmented
@@ -457,9 +470,9 @@ function BackupBuilder() {
             </div>
           </Card>
 
-          {/* 3 — Flags */}
+          {/* 4 — Flags */}
           <Card>
-            <SectionHeader step="03" title="Run options" description="Command-line flags and behaviour switches." />
+            <SectionHeader step="04" title="Run options" description="Command-line flags and behaviour switches." />
             <div className="space-y-5 p-5">
               <div className="grid gap-3 md:grid-cols-2">
                 <FlagCard
@@ -499,9 +512,9 @@ function BackupBuilder() {
             </div>
           </Card>
 
-          {/* 4 — Output & uploads */}
+          {/* 5 — Output & uploads */}
           <Card>
-            <SectionHeader step="04" title="Output & offsite copies" description="Where the backup lands, and optional uploads of its .tf files to R2 / S3." />
+            <SectionHeader step="05" title="Output & offsite copies" description="Where the backup lands, and optional uploads of its .tf files to R2 / S3." />
             <div className="space-y-5 p-5">
               <Field label="Output directory" optional hint={`Blank uses the console default: ${defaultOut}`}>
                 <div className="relative">
