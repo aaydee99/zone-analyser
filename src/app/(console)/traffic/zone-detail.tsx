@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Network, RefreshCw, Search, ShieldAlert, X } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET, type DatasetDetail, type DetailFilter, type DetailRow, type FirewallEvent, type ZoneDetail, type ZoneDetailPending } from '@/lib/traffic-types';
+import { CACHED_STATUSES, MANAGED_RULESETS, MITIGATING_ACTIONS, OWASP_ANOMALY_RULE, OWASP_RULESET, SECURITY_VIEWS, type DatasetDetail, type DetailView, type DetailFilter, type DetailRow, type FirewallEvent, type ZoneDetail, type ZoneDetailPending } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, Modal, SectionHeader, cx } from '@/components/ui';
 import { bytes, dayLabel, num, pct, whole } from './format';
 
@@ -180,7 +180,7 @@ function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label
           <div className="pointer-events-none absolute bottom-full z-20 mb-1 rounded-md border border-line-strong bg-surface px-2.5 py-1.5 text-xs whitespace-nowrap shadow-pop"
             style={{ left: `${((hover + 0.5) / rows.length) * 100}%`, transform: `translateX(${hover < rows.length / 3 ? '-10%' : hover > (rows.length * 2) / 3 ? '-90%' : '-50%'})` }}>
             <span className="text-muted">{alias === 'daily' ? dayLabel(h.dims[key]) : `${dayLabel(h.dims[key])} ${timeLabel(alias, h.dims[key])}`}</span>{' '}
-            <span className="tabular-nums text-ink">{whole.format(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
+            <span className="tabular-nums text-ink">{num(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
             {clickable && <div className="text-[10.5px] text-faint">Click for this {PER[alias]}&apos;s detail</div>}
           </div>
         )}
@@ -191,7 +191,27 @@ function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label
 }
 
 /** What a click opens: an IP, a rule, a ruleset, or a time (day / hour) — with the time already chosen kept. */
-interface On { ip: (ip: string) => void; rule: (rule: string) => void; ruleset: (ruleset: string) => void; time?: (alias: TimeAlias, row: DetailRow) => void }
+interface On { ip: (ip: string) => void; rule: (rule: string) => void; ruleset: (ruleset: string) => void; time?: (alias: TimeAlias, row: DetailRow) => void; view?: (v: DetailView, label: string) => void }
+
+/** One headline number; with onOpen it opens that slice. */
+function Figure({ label, value, exact, sub, onOpen }: { label: string; value: string; exact?: number; sub?: string; onOpen?: () => void }) {
+  const body = (
+    <>
+      <div className="eyebrow">{label}</div>
+      <div className="mt-1 text-[26px] font-semibold tabular-nums" title={exact !== undefined ? whole.format(exact) : undefined}>{value}</div>
+      {sub && <div className="text-[11.5px] text-muted">{sub}</div>}
+    </>
+  );
+  if (!onOpen) return <div>{body}</div>;
+  return (
+    <button type="button" onClick={onOpen} aria-label={`${label}: open the details`} title="Open the details"
+      className="-m-2 rounded-lg p-2 text-left hover:bg-raised/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal">
+      {body}
+    </button>
+  );
+}
+const sumOf = (rows: DetailRow[] | undefined, keep: (r: DetailRow) => boolean) => (rows ?? []).filter(keep).reduce((n, r) => n + r.count, 0);
+const bytesOf = (rows: DetailRow[] | undefined, keep: (r: DetailRow) => boolean) => (rows ?? []).filter(keep).reduce((n, r) => n + (r.bytes ?? 0), 0);
 
 /** A ranked list with a share bar; long lists open on request. */
 function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'Nothing' }: {
@@ -254,7 +274,7 @@ function RulesTable({ rows, names, total, onPick }: { rows: DetailRow[]; names: 
                     {r.dims.rulesetId && names[r.dims.rulesetId] && <div className="text-[10.5px] text-faint">{sourceLabel(r.dims.source)}</div>}
                   </td>
                   <td className="px-3 py-2"><Badge tone={actionTone(r.dims.action) === 'neutral' ? 'neutral' : actionTone(r.dims.action) as 'bad' | 'warn' | 'info' | 'ok'}>{actionLabel(r.dims.action)}</Badge></td>
-                  <td className="px-3 py-2 text-right tabular-nums text-ink">{whole.format(r.count)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-ink" title={whole.format(r.count)}>{num(r.count)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-muted">{pct(r.count, total)}</td>
                 </tr>
               );
@@ -282,7 +302,7 @@ function IpTable({ rows, total, withBytes, onPick, what }: { rows: DetailRow[]; 
                 <td className="px-3 py-2 font-mono text-ink">{r.dims.clientIP}</td>
                 <td className="px-3 py-2 text-ink-2">{r.dims.clientCountryName || '—'}</td>
                 <td className="max-w-[260px] truncate px-3 py-2 text-ink-2" title={r.dims.clientASNDescription}>{r.dims.clientASNDescription || '—'}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-ink">{whole.format(r.count)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-ink" title={whole.format(r.count)}>{num(r.count)}</td>
                 {withBytes && <td className="px-3 py-2 text-right tabular-nums text-muted">{r.bytes !== undefined ? bytes(r.bytes) : '—'}</td>}
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{pct(r.count, total)}</td>
               </tr>
@@ -345,7 +365,7 @@ function More({ shown, total, onMore, onLess, what }: { shown: number; total: nu
   if (total <= 25) return null;
   return (
     <div className="mt-2 flex items-center gap-3 text-xs text-muted">
-      <span className="tabular-nums">Showing {whole.format(shown)} of {whole.format(total)} {what}</span>
+      <span className="tabular-nums">Showing {num(shown)} of {num(total)} {what}</span>
       {shown < total && <button type="button" onClick={onMore} className="hover:text-ink">Show {Math.min(100, total - shown)} more</button>}
       {shown > 25 && <button type="button" onClick={onLess} className="hover:text-ink">Show fewer</button>}
     </div>
@@ -529,9 +549,9 @@ function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule
           {!known ? unknown : !owasp.length ? <p className="text-xs text-faint">No OWASP rule matched this month.</p> : (
             <div className="space-y-5">
               <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-                <div><div className="eyebrow">Requests over the threshold</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{whole.format(anomaly.reduce((n, r) => n + r.count, 0))}</div></div>
+                <div><div className="eyebrow">Requests over the threshold</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{num(anomaly.reduce((n, r) => n + r.count, 0))}</div></div>
                 <div className="flex flex-wrap gap-1">{[...anomalyByAction].map(([a, n]) => <Badge key={a} tone={actionTone(a)}>{actionLabel(a)} · {num(n)}</Badge>)}</div>
-                <div><div className="eyebrow">Rule matches adding to scores</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{whole.format(contributing.reduce((n, r) => n + r.count, 0))}</div></div>
+                <div><div className="eyebrow">Rule matches adding to scores</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{num(contributing.reduce((n, r) => n + r.count, 0))}</div></div>
               </div>
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
                 <BarList title="Attack categories" rows={[...byCategory].sort((a, b) => b[1] - a[1]).map(([c, n]) => ({ dims: { category: c }, count: n }))} label={(r) => r.dims.category} total={contributing.reduce((n, r) => n + r.count, 0)} />
@@ -546,7 +566,7 @@ function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule
                             <td className="px-3 py-1.5 text-ink">{r.dims.description || r.dims.ruleId}</td>
                             <td className="px-3 py-1.5 text-ink-2">{crsCategory(crsOf(r.dims.description))}</td>
                             <td className="px-3 py-1.5"><Badge tone={actionTone(r.dims.action)}>{actionLabel(r.dims.action)}</Badge></td>
-                            <td className="px-3 py-1.5 text-right tabular-nums text-ink">{whole.format(r.count)}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={whole.format(r.count)}>{num(r.count)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -603,7 +623,17 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
       <ZonesRead d={d} />
       {grouped && <>
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-        <div><div className="eyebrow">Security events</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(s.total)}</div></div>
+        <Figure label="Security events" value={num(s.total)} exact={s.total} />
+        {b.actions && (() => {
+          const mitigated = sumOf(b.actions, (r) => MITIGATING_ACTIONS.includes(r.dims.action));
+          const rest = sumOf(b.actions, (r) => !MITIGATING_ACTIONS.includes(r.dims.action));
+          return (
+            <>
+              <Figure label="Mitigated" value={num(mitigated)} exact={mitigated} sub={`${pct(mitigated, s.total)} · blocked or challenged`} onOpen={on.view && (() => on.view!('threats', 'Mitigated'))} />
+              <Figure label="Not mitigated" value={num(rest)} exact={rest} sub={`${pct(rest, s.total)} · logged, skipped or allowed`} onOpen={on.view && (() => on.view!('unmitigated', 'Not mitigated'))} />
+            </>
+          );
+        })()}
         <div className="flex flex-wrap gap-1.5">
           {(b.actions ?? []).map((r) => {
             const tone = actionTone(r.dims.action);
@@ -641,7 +671,7 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
       </>}
       {(grouped || s.events.length > 0) && <div>
         <div className="eyebrow mb-2">Single events</div>
-        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(s.events.length)} events since {fmtDate(s.eventsSince)}{grouped ? ' — open a day or an hour on the chart for every event in it' : ''}.</p>}
+        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {num(s.events.length)} events since {fmtDate(s.eventsSince)}{grouped ? ' — open a day or an hour on the chart for every event in it' : ''}.</p>}
         <EventsTable events={s.events} names={d.rulesetNames} onIp={onIp} onRule={onRule} />
       </div>}
     </div>
@@ -661,8 +691,19 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
       <Coverage ds={q} />
       {grouped && <>
       <div className="flex flex-wrap gap-x-8 gap-y-2">
-        <div><div className="eyebrow">Requests</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(q.total)}</div></div>
-        {totalBytes > 0 && <div><div className="eyebrow">Bandwidth</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{bytes(totalBytes)}</div></div>}
+        <Figure label="Requests" value={num(q.total)} exact={q.total} />
+        {totalBytes > 0 && <Figure label="Bandwidth" value={bytes(totalBytes)} />}
+        {b.cache && (() => {
+          const cached = (r: DetailRow) => CACHED_STATUSES.includes(r.dims.cacheStatus);
+          const edge = sumOf(b.cache, cached), origin = sumOf(b.cache, (r) => !cached(r));
+          const edgeBytes = bytesOf(b.cache, cached), originBytes = bytesOf(b.cache, (r) => !cached(r));
+          return (
+            <>
+              <Figure label="Served by Cloudflare" value={num(edge)} exact={edge} sub={`${pct(edge, q.total)}${edgeBytes ? ` · ${bytes(edgeBytes)}` : ''} · from cache`} onOpen={on.view && (() => on.view!('cache', 'Served by Cloudflare'))} />
+              <Figure label="Served by origin" value={num(origin)} exact={origin} sub={`${pct(origin, q.total)}${originBytes ? ` · ${bytes(originBytes)}` : ''}`} onOpen={on.view && (() => on.view!('origin', 'Served by origin'))} />
+            </>
+          );
+        })()}
       </div>
       <TimeChart b={b} label="Requests" onPick={on.time} />
       {b.ips && (
@@ -692,7 +733,7 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
           {q.samplesNote && <p className="mb-2 text-xs text-muted">{q.samplesNote}</p>}
           {q.samples && (
             <>
-              {q.samplesSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(q.samples.length)} requests since {fmtDate(q.samplesSince)} (Cloudflare samples busy times){grouped ? ' — open a day or an hour on the chart for more of them' : ''}.</p>}
+              {q.samplesSince && <p className="mb-2 text-xs text-muted">The newest {num(q.samples.length)} requests since {fmtDate(q.samplesSince)} (Cloudflare samples busy times){grouped ? ' — open a day or an hour on the chart for more of them' : ''}.</p>}
               <RequestsTable rows={q.samples} onIp={onIp} />
             </>
           )}
@@ -714,8 +755,8 @@ export const useOpenDetail = () => useContext(OpenCtx);
 const timeOf = (f?: DetailFilter): DetailFilter => (f?.day ? { day: f.day, ...(f.hour !== undefined ? { hour: f.hour } : {}) } : {});
 /** The card a window was opened from: its view (cache, page views, bandwidth, threats) and section. */
 const shapeOf = (f?: DetailFilter): DetailFilter => ({ ...(f?.view ? { view: f.view } : {}), ...(f?.part ? { part: f.part } : {}) });
-const VIEW_LABEL: Record<NonNullable<DetailFilter['view']>, string> = {
-  cache: 'Served from cache', pages: 'Page views (HTML)', bytes: 'Ranked by bandwidth', threats: 'Blocked or challenged',
+const VIEW_LABEL: Record<DetailView, string> = {
+  cache: 'Served from cache', origin: 'Served by origin', pages: 'Page views (HTML)', bytes: 'Ranked by bandwidth', threats: 'Blocked or challenged', unmitigated: 'Not mitigated',
 };
 
 /** Clicks inside a detail: an IP, rule or ruleset keeps the time; a bar narrows the time and keeps the IP / rule / ruleset. */
@@ -724,6 +765,7 @@ function handlersFor(req: DetailRequest, open: (r: DetailRequest) => void): On {
   const narrow: DetailFilter = f.ip ? { ip: f.ip } : f.rule ? { rule: f.rule } : f.ruleset ? { ruleset: f.ruleset } : {};
   return {
     ip: (ip) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), ip } }),
+    view: (view, label) => open({ t: req.t, filter: { ...timeOf(f), ...(f.ip ? { ip: f.ip } : {}), view, part: SECURITY_VIEWS.includes(view) ? 'security' : 'requests' }, label }),
     rule: (rule) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), rule } }),
     ruleset: (ruleset) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), ruleset } }),
     time: (alias, row) => {

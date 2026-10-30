@@ -109,7 +109,13 @@ export interface DetailFilter {
   /** Only this section is read (a card about requests needs no security events, and the other way round). */
   part?: 'security' | 'requests';
 }
-export const DETAIL_VIEWS = ['cache', 'pages', 'bytes', 'threats'] as const;
+export const DETAIL_VIEWS = ['cache', 'origin', 'pages', 'bytes', 'threats', 'unmitigated'] as const;
+/** The views of the security events section; the others belong to the requests. */
+export const SECURITY_VIEWS: readonly DetailView[] = ['threats', 'unmitigated'];
+/** Cache statuses Cloudflare counts as served from cache (the rest went to the origin). */
+export const CACHED_STATUSES = ['hit', 'stale', 'updating', 'revalidated'];
+/** Security actions that stop or challenge a request (mitigated), in both spellings Cloudflare has used. */
+export const MITIGATING_ACTIONS = ['block', 'challenge', 'jschallenge', 'js_challenge', 'managed_challenge', 'connectionClose', 'connection_close', 'forceConnectionClose', 'force_connection_close'];
 export type DetailView = (typeof DETAIL_VIEWS)[number];
 
 /** A managed ruleset deployed on the zone (an execute rule in its managed-rules phase) and how it is tuned. */

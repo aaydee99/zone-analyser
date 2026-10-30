@@ -4,7 +4,7 @@ import { tag } from './cache';
 import { HttpError } from './http';
 import { GRAPHQL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, readAnswer, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
 import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
-import { DETAIL_VIEWS, MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
+import { CACHED_STATUSES as CACHED, DETAIL_VIEWS, MANAGED_RULESETS, MITIGATING_ACTIONS as THREAT_ACTIONS, OWASP_ANOMALY_RULE, OWASP_RULESET, SECURITY_VIEWS } from './traffic-types';
 import { credentialForRun } from './vault';
 import { rulesetNames } from './zone-explorer';
 
@@ -221,18 +221,14 @@ function pack(specs: Spec[], maxFields: number): Spec[][] {
   return out;
 }
 
-/** Cache statuses Cloudflare counts as served from cache. */
-const CACHED = ['hit', 'stale', 'updating', 'revalidated'];
-/** Security actions that stop or challenge a request (what the Threats card counts), in both spellings Cloudflare has used. */
-const THREAT_ACTIONS = ['block', 'challenge', 'jschallenge', 'js_challenge', 'managed_challenge', 'connectionClose', 'connection_close', 'forceConnectionClose', 'force_connection_close'];
 const list = (xs: string[]) => `[${xs.map(J).join(', ')}]`;
 
 const filterOf = (dataset: Dataset, f: DetailFilter | null) => {
   const ip = f?.ip ? `, clientIP: ${J(f.ip)}` : '';
   if (dataset === 'httpRequestsAdaptiveGroups' || dataset === 'httpRequestsAdaptive') {
-    return ip + (f?.view === 'cache' ? `, cacheStatus_in: ${list(CACHED)}` : f?.view === 'pages' ? `, edgeResponseContentTypeName: ${J('html')}` : '');
+    return ip + (f?.view === 'cache' ? `, cacheStatus_in: ${list(CACHED)}` : f?.view === 'origin' ? `, cacheStatus_notin: ${list(CACHED)}` : f?.view === 'pages' ? `, edgeResponseContentTypeName: ${J('html')}` : '');
   }
-  return (ip || (f?.rule ? `, ruleId: ${J(f.rule)}` : f?.ruleset ? `, rulesetId: ${J(f.ruleset)}` : '')) + (f?.view === 'threats' ? `, action_in: ${list(THREAT_ACTIONS)}` : '');
+  return (ip || (f?.rule ? `, ruleId: ${J(f.rule)}` : f?.ruleset ? `, rulesetId: ${J(f.ruleset)}` : '')) + (f?.view === 'threats' ? `, action_in: ${list(THREAT_ACTIONS)}` : f?.view === 'unmitigated' ? `, action_notin: ${list(THREAT_ACTIONS)}` : '');
 };
 /** Top lists ranked by bandwidth (the Bandwidth card) or by count. */
 const byBytes = (f: DetailFilter | null) => f?.view === 'bytes';
@@ -531,7 +527,7 @@ export async function zoneDetail(month: string, accountId: string, zoneId: strin
   if (filter.day && (!/^\d{4}-\d{2}-\d{2}$/.test(filter.day) || !filter.day.startsWith(`${month}-`) || Number.isNaN(Date.parse(`${filter.day}T00:00:00Z`)))) throw new HttpError(400, 'Pick a day of the chosen month (YYYY-MM-DD)');
   if (filter.view && !DETAIL_VIEWS.includes(filter.view)) throw new HttpError(400, 'Unknown view');
   if (filter.part && filter.part !== 'security' && filter.part !== 'requests') throw new HttpError(400, 'Unknown part (security or requests)');
-  if (filter.view && filter.part && (filter.view === 'threats') !== (filter.part === 'security')) throw new HttpError(400, 'That view belongs to the other section');
+  if (filter.view && filter.part && SECURITY_VIEWS.includes(filter.view) !== (filter.part === 'security')) throw new HttpError(400, 'That view belongs to the other section');
   if (filter.hour !== undefined && (!filter.day || !Number.isInteger(filter.hour) || filter.hour < 0 || filter.hour > 23)) throw new HttpError(400, 'An hour (0–23) needs a day');
   const scope = await scopeOf(accountId, zoneId || undefined);
   const narrow: DetailFilter = filter.ip ? { ip: filter.ip } : filter.rule ? { rule: filter.rule } : filter.ruleset ? { ruleset: filter.ruleset } : {};
