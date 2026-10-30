@@ -1,9 +1,9 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import type { StatusClass, TrafficAccount, TrafficCountry, TrafficDay, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
+import type { StatusClass, TrafficAccount, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 
@@ -268,18 +268,32 @@ export default function TrafficPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [pending, setPending] = useState<TrafficPending | null>(null);
 
+  // Reading a month can take minutes: the API answers "still reading" (202) and this asks again
+  // until it is ready. A newer load (another month, Refresh) ends the older one's loop.
+  const loadSeq = useRef(0);
   const load = useCallback(async (m: string, fresh = false) => {
-    setBusy(true); setError('');
+    const seq = ++loadSeq.current;
+    setBusy(true); setError(''); setPending(null);
     try {
-      const rep = await api<TrafficReport>(`/api/traffic?month=${m}${fresh ? '&fresh=1' : ''}`);
-      setR(rep);
-      if (rep.accounts.length === 1) setOpen({ [rep.accounts[0].id]: true });
-      if (fresh) toast('Traffic read again from Cloudflare', 'info');
+      for (let first = true; ; first = false) {
+        const rep = await api<TrafficReport | TrafficPending>(`/api/traffic?month=${m}${fresh && first ? '&fresh=1' : ''}`);
+        if (seq !== loadSeq.current) return;
+        if (!('pending' in rep)) {
+          setR(rep); setPending(null);
+          if (rep.accounts.length === 1) setOpen({ [rep.accounts[0].id]: true });
+          if (fresh) toast('Traffic read again from Cloudflare', 'info');
+          break;
+        }
+        setPending(rep);
+        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        if (seq !== loadSeq.current) return;
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (seq === loadSeq.current) { setError(e instanceof Error ? e.message : String(e)); setPending(null); }
     } finally {
-      setBusy(false);
+      if (seq === loadSeq.current) setBusy(false);
     }
   }, [toast]);
 
@@ -309,10 +323,16 @@ export default function TrafficPage() {
 
       {error && <div className="mb-5"><Alert tone="bad" title="Traffic could not be read">{error}</Alert></div>}
 
-      {!shown && !error && (
-        <Card className="px-5 py-10 text-center text-sm text-muted">
-          <RefreshCw className="mx-auto mb-3 size-5 animate-spin text-faint" />
-          Reading {monthName(month)} from Cloudflare — the first read of a month can take a little while.
+      {(pending?.month === month || (!shown && !error)) && (
+        <Card className={cx('px-5 text-center text-sm text-muted', shown ? 'mb-5 py-4' : 'py-10')}>
+          <RefreshCw className={cx('mx-auto size-5 animate-spin text-faint', shown ? 'mb-2' : 'mb-3')} />
+          Reading {monthName(month)} from Cloudflare{shown ? ' again' : ''} — the first read of a month can take a few minutes with many zones.
+          {pending?.month === month && pending.total > 0 && (
+            <div className="mx-auto mt-3 max-w-xs">
+              <div className="h-1.5 overflow-hidden rounded-full bg-raised"><div className="h-full rounded-full bg-signal transition-all" style={{ width: `${Math.min(100, (pending.done / pending.total) * 100)}%` }} /></div>
+              <div className="mt-1 text-xs tabular-nums text-faint">{pending.done} of {pending.total} parts read</div>
+            </div>
+          )}
         </Card>
       )}
 

@@ -4,7 +4,7 @@ import { HttpError } from './http';
 import { credentialForRun } from './vault';
 import { listZones } from './zone-explorer';
 import { csvFile } from './zone-format';
-import { EMPTY_TOTALS, type StatusClass, type TrafficAccount, type TrafficCountry, type TrafficDay, type TrafficReport, type TrafficSlice, type TrafficTotals, type TrafficZone } from './traffic-types';
+import { EMPTY_TOTALS, type StatusClass, type TrafficAccount, type TrafficCountry, type TrafficDay, type TrafficPending, type TrafficReport, type TrafficSlice, type TrafficTotals, type TrafficZone } from './traffic-types';
 
 // Monthly traffic analysis: one month of HTTP traffic for every zone the stored Cloudflare tokens
 // can read, from Cloudflare's GraphQL Analytics API (httpRequests1dGroups: one row per zone and day),
@@ -115,7 +115,10 @@ function parseZone(groups: Group[], detail: 'full' | 'basic'): RawZone {
   return { status: 'ok', daily, statuses: detail === 'full' ? statuses : null, countries };
 }
 
-/** Reads a batch of zones with one token; a failing batch is split so one zone's error stays its own. */
+/**
+ * Reads a batch of zones with one token. A failing batch is split in halves until each error is down
+ * to its own zone, so a few zones without analytics access cost a few extra queries, not one per zone.
+ */
 async function readZones(token: string, tags: string[], since: string, until: string, state: { detail: 'full' | 'basic' }): Promise<Record<string, RawZone>> {
   let r = await query(token, zonesQuery(tags, since, until, state.detail === 'full' ? FULL_FIELDS : BASIC_FIELDS));
   if (state.detail === 'full' && schemaError(r.errors)) {
@@ -123,7 +126,8 @@ async function readZones(token: string, tags: string[], since: string, until: st
     r = await query(token, zonesQuery(tags, since, until, BASIC_FIELDS));
   }
   if (r.errors.length && !r.zones?.length && tags.length > 1) {
-    const parts = await inParallel(tags, PARALLEL, (t) => readZones(token, [t], since, until, state));
+    const half = Math.ceil(tags.length / 2);
+    const parts = await Promise.all([tags.slice(0, half), tags.slice(half)].map((t) => readZones(token, t, since, until, state)));
     return Object.assign({}, ...parts);
   }
   const out: Record<string, RawZone> = {};
@@ -148,7 +152,10 @@ async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>)
   return out;
 }
 
-function readMonth(month: string, fresh: boolean): Promise<RawMonth> {
+/** Batches planned and finished, for the "still reading" answer. */
+interface Progress { done: number; total: number }
+
+function readMonth(month: string, fresh: boolean, progress: Progress = { done: 0, total: 0 }): Promise<RawMonth> {
   const { since, until, partial } = rangeOf(month);
   return cached(`path:/api/traffic?month=${month}`, partial ? RUNNING_TTL : CLOSED_TTL, async () => {
     const list = await listZones();
@@ -172,7 +179,11 @@ function readMonth(month: string, fresh: boolean): Promise<RawMonth> {
       }
       for (let i = 0; i < tags.length; i += BATCH) jobs.push({ token, tags: tags.slice(i, i + BATCH) });
     }
-    for (const part of await inParallel(jobs, PARALLEL, (j) => readZones(j.token, j.tags, since, until, state))) Object.assign(zones, part);
+    progress.total += jobs.length;
+    const parts = await inParallel(jobs, PARALLEL, async (j) => {
+      try { return await readZones(j.token, j.tags, since, until, state); } finally { progress.done++; }
+    });
+    for (const part of parts) Object.assign(zones, part);
     return { generatedAt: new Date().toISOString(), detail: state.detail, zones, problems: [...list.problems, ...problems] };
   }, fresh);
 }
@@ -234,15 +245,39 @@ function slice(raws: RawZone[], prev: RawMonth | null, ids: string[], days: numb
   return { totals: totalsOf(daily), previous: previousOf(prev, ids, days), daily, statuses: mergeStatuses(ok.map((z) => z.statuses)), countries: topCountries(mergeCountries(ok.map((z) => z.countries))) };
 }
 
-/** GET /api/traffic?month=YYYY-MM: the month for everything, per account and per zone. */
-export async function trafficReport(month: string, fresh = false): Promise<TrafficReport> {
+// A month is read in the background: a request waits at most WAIT_MS for it and otherwise answers
+// "still reading" (202), so no request runs into the Cloudflare, Vercel or worker-relay timeouts.
+// Later requests join the read that is running; it keeps going when nobody waits.
+const WAIT_MS = 20_000;
+interface Job extends Progress { p: Promise<TrafficReport>; startedAt: string }
+const gj = globalThis as unknown as { __trafficJobs?: Map<string, Job> };
+const jobs = (gj.__trafficJobs ??= new Map());
+
+/** GET /api/traffic?month=YYYY-MM: the month for everything, per account and per zone — or how far reading it got. */
+export async function trafficReport(month: string, fresh = false, waitMs = WAIT_MS): Promise<TrafficReport | TrafficPending> {
   const months = trafficMonths();
   if (!months.includes(month)) throw new HttpError(400, `Pick a month from the last ${MONTHS} (YYYY-MM)`);
+  let job = jobs.get(month);
+  if (!job) {
+    const progress: Progress = { done: 0, total: 0 };
+    const p = buildReport(month, fresh, months, progress).finally(() => jobs.delete(month));
+    p.catch(() => { /* answered to whoever waits; the next request starts again */ });
+    job = Object.assign(progress, { p, startedAt: new Date().toISOString() });
+    jobs.set(month, job);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const out = await Promise.race([job.p, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); })]).finally(() => clearTimeout(timer));
+  return out ?? { pending: true, month, done: job.done, total: job.total, startedAt: job.startedAt };
+}
+
+async function buildReport(month: string, fresh: boolean, months: string[], progress: Progress): Promise<TrafficReport> {
   const asked = Date.now();
   const { since, until, partial, days } = rangeOf(month);
-  const raw = await readMonth(month, fresh);
-  // The previous month only feeds the comparison: if it cannot be read, there is simply no comparison.
-  const prev = await readMonth(addMonths(month, -1), false).catch(() => null);
+  // Both months at once; the previous one only feeds the comparison, so if it cannot be read there is none.
+  const [raw, prev] = await Promise.all([
+    readMonth(month, fresh, progress),
+    readMonth(addMonths(month, -1), false, progress).catch(() => null),
+  ]);
   const span = partial ? days : null;
 
   const list = await listZones();

@@ -62,4 +62,14 @@ export interface TrafficReport extends TrafficSlice {
   months: string[];
 }
 
+/** The month is still being read from Cloudflare (answered with 202): ask again in a few seconds. */
+export interface TrafficPending {
+  pending: true;
+  month: string;
+  /** Queries finished and planned so far (zones are read in batches; both this and last month). */
+  done: number;
+  total: number;
+  startedAt: string;
+}
+
 export const EMPTY_TOTALS: TrafficTotals = { requests: 0, cachedRequests: 0, bytes: 0, cachedBytes: 0, threats: 0, pageViews: 0, uniquesSum: 0, days: 0 };
