@@ -280,8 +280,13 @@ async function readDataset(ask: Ask, dataset: Dataset, zoneId: string, month: st
   if (!limits.enabled) return { ...base, message: "Not available on this zone's plan" };
   const w = windowOf(month, limits, f);
   if (!w.parts.length) return { ...base, message: `Cloudflare keeps this for ${days(limits.notOlderThan)} days on this zone's plan — choose a more recent ${f?.day ? 'day' : 'month'}` };
-  const specs = all.filter((s) => s.dims.every((d) => offered(limits, d)));
+  // The plan's field list is trusted only when it names some of these dimensions: some datasets list
+  // just their top-level fields (count, dimensions, sum …), and that must not leave out every breakdown.
+  // Without it, everything is tried, and what Cloudflare refuses is left out with its error.
+  const named = all.some((s) => s.dims.some((d) => offered(limits, d))) ? limits : { ...limits, availableFields: null };
+  const specs = all.filter((s) => s.dims.every((d) => offered(named, d)));
   const notOffered = all.filter((s) => !specs.includes(s)).map((s) => s.alias);
+  if (!specs.length) return { ...base, message: "None of these breakdowns is offered on this zone's plan" };
   const queries = pack(specs, Math.max(3, limits.maxNumberOfFields));
   progress.total += w.parts.length * queries.length;
 
@@ -320,8 +325,9 @@ async function readSingles(gq: Ask, dataset: 'firewallEventsAdaptive' | 'httpReq
   if (!last) return { list: [] };
   const ask = (x: string[]) => gq(zoneQuery(zoneId,
     `rows: ${dataset}(limit: ${Math.min(listSize(f), limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf(dataset, f)} }, orderBy: [datetime_DESC]) { ${x.join(' ')} }`));
-  let r = await ask(fields.filter((x) => offered(limits, x)));
-  if (r.errors.length && !r.data && !r.errors.some((e) => e.extensions?.code === LIMIT_CODE)) r = await ask(minimal.filter((x) => offered(limits, x)));
+  const named = fields.some((x) => offered(limits, x)) ? limits : { ...limits, availableFields: null };
+  let r = await ask(fields.filter((x) => offered(named, x)));
+  if (r.errors.length && !r.data && !r.errors.some((e) => e.extensions?.code === LIMIT_CODE)) r = await ask(minimal.filter((x) => offered(named, x)));
   if (r.errors.length && !r.data) return { list: [], note: `Single ${what} could not be read: ${errorText(r.errors)}` };
   return { list: Array.isArray(r.data?.rows) ? (r.data!.rows as FirewallEvent[]) : [], since: last.since };
 }
