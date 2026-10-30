@@ -51,7 +51,9 @@ const minutes = (v: unknown, label: string, max: number) => {
 };
 
 export async function saveSettings(patch: Partial<Settings>, userId: string): Promise<Settings> {
-  const next = { ...(await getSettings()) };
+  // From the database, not this instance's 30-second copy: another instance may have saved since.
+  const current = must(await db().from('settings').select('data').eq('id', 1).maybeSingle(), 'Reading settings');
+  const next = { ...pick(current?.data as Partial<Settings> | undefined) };
   if (patch.sessionIdleMinutes !== undefined) next.sessionIdleMinutes = minutes(patch.sessionIdleMinutes, 'Session timeout', MAX_SESSION_IDLE_MINUTES);
   if (patch.vaultAutoLockMinutes !== undefined) next.vaultAutoLockMinutes = minutes(patch.vaultAutoLockMinutes, 'Vault auto-lock', 24 * 60);
   for (const k of ['outputDir', 'pluginCacheDir'] as const) {

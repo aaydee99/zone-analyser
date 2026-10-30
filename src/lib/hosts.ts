@@ -37,13 +37,15 @@ function sameSecret(a: string, b: string): boolean {
  * header) are served, so nobody can skip its WAF and rate limits by calling the origin directly.
  * Loopback requests are exempt off Vercel (the worker calls its own server on 127.0.0.1); on Vercel
  * nothing is reached over loopback, so there is no exemption to abuse.
+ * Several secrets separated by commas are all accepted: rotate by adding the new one, switching the
+ * CDN to it, then removing the old one (no request is refused in between).
  */
 export function cameThroughCdn(host: string | null, headers: Headers): boolean {
-  const secret = process.env.CONSOLE_ORIGIN_SECRET?.trim();
-  if (!secret) return true;
+  const secrets = (process.env.CONSOLE_ORIGIN_SECRET ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!secrets.length) return true;
   if (!process.env.VERCEL && isLoopbackHost(host)) return true;
-  const sent = headers.get(originHeader());
-  return !!sent && sameSecret(sent.trim(), secret);
+  const sent = headers.get(originHeader())?.trim();
+  return !!sent && secrets.some((s) => sameSecret(sent, s));
 }
 
 /**

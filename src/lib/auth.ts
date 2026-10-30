@@ -1,7 +1,7 @@
 import 'server-only';
 import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
-import { db, isConfigured, must, NotConfiguredError } from './supabase';
+import { db, isConfigured, must, NotConfiguredError, timedFetch } from './supabase';
 import { cachedSettings, getSettings } from './settings';
 import { audit } from './audit';
 import { isRole, type Role } from './rbac';
@@ -74,7 +74,7 @@ const normEmail = (e: unknown) => (typeof e === 'string' ? e.trim().toLowerCase(
 function anonClient() {
   if (!isConfigured()) throw new NotConfiguredError();
   return createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: timedFetch },
   });
 }
 
@@ -212,6 +212,8 @@ export async function login(emailIn: string, password: string, userAgent?: strin
     user_agent: userAgent?.slice(0, 300) ?? null,
   }), 'Creating session');
   await db().from('profiles').update({ last_login_at: new Date(now).toISOString() }).eq('id', userId);
+  // Sessions past their absolute expiry are never valid again: drop them (any user's).
+  await db().from('sessions').delete().lt('expires_at', new Date(now).toISOString()).then(() => {}, () => {});
   await audit({ id: userId, email }, 'auth.login', email);
   return token;
 }

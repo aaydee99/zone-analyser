@@ -32,6 +32,9 @@ async function getUser(id: string): Promise<Row> {
   return row;
 }
 
+/** The database's own last-super-admin refusal (supabase/migrations/0008). */
+const lastSuperAdmin = (message: string) => /last super admin/i.test(message);
+
 async function activeSuperAdmins(): Promise<number> {
   const { count } = await db().from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'super_admin').eq('disabled', false);
   return count ?? 0;
@@ -91,7 +94,10 @@ export async function updateUser(actor: Me, id: string, patch: { name?: string; 
 
   let row = target;
   if (Object.keys(update).length) {
-    row = must(await db().from('profiles').update({ ...update, updated_at: new Date().toISOString() }).eq('id', id).select(COLS).single(), 'Updating user') as Row;
+    const res = await db().from('profiles').update({ ...update, updated_at: new Date().toISOString() }).eq('id', id).select(COLS).single();
+    // The database refuses a change that would leave no enabled super admin (two changes at once).
+    if (res.error && lastSuperAdmin(res.error.message)) throw new AuthError('This is the last super admin', 400);
+    row = must(res, 'Updating user') as Row;
   }
   // Disabling, demoting or resetting a password signs the user out everywhere.
   if (update.disabled || update.role || changes.password) await revokeUserSessions(id);
@@ -108,6 +114,6 @@ export async function deleteUser(actor: Me, id: string) {
   await revokeUserSessions(id);
   // Deleting the auth user cascades to the profile and its sessions.
   const { error } = await db().auth.admin.deleteUser(id);
-  if (error) throw new Error(`Could not delete user: ${error.message}`);
+  if (error) throw lastSuperAdmin(error.message) ? new AuthError('This is the last super admin', 400) : new Error(`Could not delete user: ${error.message}`);
   await audit(actor, 'user.deleted', target.email, { role: target.role });
 }

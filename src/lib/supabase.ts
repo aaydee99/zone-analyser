@@ -19,7 +19,10 @@ export class NotConfiguredError extends Error {
 }
 
 const g = globalThis as unknown as { __cfDb?: SupabaseClient };
-const OPTS = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } };
+/** Every database call gives up after this long (Supabase hanging must not hang the console with it). */
+const DB_TIMEOUT_MS = 30_000;
+export const timedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(DB_TIMEOUT_MS)]) : AbortSignal.timeout(DB_TIMEOUT_MS) });
+const OPTS = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: timedFetch } };
 
 /** Service-role client for all data access. (Sign-in checks use a fresh anon client per call — see auth.ts.) */
 export function db(): SupabaseClient {
