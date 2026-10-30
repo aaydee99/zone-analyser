@@ -22,6 +22,30 @@ export function isAllowedHost(host: string | null): boolean {
   return listed.includes(h) || isLoopbackHost(h);
 }
 
+/** Header the CDN in front of the console adds with CONSOLE_ORIGIN_SECRET (CONSOLE_ORIGIN_HEADER renames it). */
+export const originHeader = () => process.env.CONSOLE_ORIGIN_HEADER?.trim().toLowerCase() || 'x-console-origin-auth';
+
+/** Compares in time that depends only on the lengths, so the secret cannot be guessed byte by byte. */
+function sameSecret(a: string, b: string): boolean {
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) | 0) ^ (b.charCodeAt(i) | 0);
+  return diff === 0;
+}
+
+/**
+ * With CONSOLE_ORIGIN_SECRET set, only requests that came through the CDN (which adds the secret
+ * header) are served, so nobody can skip its WAF and rate limits by calling the origin directly.
+ * Loopback requests are exempt off Vercel (the worker calls its own server on 127.0.0.1); on Vercel
+ * nothing is reached over loopback, so there is no exemption to abuse.
+ */
+export function cameThroughCdn(host: string | null, headers: Headers): boolean {
+  const secret = process.env.CONSOLE_ORIGIN_SECRET?.trim();
+  if (!secret) return true;
+  if (!process.env.VERCEL && isLoopbackHost(host)) return true;
+  const sent = headers.get(originHeader());
+  return !!sent && sameSecret(sent.trim(), secret);
+}
+
 /**
  * True when the browser reached us over HTTPS, directly or through the TLS proxy in
  * front of it. The console only listens on 127.0.0.1, so X-Forwarded-Proto can only

@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { isAllowedHost, isHttpsRequest, isLoopbackHost } from '@/lib/hosts';
+import { cameThroughCdn, isAllowedHost, isHttpsRequest, isLoopbackHost } from '@/lib/hosts';
 
 // Runs before every page, asset and API route.
 //  - Unknown Host → 403 (DNS rebinding; also keeps the redirect below on our own hosts).
+//  - With CONSOLE_ORIGIN_SECRET set, a request without the CDN's secret header → 403.
 //  - Plain HTTP is accepted only on loopback, where traffic never leaves the machine.
 //    Anything else is redirected to HTTPS (GET/HEAD) or refused, before any cookie or
 //    request body is processed.
@@ -36,6 +37,7 @@ const withCsp = (res: NextResponse) => { res.headers.set('Content-Security-Polic
 export function proxy(req: NextRequest) {
   const host = req.headers.get('host');
   if (!isAllowedHost(host)) return NextResponse.json({ error: 'Host not allowed' }, { status: 403 });
+  if (!cameThroughCdn(host, req.headers)) return NextResponse.json({ error: 'Direct access is not allowed' }, { status: 403 });
   // No CORS: the API is same-origin only, so a cross-origin preflight is refused (and never
   // answered with Access-Control-Allow-* headers).
   if (req.method === 'OPTIONS' && req.nextUrl.pathname.startsWith('/api/')) return NextResponse.json({ error: 'Cross-origin requests are not allowed' }, { status: 403 });
