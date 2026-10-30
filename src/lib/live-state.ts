@@ -43,7 +43,9 @@ export async function liveState(me: Me): Promise<LiveState> {
   const s = w?.online ? await relayJson<LiveState>(me, '/api/auth/me?peek=1', 4_000) : null;
   const updating = w?.online ? await retireIfOutdated(w).catch(() => false) : false;
   // Someone opened the console and no worker runs: start one now, so it is ready by the time it is needed.
-  if (!s && wakeConfigured()) await wakeWorker(me.email).catch(() => null);
+  // Only when no worker's heartbeat is current: a new run cancels the running one (worker.yml), so a
+  // worker that is merely slow to answer (busy with a backup) must not be replaced.
+  if (!w?.online && wakeConfigured()) await wakeWorker(me.email).catch(() => null);
   const starting = !s && wakeConfigured() ? await startingSince().catch(() => null) : null;
   const start = starting ? await startProgress(starting).catch(() => null) : null;
   return {

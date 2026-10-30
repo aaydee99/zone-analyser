@@ -14,10 +14,10 @@ name: Console worker
 on:
   workflow_dispatch:
 
-# One worker at a time: a second start request waits for (or replaces a waiting) run.
+# One worker at a time: a new run cancels the one before it (e.g. a worker still on old code).
 concurrency:
   group: console-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
