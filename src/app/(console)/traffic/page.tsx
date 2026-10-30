@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BarChart3, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import type { StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
+import type { DetailFilter, StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
@@ -50,14 +50,16 @@ function Totals({ s, month, partial, target }: { s: TrafficSlice; month: string;
   const t = s.totals, p = s.previous;
   const vs = partial ? ' (same days)' : '';
   const open = useOpenDetail();
-  const go = (label: string, focus: 'security' | 'requests') => (target ? () => open({ t: target, focus, label }) : undefined);
+  // Each card opens only its section, filtered to what it counts.
+  const go = (label: string, focus: 'security' | 'requests', view?: DetailFilter['view']) =>
+    (target ? () => open({ t: target, focus, label, filter: { part: focus, ...(view ? { view } : {}) } }) : undefined);
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
       <OpenCard label="Requests" onOpen={go('Requests', 'requests')}><Stat label="Requests" value={num(t.requests)} sub={<Change now={t.requests} before={p?.requests} month={month} />} /></OpenCard>
-      <OpenCard label="Bandwidth" onOpen={go('Bandwidth', 'requests')}><Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} /></OpenCard>
-      <OpenCard label="Served from cache" onOpen={go('Cache', 'requests')}><Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} /></OpenCard>
-      <OpenCard label="Threats" onOpen={go('Threats', 'security')}><Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} /></OpenCard>
-      <OpenCard label="Page views" onOpen={go('Page views', 'requests')}><Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} /></OpenCard>
+      <OpenCard label="Bandwidth" onOpen={go('Bandwidth', 'requests', 'bytes')}><Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} /></OpenCard>
+      <OpenCard label="Served from cache" onOpen={go('Served from cache', 'requests', 'cache')}><Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} /></OpenCard>
+      <OpenCard label="Threats" onOpen={go('Threats', 'security', 'threats')}><Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} /></OpenCard>
+      <OpenCard label="Page views" onOpen={go('Page views', 'requests', 'pages')}><Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} /></OpenCard>
       <OpenCard label="Visitors" onOpen={go('Visitors', 'requests')}><Stat label="Visitors / day" value={num(perDay(t))} sub={<span title={`Average of the daily unique visitors${vs}`}>daily average</span>} /></OpenCard>
     </div>
   );

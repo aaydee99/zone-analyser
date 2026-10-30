@@ -53,7 +53,7 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
-  const qs = useMemo(() => new URLSearchParams({ month: t.month, account: t.account, ...(t.zone ? { zone: t.zone } : {}), ...(filter?.ip ? { ip: filter.ip } : {}), ...(filter?.rule ? { rule: filter.rule } : {}), ...(filter?.ruleset ? { ruleset: filter.ruleset } : {}), ...(filter?.day ? { day: filter.day } : {}), ...(filter?.hour !== undefined ? { hour: String(filter.hour) } : {}) }).toString(), [t.month, t.account, t.zone, filter?.ip, filter?.rule, filter?.ruleset, filter?.day, filter?.hour]);
+  const qs = useMemo(() => new URLSearchParams({ month: t.month, account: t.account, ...(t.zone ? { zone: t.zone } : {}), ...(filter?.ip ? { ip: filter.ip } : {}), ...(filter?.rule ? { rule: filter.rule } : {}), ...(filter?.ruleset ? { ruleset: filter.ruleset } : {}), ...(filter?.day ? { day: filter.day } : {}), ...(filter?.hour !== undefined ? { hour: String(filter.hour) } : {}), ...(filter?.view ? { view: filter.view } : {}), ...(filter?.part ? { part: filter.part } : {}) }).toString(), [t.month, t.account, t.zone, filter?.ip, filter?.rule, filter?.ruleset, filter?.day, filter?.hour, filter?.view, filter?.part]);
   useEffect(() => {
     const mine = ++seq.current;
     setBusy(true); setError(''); setPending(null); setD(null);
@@ -459,6 +459,9 @@ function Deployed({ d }: { d: ZoneDetail }) {
 
 function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule: string) => void; onRuleset: (ruleset: string) => void }) {
   const rules = d.security.breakdowns.rules ?? [];
+  // Without the rule totals nothing is known about hits: say so instead of "nothing matched".
+  const unknown = <p className="text-xs text-faint">Not known: the rule totals could not be read.</p>;
+  const known = !!d.security.breakdowns.rules;
   const managed = rules.filter((r) => isManaged(r, d.rulesetNames));
   // Hits per managed ruleset, with the action mix and its busiest rules.
   interface Hit { id: string; name: string; count: number; actions: Map<string, number>; rules: DetailRow[] }
@@ -486,7 +489,7 @@ function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule
       <Deployed d={d} />
       <div>
         <div className="eyebrow mb-2">Managed rulesets hit</div>
-        {!groups.length ? <p className="text-xs text-faint">No managed rule matched.</p> : (
+        {!known ? unknown : !groups.length ? <p className="text-xs text-faint">No managed rule matched.</p> : (
           <div className="grid gap-3 lg:grid-cols-2">
             {groups.map((g) => (
               <div key={g.id || g.name} className="rounded-lg border border-line p-3">
@@ -523,7 +526,7 @@ function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule
           <p className="mb-3 text-xs text-muted">
             OWASP rules add to a request&apos;s anomaly score; only &ldquo;949110: Inbound Anomaly Score Exceeded&rdquo; acts on the request, once the score reaches the threshold. The rules below show what pushed requests up.
           </p>
-          {!owasp.length ? <p className="text-xs text-faint">No OWASP rule matched this month.</p> : (
+          {!known ? unknown : !owasp.length ? <p className="text-xs text-faint">No OWASP rule matched this month.</p> : (
             <div className="space-y-5">
               <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
                 <div><div className="eyebrow">Requests over the threshold</div><div className="mt-1 text-[22px] font-semibold tabular-nums">{whole.format(anomaly.reduce((n, r) => n + r.count, 0))}</div></div>
@@ -578,15 +581,27 @@ function ZonesRead({ d }: { d: ZoneDetail }) {
 }
 
 
+/** The grouped numbers (totals, charts, top lists) could not be read: why, and whether anything else below came in. */
+function Unread({ message, what, more }: { message?: string; what: string; more: boolean }) {
+  return (
+    <Alert tone={more ? 'warn' : 'info'} title={more ? `The totals and top lists of ${what} could not be read` : undefined}>
+      {message ?? 'Not available'}{more ? ' — what Cloudflare did send is shown below.' : ''}
+    </Alert>
+  );
+}
+
 function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
   const { ip: onIp, rule: onRule, ruleset: onRuleset } = on;
   const s = d.security;
-  if (!s.available) return <Alert tone="info">{s.message ?? 'Not available'}</Alert>;
   const b = s.breakdowns;
+  // Whatever did come in is shown, also when the grouped numbers could not be read.
+  const grouped = s.available;
   return (
     <div className="space-y-6">
+      {!grouped && <Unread message={s.message} what="security events" more={s.events.length > 0 || !!d.managed?.length} />}
       <Coverage ds={s} />
       <ZonesRead d={d} />
+      {grouped && <>
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
         <div><div className="eyebrow">Security events</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(s.total)}</div></div>
         <div className="flex flex-wrap gap-1.5">
@@ -604,7 +619,9 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
           <RulesTable rows={b.rules} names={d.rulesetNames} total={s.total} onPick={onRule} />
         </div>
       )}
+      </>}
       <ManagedSection d={d} onRule={onRule} onRuleset={onRuleset} />
+      {grouped && <>
       {b.ips && (
         <div>
           <div className="eyebrow mb-2">Top client IPs</div>
@@ -621,11 +638,12 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
         <BarList title="HTTP methods" rows={b.methods} label={(r) => r.dims.clientRequestHTTPMethodName || '—'} total={s.total} />
       </div>
       <BarList title="User agents" rows={b.userAgents} label={(r) => <span className="font-mono text-[11px]">{r.dims.userAgent || '(none)'}</span>} total={s.total} />
-      <div>
+      </>}
+      {(grouped || s.events.length > 0) && <div>
         <div className="eyebrow mb-2">Single events</div>
-        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(s.events.length)} events since {fmtDate(s.eventsSince)} — open a day or an hour on the chart for every event in it.</p>}
+        {s.eventsSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(s.events.length)} events since {fmtDate(s.eventsSince)}{grouped ? ' — open a day or an hour on the chart for every event in it' : ''}.</p>}
         <EventsTable events={s.events} names={d.rulesetNames} onIp={onIp} onRule={onRule} />
-      </div>
+      </div>}
     </div>
   );
 }
@@ -633,13 +651,15 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
 function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
   const onIp = on.ip;
   const q = d.requests;
-  if (!q.available) return <Alert tone="info">{q.message ?? 'Not available'}</Alert>;
   const b = q.breakdowns;
   const alias = timeAliasOf(b);
   const totalBytes = (alias ? b[alias] : []).reduce((n, r) => n + (r.bytes ?? 0), 0);
+  const grouped = q.available;
   return (
     <div className="space-y-6">
+      {!grouped && <Unread message={q.message} what="requests" more={!!q.samples?.length} />}
       <Coverage ds={q} />
+      {grouped && <>
       <div className="flex flex-wrap gap-x-8 gap-y-2">
         <div><div className="eyebrow">Requests</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{whole.format(q.total)}</div></div>
         {totalBytes > 0 && <div><div className="eyebrow">Bandwidth</div><div className="mt-1 text-[26px] font-semibold tabular-nums">{bytes(totalBytes)}</div></div>}
@@ -665,13 +685,14 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
         <BarList title="HTTP protocol" rows={b.protocols} label={(r) => r.dims.clientRequestHTTPProtocol || 'Unknown'} total={q.total} />
       </div>
       <BarList title="User agents" rows={b.userAgents} label={(r) => <span className="font-mono text-[11px]">{r.dims.userAgent || '(none)'}</span>} total={q.total} />
-      {(q.samples || q.samplesNote) && (
+      </>}
+      {(q.samples?.length || q.samplesNote || (grouped && q.samples)) && (
         <div>
           <div className="eyebrow mb-2">Single requests</div>
           {q.samplesNote && <p className="mb-2 text-xs text-muted">{q.samplesNote}</p>}
           {q.samples && (
             <>
-              {q.samplesSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(q.samples.length)} requests since {fmtDate(q.samplesSince)} (Cloudflare samples busy times) — open a day or an hour on the chart for more of them.</p>}
+              {q.samplesSince && <p className="mb-2 text-xs text-muted">The newest {whole.format(q.samples.length)} requests since {fmtDate(q.samplesSince)} (Cloudflare samples busy times){grouped ? ' — open a day or an hour on the chart for more of them' : ''}.</p>}
               <RequestsTable rows={q.samples} onIp={onIp} />
             </>
           )}
@@ -691,18 +712,23 @@ const OpenCtx = createContext<(r: DetailRequest) => void>(() => {});
 export const useOpenDetail = () => useContext(OpenCtx);
 
 const timeOf = (f?: DetailFilter): DetailFilter => (f?.day ? { day: f.day, ...(f.hour !== undefined ? { hour: f.hour } : {}) } : {});
+/** The card a window was opened from: its view (cache, page views, bandwidth, threats) and section. */
+const shapeOf = (f?: DetailFilter): DetailFilter => ({ ...(f?.view ? { view: f.view } : {}), ...(f?.part ? { part: f.part } : {}) });
+const VIEW_LABEL: Record<NonNullable<DetailFilter['view']>, string> = {
+  cache: 'Served from cache', pages: 'Page views (HTML)', bytes: 'Ranked by bandwidth', threats: 'Blocked or challenged',
+};
 
 /** Clicks inside a detail: an IP, rule or ruleset keeps the time; a bar narrows the time and keeps the IP / rule / ruleset. */
 function handlersFor(req: DetailRequest, open: (r: DetailRequest) => void): On {
   const f = req.filter ?? {};
   const narrow: DetailFilter = f.ip ? { ip: f.ip } : f.rule ? { rule: f.rule } : f.ruleset ? { ruleset: f.ruleset } : {};
   return {
-    ip: (ip) => open({ t: req.t, filter: { ...timeOf(f), ip } }),
-    rule: (rule) => open({ t: req.t, filter: { ...timeOf(f), rule } }),
-    ruleset: (ruleset) => open({ t: req.t, filter: { ...timeOf(f), ruleset } }),
+    ip: (ip) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), ip } }),
+    rule: (rule) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), rule } }),
+    ruleset: (ruleset) => open({ t: req.t, filter: { ...timeOf(f), ...shapeOf(f), ruleset } }),
     time: (alias, row) => {
-      if (alias === 'daily') open({ t: req.t, filter: { ...narrow, day: row.dims.date }, focus: req.focus, label: req.label });
-      else if (alias === 'hourly') open({ t: req.t, filter: { ...narrow, day: row.dims.datetimeHour.slice(0, 10), hour: Number(row.dims.datetimeHour.slice(11, 13)) }, focus: req.focus, label: req.label });
+      if (alias === 'daily') open({ t: req.t, filter: { ...narrow, ...shapeOf(f), day: row.dims.date }, focus: req.focus, label: req.label });
+      else if (alias === 'hourly') open({ t: req.t, filter: { ...narrow, ...shapeOf(f), day: row.dims.datetimeHour.slice(0, 10), hour: Number(row.dims.datetimeHour.slice(11, 13)) }, focus: req.focus, label: req.label });
     },
   };
 }
@@ -722,13 +748,13 @@ function DetailWindow({ req, onClose, onBack, open }: { req: DetailRequest; onCl
   const on = handlersFor(req, open);
   const { title, when } = titleOf(req, d);
   const reqFirst = req.focus === 'requests';
-  const security = d && (
+  const security = d && f?.part !== 'requests' && (
     <section key="s">
       <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><ShieldAlert className="size-4 text-signal" />Security events</h3>
       <SecurityBody d={d} on={on} />
     </section>
   );
-  const requests = d && d.requests.message !== 'Requests are not linked to rules' && (
+  const requests = d && f?.part !== 'security' && d.requests.message !== 'Requests are not linked to rules' && (
     <section key="r">
       <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Network className="size-4 text-signal" />Requests</h3>
       <RequestsBody d={d} on={on} />
@@ -741,6 +767,8 @@ function DetailWindow({ req, onClose, onBack, open }: { req: DetailRequest; onCl
   if (f?.ip) chips.push({ label: `IP ${f.ip}`, drop: { ...f, ip: undefined } });
   if (f?.rule) chips.push({ label: 'This rule', drop: { ...f, rule: undefined } });
   if (f?.ruleset) chips.push({ label: 'This ruleset', drop: { ...f, ruleset: undefined } });
+  if (f?.view) chips.push({ label: VIEW_LABEL[f.view], drop: { ...f, view: undefined } });
+  if (f?.part) chips.push({ label: f.part === 'security' ? 'Security events only' : 'Requests only', drop: { ...f, part: undefined } });
   return (
     <Modal open onClose={onClose} width="max-w-6xl" title={title}
       description={`${when}${req.t.zone ? '' : ' · the account’s busiest zones added up'} — click any IP, rule, ruleset, day or hour to go deeper.`}>
@@ -754,7 +782,7 @@ function DetailWindow({ req, onClose, onBack, open }: { req: DetailRequest; onCl
         ))}
       </div>
       {error && <Alert tone="bad" title="Could not be read">{error}</Alert>}
-      {busy && !d && <Reading what={f?.hour !== undefined ? 'this hour' : f?.day ? 'this day' : f?.ip ? 'this IP' : f?.ruleset ? 'this ruleset' : f?.rule ? 'this rule' : 'the details'} pending={pending} />}
+      {busy && !d && <Reading what={f?.hour !== undefined ? 'this hour' : f?.day ? 'this day' : f?.ip ? 'this IP' : f?.ruleset ? 'this ruleset' : f?.rule ? 'this rule' : f?.part === 'security' ? 'the security events' : f?.part === 'requests' ? 'the requests' : 'the details'} pending={pending} />}
       {d && <div className="space-y-10">{reqFirst ? [requests, security] : [security, requests]}</div>}
     </Modal>
   );

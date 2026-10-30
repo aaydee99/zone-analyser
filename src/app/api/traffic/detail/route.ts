@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { route } from '@/lib/http';
 import { trafficMonths } from '@/lib/traffic';
 import { zoneDetail } from '@/lib/traffic-security';
+import type { DetailFilter } from '@/lib/traffic-types';
 
 export const dynamic = 'force-dynamic';
 const POLL_WAIT_MS = 5_000;
@@ -15,7 +16,8 @@ const POLL_WAIT_MS = 5_000;
 export const GET = route(async (req) => {
   const q = new URL(req.url).searchParams;
   const r = await zoneDetail(q.get('month') || trafficMonths()[0], q.get('account') ?? '', q.get('zone') ?? '',
-    { ip: q.get('ip') || undefined, rule: q.get('rule') || undefined, ruleset: q.get('ruleset') || undefined, day: q.get('day') || undefined, hour: q.get('hour') ? Number(q.get('hour')) : undefined }, q.get('job'),
+    { ip: q.get('ip') || undefined, rule: q.get('rule') || undefined, ruleset: q.get('ruleset') || undefined, day: q.get('day') || undefined, hour: q.get('hour') ? Number(q.get('hour')) : undefined,
+      view: (q.get('view') || undefined) as DetailFilter['view'], part: (q.get('part') || undefined) as DetailFilter['part'] }, q.get('job'),
     // A poll of a running read waits briefly: a waiting request holds one of the worker's slots.
     q.get('job') ? POLL_WAIT_MS : undefined);
   return 'pending' in r ? NextResponse.json(r, { status: 202, headers: { 'Retry-After': '3' } }) : r;

@@ -4,7 +4,7 @@ import { tag } from './cache';
 import { HttpError } from './http';
 import { GRAPHQL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, readAnswer, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
 import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
-import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
+import { DETAIL_VIEWS, MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
 import { credentialForRun } from './vault';
 import { rulesetNames } from './zone-explorer';
 
@@ -221,15 +221,26 @@ function pack(specs: Spec[], maxFields: number): Spec[][] {
   return out;
 }
 
+/** Cache statuses Cloudflare counts as served from cache. */
+const CACHED = ['hit', 'stale', 'updating', 'revalidated'];
+/** Security actions that stop or challenge a request (what the Threats card counts), in both spellings Cloudflare has used. */
+const THREAT_ACTIONS = ['block', 'challenge', 'jschallenge', 'js_challenge', 'managed_challenge', 'connectionClose', 'connection_close', 'forceConnectionClose', 'force_connection_close'];
+const list = (xs: string[]) => `[${xs.map(J).join(', ')}]`;
+
 const filterOf = (dataset: Dataset, f: DetailFilter | null) => {
-  if (f?.ip) return `, clientIP: ${J(f.ip)}`;
-  if (dataset === 'httpRequestsAdaptiveGroups' || dataset === 'httpRequestsAdaptive') return '';
-  return f?.rule ? `, ruleId: ${J(f.rule)}` : f?.ruleset ? `, rulesetId: ${J(f.ruleset)}` : '';
+  const ip = f?.ip ? `, clientIP: ${J(f.ip)}` : '';
+  if (dataset === 'httpRequestsAdaptiveGroups' || dataset === 'httpRequestsAdaptive') {
+    return ip + (f?.view === 'cache' ? `, cacheStatus_in: ${list(CACHED)}` : f?.view === 'pages' ? `, edgeResponseContentTypeName: ${J('html')}` : '');
+  }
+  return (ip || (f?.rule ? `, ruleId: ${J(f.rule)}` : f?.ruleset ? `, rulesetId: ${J(f.ruleset)}` : '')) + (f?.view === 'threats' ? `, action_in: ${list(THREAT_ACTIONS)}` : '');
 };
+/** Top lists ranked by bandwidth (the Bandwidth card) or by count. */
+const byBytes = (f: DetailFilter | null) => f?.view === 'bytes';
+const rank = (f: DetailFilter | null) => (a: DetailRow, b: DetailRow) => (byBytes(f) ? (b.bytes ?? 0) - (a.bytes ?? 0) : 0) || b.count - a.count;
 
 function groupsQuery(dataset: Dataset, zoneId: string, part: { since: string; until: string }, specs: Spec[], f: DetailFilter | null, pageSize: number) {
   return zoneQuery(zoneId, specs.map((s) =>
-    `${s.alias}: ${dataset}(limit: ${Math.min(s.limit, pageSize)}, filter: { datetime_geq: ${J(part.since)}, datetime_lt: ${J(part.until)}${filterOf(dataset, f)} }, orderBy: [count_DESC]) `
+    `${s.alias}: ${dataset}(limit: ${Math.min(s.limit, pageSize)}, filter: { datetime_geq: ${J(part.since)}, datetime_lt: ${J(part.until)}${filterOf(dataset, f)} }, orderBy: [${byBytes(f) && s.bytes ? 'sum_edgeResponseBytes_DESC' : 'count_DESC'}]) `
     + `{ count ${s.bytes ? 'sum { edgeResponseBytes } ' : ''}dimensions { ${s.dims.join(' ')} } }`).join(' '));
 }
 
@@ -305,7 +316,7 @@ async function readDataset(ask: Ask, dataset: Dataset, zoneId: string, month: st
   }
   const breakdowns = Object.fromEntries(ok.map((s) => {
     const t = TIME_DIM[s.alias];
-    const rows = [...merged.get(s.alias)!.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : b.count - a.count));
+    const rows = [...merged.get(s.alias)!.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : rank(f)(a, b)));
     return [s.alias, t ? rows : rows.slice(0, SHOW[s.alias] ?? 25)];
   }));
   const notes: string[] = [];
@@ -343,8 +354,10 @@ const ZONES_AT_ONCE = 2;
 const ABANDON_MS = Number(process.env.TRAFFIC_DETAIL_ABANDON_MS) || 90_000;
 
 const filterKey = (f: DetailFilter | null) =>
-  `${f?.day ? `&day=${f.day}` : ''}${f?.hour !== undefined ? `&hour=${f.hour}` : ''}${f?.ip ? `&ip=${encodeURIComponent(f.ip)}` : ''}${f?.rule ? `&rule=${encodeURIComponent(f.rule)}` : ''}${f?.ruleset ? `&ruleset=${encodeURIComponent(f.ruleset)}` : ''}`;
+  `${f?.day ? `&day=${f.day}` : ''}${f?.hour !== undefined ? `&hour=${f.hour}` : ''}${f?.ip ? `&ip=${encodeURIComponent(f.ip)}` : ''}${f?.rule ? `&rule=${encodeURIComponent(f.rule)}` : ''}${f?.ruleset ? `&ruleset=${encodeURIComponent(f.ruleset)}` : ''}${f?.view ? `&view=${f.view}` : ''}${f?.part ? `&part=${f.part}` : ''}`;
 const NO_RULE_REQUESTS = (): DatasetDetail => ({ available: false, message: 'Requests are not linked to rules', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} });
+/** A section the window does not show is not read (it would only spend the query limit). */
+const NOT_READ = (): DatasetDetail => ({ available: false, message: 'Not read for this view', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} });
 
 // ── Managed rulesets deployed on the zone ───────────────────────────────────
 
@@ -399,18 +412,20 @@ async function readZoneDetail(scope: Scope, zoneId: string, month: string, f: De
     progress.total += 1;
     const ask: Ask = (text) => gql(token, text, progress);
     const limits = await limitsOf(ask, zoneId).finally(() => { progress.done++; });
+    const noSecurity = f?.part === 'requests', noRequests = f?.part === 'security' || !!f?.rule || !!f?.ruleset;
     const [security, requests, events, names, samples] = await Promise.all([
-      readDataset(ask, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
-      f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS())
+      noSecurity ? Promise.resolve(NOT_READ()) : readDataset(ask, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
+      f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS()) : noRequests ? Promise.resolve(NOT_READ())
         : readDataset(ask, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
-      readSingles(ask, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
+      noSecurity ? Promise.resolve({ list: [] as FirewallEvent[] } as { list: FirewallEvent[]; since?: string; note?: string })
+        : readSingles(ask, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
       rulesetNames(zoneId, true).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),
-      f?.rule || f?.ruleset ? Promise.resolve(null)
+      noRequests ? Promise.resolve(null)
         : readSingles(ask, 'httpRequestsAdaptive', zoneId, month, f, limits.httpRequestsAdaptive, REQUEST_FIELDS, REQUEST_FIELDS_MIN, 'requests'),
     ]);
     if (events.note) security.notes.push(events.note);
     // The deployed managed rulesets belong to the zone, not to an IP or a rule: only read unnarrowed.
-    const managed = f && (f.ip || f.rule || f.ruleset || f.day) ? null : await readManaged(token, zoneId, names);
+    const managed = f && (f.ip || f.rule || f.ruleset || f.day || noSecurity) ? null : await readManaged(token, zoneId, names);
     return {
       month, accountId: scope.accountId, accountName: scope.accountName, zoneId, zoneName: zone.name, filter: f,
       security: { ...security, events: events.list, ...(events.since ? { eventsSince: events.since } : {}) },
@@ -422,7 +437,7 @@ async function readZoneDetail(scope: Scope, zoneId: string, month: string, f: De
 }
 
 /** The zones' datasets added up: breakdowns by their values, with a "zones" breakdown of each zone's total. */
-function mergeDatasets(parts: { name: string; ds: DatasetDetail }[]): DatasetDetail {
+function mergeDatasets(parts: { name: string; ds: DatasetDetail }[], f: DetailFilter | null): DatasetDetail {
   const ok = parts.filter((p) => p.ds.available);
   if (!ok.length) return { available: false, message: parts[0]?.ds.message ?? 'Not available', notes: [], retentionDays: null, parts: 0, total: 0, breakdowns: {} };
   const rows = new Map<string, Map<string, DetailRow>>();
@@ -441,13 +456,13 @@ function mergeDatasets(parts: { name: string; ds: DatasetDetail }[]): DatasetDet
   }
   const breakdowns: Record<string, DetailRow[]> = Object.fromEntries([...rows].map(([alias, m]) => {
     const t = TIME_DIM[alias];
-    const list = [...m.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : b.count - a.count));
+    const list = [...m.values()].sort((a, b) => (t ? a.dims[t].localeCompare(b.dims[t]) : rank(f)(a, b)));
     return [alias, t ? list : list.slice(0, SHOW[alias] ?? 25)];
   }));
   breakdowns.zones = ok.map((p) => {
     const bytes = (timeRowsOf(p.ds.breakdowns) ?? []).reduce((n, r) => n + (r.bytes ?? 0), 0);
     return { dims: { zone: p.name }, count: p.ds.total, ...(bytes ? { bytes } : {}) };
-  }).sort((a, b) => b.count - a.count);
+  }).sort(rank(f));
   const since = ok.map((p) => p.ds.since).filter(Boolean).sort()[0];
   const until = ok.map((p) => p.ds.until).filter(Boolean).sort().at(-1);
   const kept = ok.map((p) => p.ds.retentionDays).filter((x): x is number => x !== null);
@@ -487,14 +502,14 @@ async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | 
     .sort((a, b) => String(b.datetime ?? '').localeCompare(String(a.datetime ?? ''))).slice(0, listSize(f));
   const samplesSince = got.map((x) => x.d.requests.samplesSince).filter(Boolean).sort()[0];
   const eventsSince = got.map((x) => x.d.security.eventsSince).filter(Boolean).sort()[0];
-  const security = mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.security })));
-  const requests = f?.rule || f?.ruleset ? NO_RULE_REQUESTS()
-    : { ...mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.requests }))), samples, ...(samplesSince ? { samplesSince } : {}) };
+  const security = f?.part === 'requests' ? NOT_READ() : mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.security })), f);
+  const requests = f?.rule || f?.ruleset ? NO_RULE_REQUESTS() : f?.part === 'security' ? NOT_READ()
+    : { ...mergeDatasets(got.map((x) => ({ name: x.z.name, ds: x.d.requests })), f), samples, ...(samplesSince ? { samplesSince } : {}) };
   return {
     month, accountId: scope.accountId, accountName: scope.accountName, filter: f, zones: zones.sort((a, b) => a.name.localeCompare(b.name)),
     security: { ...security, events, ...(eventsSince ? { eventsSince } : {}) }, requests,
     rulesetNames: Object.assign({ ...MANAGED_RULESETS }, ...got.map((x) => x.d.rulesetNames)),
-    ...(f && (f.ip || f.rule || f.ruleset || f.day) ? {} : {
+    ...(f && (f.ip || f.rule || f.ruleset || f.day || f.part === 'requests') ? {} : {
       managed: got.flatMap((x) => (x.d.managed ?? []).map((m) => ({ ...m, zone: x.z.name }))),
       ...(got.some((x) => x.d.managedNote) ? { managedNote: got.filter((x) => x.d.managedNote).map((x) => `${x.z.name}: ${x.d.managedNote}`).join(' · ') } : {}),
     }),
@@ -514,11 +529,15 @@ export async function zoneDetail(month: string, accountId: string, zoneId: strin
   if (filter.ruleset && !RULE.test(filter.ruleset)) throw new HttpError(400, 'Not a ruleset ID');
   if ([filter.ip, filter.rule, filter.ruleset].filter(Boolean).length > 1) throw new HttpError(400, 'Narrow to one IP, rule or ruleset at a time');
   if (filter.day && (!/^\d{4}-\d{2}-\d{2}$/.test(filter.day) || !filter.day.startsWith(`${month}-`) || Number.isNaN(Date.parse(`${filter.day}T00:00:00Z`)))) throw new HttpError(400, 'Pick a day of the chosen month (YYYY-MM-DD)');
+  if (filter.view && !DETAIL_VIEWS.includes(filter.view)) throw new HttpError(400, 'Unknown view');
+  if (filter.part && filter.part !== 'security' && filter.part !== 'requests') throw new HttpError(400, 'Unknown part (security or requests)');
+  if (filter.view && filter.part && (filter.view === 'threats') !== (filter.part === 'security')) throw new HttpError(400, 'That view belongs to the other section');
   if (filter.hour !== undefined && (!filter.day || !Number.isInteger(filter.hour) || filter.hour < 0 || filter.hour > 23)) throw new HttpError(400, 'An hour (0–23) needs a day');
   const scope = await scopeOf(accountId, zoneId || undefined);
   const narrow: DetailFilter = filter.ip ? { ip: filter.ip } : filter.rule ? { rule: filter.rule } : filter.ruleset ? { ruleset: filter.ruleset } : {};
   const time: DetailFilter = filter.day ? { day: filter.day, ...(filter.hour !== undefined ? { hour: filter.hour } : {}) } : {};
-  const f: DetailFilter | null = Object.keys(narrow).length || Object.keys(time).length ? { ...narrow, ...time } : null;
+  const shape: DetailFilter = { ...(filter.view ? { view: filter.view } : {}), ...(filter.part ? { part: filter.part } : {}) };
+  const f: DetailFilter | null = Object.keys(narrow).length || Object.keys(time).length || Object.keys(shape).length ? { ...narrow, ...time, ...shape } : null;
   const key = `detail:month=${month}&account=${encodeURIComponent(accountId)}${zoneId ? `&zone=${encodeURIComponent(zoneId)}` : ''}${filterKey(f)}`;
 
   // Never from the cache: a request joins the read that is running for the same thing, or starts one;

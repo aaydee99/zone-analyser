@@ -104,7 +104,13 @@ export interface DetailFilter {
   /** One day of the month (YYYY-MM-DD, UTC), and optionally one hour of it (0–23): everything is read for just that time. */
   day?: string;
   hour?: number;
+  /** A summary card's view: cached requests, HTML (page views), ranked by bandwidth, or blocked / challenged events (threats). */
+  view?: DetailView;
+  /** Only this section is read (a card about requests needs no security events, and the other way round). */
+  part?: 'security' | 'requests';
 }
+export const DETAIL_VIEWS = ['cache', 'pages', 'bytes', 'threats'] as const;
+export type DetailView = (typeof DETAIL_VIEWS)[number];
 
 /** A managed ruleset deployed on the zone (an execute rule in its managed-rules phase) and how it is tuned. */
 export interface ManagedDeployment {
