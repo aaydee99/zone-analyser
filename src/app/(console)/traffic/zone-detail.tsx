@@ -743,7 +743,7 @@ function DetailWindow({ req, onClose, onBack, open }: { req: DetailRequest; onCl
   if (f?.ruleset) chips.push({ label: 'This ruleset', drop: { ...f, ruleset: undefined } });
   return (
     <Modal open onClose={onClose} width="max-w-6xl" title={title}
-      description={`${when}${req.t.zone ? '' : ' · all zones of the account with traffic'} — click any IP, rule, ruleset, day or hour to go deeper.`}>
+      description={`${when}${req.t.zone ? '' : ' · the account’s busiest zones added up'} — click any IP, rule, ruleset, day or hour to go deeper.`}>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {onBack && <Button size="sm" variant="ghost" onClick={onBack} icon={<ArrowLeft className="size-3.5" />}>Back</Button>}
         {chips.map((c) => (

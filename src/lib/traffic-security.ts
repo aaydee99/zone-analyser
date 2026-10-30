@@ -111,6 +111,7 @@ const LIMIT_CODE = 'query-limit';
 function slot(b: Budget, progress?: Progress): Promise<void> {
   const turn = b.queue.then(async () => {
     for (;;) {
+      progress?.signal?.throwIfAborted();
       const now = Date.now();
       b.sent = b.sent.filter((t) => t > now - WINDOW_MS);
       const free = b.coolUntil > now ? b.coolUntil : b.sent.length >= BUDGET ? b.sent[0] + WINDOW_MS : 0;
@@ -126,15 +127,18 @@ function slot(b: Budget, progress?: Progress): Promise<void> {
 async function gql(token: string, text: string, progress?: Progress, tries = 2): Promise<Answer> {
   const b = budgetOf(token);
   await slot(b, progress);
+  const stopped = progress?.signal;
   let a: Answer;
   try {
     const res = await fetch(GRAPHQL, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: text }), signal: AbortSignal.timeout(60_000), cache: 'no-store',
+      body: JSON.stringify({ query: text }), signal: stopped ? AbortSignal.any([stopped, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000), cache: 'no-store',
     });
     const { body, errors } = await readAnswer<{ data?: { viewer?: { zones?: Record<string, unknown>[] } } | null }>(res);
     a = { status: res.status, data: body?.data?.viewer?.zones?.[0] ?? null, errors };
   } catch {
+    // An abandoned read stops here (and in slot), instead of reading on for nobody.
+    stopped?.throwIfAborted();
     return { status: 0, data: null, errors: [{ message: 'Could not reach the Cloudflare API' }] };
   }
   if (a.errors.length) console.warn(`[traffic] Cloudflare GraphQL answered ${a.status} with errors: ${JSON.stringify(a.errors).slice(0, 600)}`);
@@ -327,8 +331,10 @@ async function readSingles(gq: Ask, dataset: 'firewallEventsAdaptive' | 'httpReq
 const IP = /^[0-9A-Fa-f:.]{2,45}$/;
 const RULE = /^[A-Za-z0-9_.:-]{1,128}$/;
 /** At account level: the busiest zones of the month, at most this many. */
-const ACCOUNT_ZONES = 25;
+const ACCOUNT_ZONES = 5;
 const ZONES_AT_ONCE = 2;
+/** A read nobody has polled for this long is stopped: without a cache, nobody would ever see its result. (Browsers slow a hidden tab's timers to once a minute.) */
+const ABANDON_MS = Number(process.env.TRAFFIC_DETAIL_ABANDON_MS) || 90_000;
 
 const filterKey = (f: DetailFilter | null) =>
   `${f?.day ? `&day=${f.day}` : ''}${f?.hour !== undefined ? `&hour=${f.hour}` : ''}${f?.ip ? `&ip=${encodeURIComponent(f.ip)}` : ''}${f?.rule ? `&rule=${encodeURIComponent(f.rule)}` : ''}${f?.ruleset ? `&ruleset=${encodeURIComponent(f.ruleset)}` : ''}`;
@@ -462,7 +468,7 @@ async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | 
     else pick.push(z);
   }
   const read = await inParallel(pick, ZONES_AT_ONCE, async (z) => {
-    try { return { z, d: await readZoneDetail(scope, z.id, month, f, progress) }; } catch (e) { return { z, error: e instanceof Error ? e.message : String(e) }; }
+    try { return { z, d: await readZoneDetail(scope, z.id, month, f, progress) }; } catch (e) { progress.signal?.throwIfAborted(); return { z, error: e instanceof Error ? e.message : String(e) }; }
   });
   const got = read.filter((x): x is { z: (typeof pick)[number]; d: ZoneDetail } => 'd' in x && !!x.d);
   for (const x of read) {
@@ -512,6 +518,6 @@ export async function zoneDetail(month: string, accountId: string, zoneId: strin
   // Never from the cache: a request joins the read that is running for the same thing, or starts one;
   // a finished read is handed only to the polls of that read (they name its job), for a minute.
   const out = await inBackground<ZoneDetail>(key, (progress) => (zoneId ? readZoneDetail(scope, zoneId, month, f, progress) : readAccountDetail(scope, month, f, progress)),
-    waitMs, { keepMs: 60_000, join: job });
+    waitMs, { keepMs: 60_000, join: job, abandonMs: ABANDON_MS });
   return 'pending' in out ? { ...(out as Pending), month, accountId: scope.accountId, ...(zoneId ? { zoneId } : {}), filter: f } : out;
 }
