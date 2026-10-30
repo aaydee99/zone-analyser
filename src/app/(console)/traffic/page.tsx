@@ -265,6 +265,7 @@ function ZoneTable({ zones, r }: { zones: TrafficZone[]; r: TrafficReport }) {
 /** What to read: an account, optionally one zone of it, and a month. */
 interface Choice { account: string; zone: string; month: string }
 const CHOICE_KEY = 'traffic.choice';
+const OLD_WORKER = 'The worker that is running is from before this page was updated and answered in its old format. It restarts with the new version once it is idle (a running backup or an open restore keeps it busy) — or cancel its run in GitHub › Actions › Console worker. Then press Show traffic again.';
 const query = (c: Choice) => new URLSearchParams({ month: c.month, account: c.account, ...(c.zone ? { zone: c.zone } : {}) }).toString();
 const sameChoice = (a: Choice | null, b: Choice | null) => !!a && !!b && a.account === b.account && a.zone === b.zone && a.month === b.month;
 
@@ -317,7 +318,10 @@ export default function TrafficPage() {
       for (let first = true; ; first = false) {
         const rep = await api<TrafficReport | TrafficPending>(`/api/traffic?${query(c)}${fresh && first ? '&fresh=1' : ''}`);
         if (seq !== loadSeq.current) return;
+        if (!rep || typeof rep !== 'object') throw new Error('The console sent an empty answer');
         if (!('pending' in rep)) {
+          // A worker started before this page was updated answers in the old shape (every account at once).
+          if (!rep.scope || !Array.isArray(rep.zones) || !Array.isArray(rep.daily)) throw new Error(OLD_WORKER);
           setR(rep); setPending(null);
           if (fresh) toast('Traffic read again from Cloudflare', 'info');
           break;
