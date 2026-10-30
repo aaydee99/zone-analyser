@@ -178,10 +178,20 @@ async function handle(callId: string, sealed: never) {
       redirect: 'manual',
       cache: 'no-store',
     });
-    const headers: Record<string, string> = {};
+    let headers: Record<string, string> = {};
     for (const h of ANSWER_HEADERS) { const v = res.headers.get(h); if (v) headers[h] = v; }
-    const body = Buffer.from(await res.arrayBuffer());
-    const answer: RelayResponse = { status: res.status, headers };
+    let body = Buffer.from(await res.arrayBuffer());
+    let status = res.status;
+    // An API route this build does not have (Next.js answers its HTML 404; the routes answer JSON):
+    // the console was updated after this worker started. Say so, and stop once nothing is running
+    // so the next request starts a worker with the new code.
+    if (status === 404 && r.path.startsWith('/api/') && !(res.headers.get('content-type') ?? '').includes('application/json')) {
+      if (!g.__outdated) { g.__outdated = 'route missing'; log(`${r.path.split('?')[0]} is not in this build: the console is newer — stopping once nothing is running`); }
+      status = 503;
+      headers = { 'content-type': 'application/json', 'retry-after': '120' };
+      body = Buffer.from(JSON.stringify({ error: 'The worker that is running started before the console was updated and does not have this feature yet. It restarts with the new version as soon as it has finished what it is doing (a running backup or an open restore keeps it busy) — try again in a few minutes, or cancel its run in GitHub › Actions › Console worker.' }));
+    }
+    const answer: RelayResponse = { status, headers };
     let chunks = 0;
     if (body.length <= RELAY_CHUNK) {
       if (body.length) answer.body = body.toString('base64');
