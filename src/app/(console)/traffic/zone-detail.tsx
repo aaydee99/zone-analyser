@@ -54,17 +54,14 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
   const qs = useMemo(() => new URLSearchParams({ month: t.month, account: t.account, ...(t.zone ? { zone: t.zone } : {}), ...(filter?.ip ? { ip: filter.ip } : {}), ...(filter?.rule ? { rule: filter.rule } : {}), ...(filter?.ruleset ? { ruleset: filter.ruleset } : {}), ...(filter?.day ? { day: filter.day } : {}), ...(filter?.hour !== undefined ? { hour: String(filter.hour) } : {}) }).toString(), [t.month, t.account, t.zone, filter?.ip, filter?.rule, filter?.ruleset, filter?.day, filter?.hour]);
-  const lastRefresh = useRef(refresh);
-
   useEffect(() => {
     const mine = ++seq.current;
-    const fresh = refresh !== lastRefresh.current;
-    lastRefresh.current = refresh;
     setBusy(true); setError(''); setPending(null); setD(null);
     void (async () => {
       try {
-        for (let first = true; ; first = false) {
-          const r = await api<ZoneDetail | ZoneDetailPending>(`/api/traffic/detail?${qs}${fresh && first ? '&fresh=1' : ''}`);
+        // Every load reads Cloudflare; the polls name the read they wait for.
+        for (let job = ''; ;) {
+          const r = await api<ZoneDetail | ZoneDetailPending>(`/api/traffic/detail?${qs}${job ? `&job=${encodeURIComponent(job)}` : ''}`);
           if (mine !== seq.current) return;
           if (!r || typeof r !== 'object') throw new Error('The console sent an empty answer');
           if (!('pending' in r)) {
@@ -73,6 +70,7 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
             break;
           }
           setPending(r);
+          job = r.job;
           await new Promise((resolve) => setTimeout(resolve, 3_000));
           if (mine !== seq.current) return;
         }
@@ -808,7 +806,7 @@ export function ZoneDetailView({ month, account, zone }: Target) {
         <div className="p-5">
           {busy && !d && <Reading what="requests" pending={pending} />}
           {d && <RequestsBody d={d} on={on} />}
-          {d && <p className="mt-6 text-[11px] text-faint">Read {fmtDate(d.generatedAt)}{d.cachedIn ? ' (cached — Refresh reads again)' : ''}</p>}
+          {d && <p className="mt-6 text-[11px] text-faint">Read live from Cloudflare {fmtDate(d.generatedAt)}</p>}
         </div>
       </Card>
     </>

@@ -130,13 +130,22 @@ async function run() {
 
   let inflight = 0;
   let lastWork = Date.now();
+  // Supabase unreachable or answering 5xx (often an HTML gateway page): one short line, then every
+  // 10th failure, waiting longer each time (2 s up to 30 s); a line again once it answers.
+  let failures = 0;
+  const queueFailed = async (raw: string) => {
+    failures++;
+    if (failures === 1 || failures % 10 === 0) log(`queue: Supabase did not answer (${brief(raw)})${failures > 1 ? ` — ${failures} times in a row, still retrying` : ', retrying'}`);
+    await sleep(Math.min(2_000 * 2 ** Math.min(failures - 1, 4), 30_000));
+  };
   for (;;) {
     let took = 0;
     try {
       if (inflight < MAX_PARALLEL) {
         const { data, error } = await db().from('worker_calls').select('id').eq('status', 'queued').gt('expires_at', new Date().toISOString())
           .order('created_at').limit(MAX_PARALLEL - inflight);
-        if (error) { log(`queue: ${error.message}`); await sleep(2_000); continue; }
+        if (error) { await queueFailed(error.message); continue; }
+        if (failures) { log(`queue: Supabase answers again after ${failures} failed ${failures === 1 ? 'try' : 'tries'}`); failures = 0; }
         for (const { id: callId } of (data ?? []) as { id: string }[]) {
           // Claimed only if still queued: a second worker never takes the same call.
           const claim = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: new Date().toISOString() })
@@ -150,8 +159,7 @@ async function run() {
       }
     } catch (err) {
       // A dropped connection to Supabase: keep going.
-      log(`queue: ${err instanceof Error ? err.message : String(err)}`);
-      await sleep(2_000);
+      await queueFailed(err instanceof Error ? err.message : String(err));
       continue;
     }
     if (took || inflight) lastWork = Date.now();
@@ -164,6 +172,12 @@ async function run() {
     // Quick to pick up while busy, gentler on Supabase when idle.
     await sleep(took ? 50 : Date.now() - lastWork < 30_000 ? 250 : 1_000);
   }
+}
+
+/** An error in one line: an HTML error page becomes its title ("502 Bad Gateway"). */
+function brief(message: string) {
+  const title = /<title>([^<]*)<\/title>/i.exec(message)?.[1] ?? /<h1>([^<]*)<\/h1>/i.exec(message)?.[1];
+  return (title ?? message).replace(/\s+/g, ' ').trim().slice(0, 200) || 'no answer';
 }
 
 const aadFor = (id: string, part = 'request') => `worker-call:${id}:${part}`;

@@ -1,8 +1,8 @@
 import 'server-only';
 import { inBackground, type Pending, type Progress } from './bg-job';
-import { cached, cacheBackend, tag } from './cache';
+import { tag } from './cache';
 import { HttpError } from './http';
-import { CLOSED_TTL, GRAPHQL, RUNNING_TTL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
+import { GRAPHQL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
 import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
 import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
 import { credentialForRun } from './vault';
@@ -378,18 +378,10 @@ async function readManaged(token: string, zoneId: string, names: Record<string, 
   return { list };
 }
 
-/** Something could not be read for a reason that may pass (an error, not the plan): kept a minute, not hours. */
-const SHAKY_TTL = 60_000;
-const PLAN_ONLY = /plan|keeps this|not linked to rules/i;
-const shaky = (d: ZoneDetail) => [d.security, d.requests].some((x) => !x.available && !PLAN_ONLY.test(x.message ?? ''))
-  || [...d.security.notes, ...d.requests.notes, d.requests.samplesNote ?? ''].some((n) => /could not be read/.test(n));
-
-/** One zone's detail for the month (cached per zone, month and IP / rule). */
-function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFilter | null, fresh: boolean, progress: Progress): Promise<ZoneDetail> {
+/** One zone's detail for the month, read from Cloudflare every time (never from the cache). */
+async function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFilter | null, progress: Progress): Promise<ZoneDetail> {
   const zone = scope.zones.find((z) => z.id === zoneId)!;
-  const { partial } = rangeOf(month);
-  const ttl = (d: ZoneDetail) => (shaky(d) ? SHAKY_TTL : partial ? RUNNING_TTL : CLOSED_TTL);
-  return cached(`path:/api/traffic/detail?month=${month}&zone=${encodeURIComponent(zoneId)}${filterKey(f)}`, ttl, async (): Promise<ZoneDetail> => {
+  {
     const cred = scope.credentialOf[zoneId];
     let token = '';
     try { token = cred ? (await credentialForRun(cred.id, 'cloudflare')).fields.apiToken : ''; } catch { /* below */ }
@@ -402,7 +394,7 @@ function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFi
       f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS())
         : readDataset(ask, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
       readSingles(ask, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
-      rulesetNames(zoneId).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),
+      rulesetNames(zoneId, true).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),
       f?.rule || f?.ruleset ? Promise.resolve(null)
         : readSingles(ask, 'httpRequestsAdaptive', zoneId, month, f, limits.httpRequestsAdaptive, REQUEST_FIELDS, REQUEST_FIELDS_MIN, 'requests'),
     ]);
@@ -416,7 +408,7 @@ function readZoneDetail(scope: Scope, zoneId: string, month: string, f: DetailFi
       rulesetNames: names, generatedAt: new Date().toISOString(),
       ...(managed ? { managed: managed.list, ...(managed.note ? { managedNote: managed.note } : {}) } : {}),
     };
-  }, fresh);
+  }
 }
 
 /** The zones' datasets added up: breakdowns by their values, with a "zones" breakdown of each zone's total. */
@@ -457,8 +449,8 @@ function mergeDatasets(parts: { name: string; ds: DatasetDetail }[]): DatasetDet
   };
 }
 
-/** An account: its busiest zones of the month read one by one (each cached), then added up. */
-async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | null, fresh: boolean, progress: Progress): Promise<ZoneDetail> {
+/** An account: its busiest zones of the month read one by one, then added up. */
+async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | null, progress: Progress): Promise<ZoneDetail> {
   // The month's totals (usually cached already) say which zones had traffic, busiest first.
   const report = await trafficReport(month, scope.accountId, undefined, false, 90_000).catch(() => null);
   const totals = report && !('pending' in report) ? new Map(report.zones.map((z) => [z.id, z])) : null;
@@ -472,7 +464,7 @@ async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | 
     else pick.push(z);
   }
   const read = await inParallel(pick, ZONES_AT_ONCE, async (z) => {
-    try { return { z, d: await readZoneDetail(scope, z.id, month, f, fresh, progress) }; } catch (e) { return { z, error: e instanceof Error ? e.message : String(e) }; }
+    try { return { z, d: await readZoneDetail(scope, z.id, month, f, progress) }; } catch (e) { return { z, error: e instanceof Error ? e.message : String(e) }; }
   });
   const got = read.filter((x): x is { z: (typeof pick)[number]; d: ZoneDetail } => 'd' in x && !!x.d);
   for (const x of read) {
@@ -505,7 +497,7 @@ async function readAccountDetail(scope: Scope, month: string, f: DetailFilter | 
  * requests for the month (as far back as its plan keeps them) — or, without a zone, the account's busiest
  * zones added up — or how far reading got.
  */
-export async function zoneDetail(month: string, accountId: string, zoneId: string, filter: DetailFilter, fresh = false, waitMs = WAIT_MS): Promise<ZoneDetail | ZoneDetailPending> {
+export async function zoneDetail(month: string, accountId: string, zoneId: string, filter: DetailFilter, job: string | null = null, waitMs = WAIT_MS): Promise<ZoneDetail | ZoneDetailPending> {
   if (!trafficMonths().includes(month)) throw new HttpError(400, 'Pick a month from the last 12 (YYYY-MM)');
   if (filter.ip && !IP.test(filter.ip)) throw new HttpError(400, 'Not an IP address');
   if (filter.rule && !RULE.test(filter.rule)) throw new HttpError(400, 'Not a rule ID');
@@ -519,10 +511,9 @@ export async function zoneDetail(month: string, accountId: string, zoneId: strin
   const f: DetailFilter | null = Object.keys(narrow).length || Object.keys(time).length ? { ...narrow, ...time } : null;
   const key = `detail:month=${month}&account=${encodeURIComponent(accountId)}${zoneId ? `&zone=${encodeURIComponent(zoneId)}` : ''}${filterKey(f)}`;
 
-  const out = await inBackground<ZoneDetail>(key, async (progress) => {
-    const asked = Date.now();
-    const d = zoneId ? await readZoneDetail(scope, zoneId, month, f, fresh, progress) : await readAccountDetail(scope, month, f, fresh, progress);
-    return Date.parse(d.generatedAt) < asked ? { ...d, cachedIn: cacheBackend() } : d;
-  }, waitMs);
+  // Never from the cache: a request joins the read that is running for the same thing, or starts one;
+  // a finished read is handed only to the polls of that read (they name its job), for a minute.
+  const out = await inBackground<ZoneDetail>(key, (progress) => (zoneId ? readZoneDetail(scope, zoneId, month, f, progress) : readAccountDetail(scope, month, f, progress)),
+    waitMs, { keepMs: 60_000, join: job });
   return 'pending' in out ? { ...(out as Pending), month, accountId: scope.accountId, ...(zoneId ? { zoneId } : {}), filter: f } : out;
 }
