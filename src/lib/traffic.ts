@@ -49,7 +49,7 @@ export function rangeOf(month: string, now = new Date()) {
 
 // ── Cloudflare GraphQL ──────────────────────────────────────────────────────
 
-export interface GqlError { message?: string; path?: unknown[]; extensions?: { code?: string } }
+export interface GqlError { message?: string; code?: number | string; path?: unknown[]; extensions?: { code?: string } }
 interface Group {
   dimensions?: { date?: string };
   sum?: {
@@ -67,8 +67,8 @@ async function query(token: string, text: string): Promise<GqlAnswer> {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: text }), signal: AbortSignal.timeout(60_000), cache: 'no-store',
     });
-    const body = (await res.json().catch(() => null)) as { data?: { viewer?: { zones?: GqlAnswer['zones'] } } | null; errors?: GqlError[] | null } | null;
-    return { status: res.status, zones: body?.data?.viewer?.zones ?? null, errors: body?.errors ?? (res.ok ? [] : [{ message: `HTTP ${res.status}` }]) };
+    const { body, errors } = await readAnswer<{ data?: { viewer?: { zones?: GqlAnswer['zones'] } } | null }>(res);
+    return { status: res.status, zones: body?.data?.viewer?.zones ?? null, errors };
   } catch {
     return { status: 0, zones: null, errors: [{ message: 'Could not reach the Cloudflare API' }] };
   }
@@ -84,7 +84,22 @@ function zonesQuery(tags: string[], since: string, until: string, fields: string
 }
 
 /** An error message, or (when Cloudflare sends none) its code or the error itself, so the cause is never hidden. */
-const textOf = (e: GqlError) => e.message || (e.extensions?.code ? `Cloudflare error code ${e.extensions.code}` : Object.keys(e ?? {}).length ? `Cloudflare returned ${JSON.stringify(e).slice(0, 300)}` : '');
+const textOf = (e: GqlError) => (e.message ? `${e.message}${e.code !== undefined ? ` (code ${e.code})` : ''}` : '')
+  || (e.extensions?.code || e.code !== undefined ? `Cloudflare error code ${e.extensions?.code ?? e.code}` : Object.keys(e ?? {}).length ? `Cloudflare returned ${JSON.stringify(e).slice(0, 300)}` : '');
+
+/** The start of an answer that is not JSON: an HTML page's title ("502 Bad Gateway"), or its first words. */
+const briefText = (raw: string) => ((/<title>([^<]*)<\/title>/i.exec(raw)?.[1] ?? raw.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim().slice(0, 200) || 'an empty answer');
+
+/** Cloudflare's answer: its JSON and its errors, with the HTTP status and what it sent when it is not JSON. */
+export async function readAnswer<T>(res: Response): Promise<{ body: T | null; errors: GqlError[] }> {
+  const raw = await res.text().catch(() => '');
+  let body: (T & { errors?: GqlError[] | null }) | null = null;
+  try { body = raw ? JSON.parse(raw) : null; } catch { /* not JSON: below */ }
+  const errors = Array.isArray(body?.errors) ? [...body.errors] : [];
+  if (!body) errors.push({ message: `Cloudflare answered HTTP ${res.status} with ${briefText(raw)}` });
+  else if (!res.ok && !errors.some(textOf)) errors.push({ message: `Cloudflare answered HTTP ${res.status}` });
+  return { body, errors };
+}
 export const errorText = (errors: GqlError[]) => [...new Set(errors.map(textOf).filter(Boolean))].join('; ') || 'Cloudflare returned an error';
 /** The breakdown fields are unknown to this API (schema change): fall back to the totals. */
 const schemaError = (errors: GqlError[]) => errors.some((e) => /unknown field|cannot query field|not defined|does not exist|undefined field/i.test(e.message ?? ''));

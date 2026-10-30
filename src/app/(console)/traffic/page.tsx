@@ -7,6 +7,7 @@ import type { StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficRe
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
+import { zoneList as loadZoneList } from '@/lib/zone-list-client';
 import { bytes, dayLabel, num, pct, whole } from './format';
 import { DetailHost, ZoneDetailView, useOpenDetail, type Target } from './zone-detail';
 
@@ -251,7 +252,7 @@ function ZoneTable({ zones, r }: { zones: TrafficZone[]; r: TrafficReport }) {
                       <td className="px-3 py-2 text-right text-ink-2">{num(perDay(z.totals))}</td>
                     </>
                   ) : (
-                    <td colSpan={6} className="px-3 py-2 text-right"><Badge tone={z.status === 'unavailable' ? 'warn' : 'bad'} className="max-w-full"><span className="truncate" title={z.message}>{z.status === 'unavailable' ? 'No analytics access' : 'Could not be read'}</span></Badge></td>
+                    <td colSpan={6} className="px-3 py-2 text-right"><span className="flex items-center justify-end gap-2"><Badge tone={z.status === 'unavailable' ? 'warn' : 'bad'} className="shrink-0">{z.status === 'unavailable' ? 'No analytics access' : 'Could not be read'}</Badge>{z.message && <span className="min-w-0 text-left text-xs wrap-break-word text-muted">Cloudflare: {z.message}</span>}</span></td>
                   )}
                 </tr>
                 {expanded && (
@@ -294,7 +295,8 @@ export default function TrafficPage() {
   const [pending, setPending] = useState<TrafficPending | null>(null);
 
   useEffect(() => {
-    api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((x) => {
+    // The same zone list as the zone explorer's: already loaded when that page was open.
+    loadZoneList().then((x) => {
       setZoneList(x.zones);
       // The last choice is filled in again (not read: that waits for "Show traffic").
       try {
@@ -321,6 +323,8 @@ export default function TrafficPage() {
   // Reading can take a while: the API answers "still reading" (202) and this asks again until it is
   // ready. A newer load (another choice, Refresh) ends the older one's loop.
   const loadSeq = useRef(0);
+  // Leaving the page ends the loop (its polls would keep the worker busy for the next page).
+  useEffect(() => () => { loadSeq.current++; }, []);
   const load = useCallback(async (c: Choice, fresh = false) => {
     const seq = ++loadSeq.current;
     setApplied(c); setBusy(true); setError(''); setPending(null);

@@ -80,6 +80,8 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
         if (mine === seq.current) setBusy(false);
       }
     })();
+    // Closed or left: the loop ends (its polls would keep the worker busy for the next page).
+    return () => { seq.current++; };
   }, [qs, refresh]);
   return { d, pending, error, busy };
 }

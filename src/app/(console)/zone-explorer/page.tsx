@@ -7,6 +7,7 @@ import type { ZoneGroupReport, ZoneListItem, ZoneRulePhase, ZoneSection, ZoneSum
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import { zoneList } from '@/lib/zone-list-client';
 
 const ROWS = 300;
 /** Columns worth showing first for a list of objects. */
@@ -290,7 +291,7 @@ export default function ZoneExplorerPage() {
   const list = useCallback(async (fresh = false) => {
     setListing(true);
     try {
-      const r = await api<{ zones: ZoneListItem[]; problems: { credential: string; error: string }[] }>(`/api/zone-explorer${fresh ? '?fresh=1' : ''}`);
+      const r = await zoneList(fresh);
       setZones(r.zones);
       setProblems(r.problems);
     } catch (e) { setZones([]); toast((e as Error).message, 'bad'); } finally { setListing(false); }

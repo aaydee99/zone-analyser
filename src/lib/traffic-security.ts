@@ -2,7 +2,7 @@ import 'server-only';
 import { inBackground, type Pending, type Progress } from './bg-job';
 import { tag } from './cache';
 import { HttpError } from './http';
-import { GRAPHQL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
+import { GRAPHQL, WAIT_MS, errorText, inParallel, permissionError, rangeOf, readAnswer, scopeOf, trafficMonths, trafficReport, type GqlError, type Scope } from './traffic';
 import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent, ManagedDeployment, ZoneDetail, ZoneDetailPending } from './traffic-types';
 import { MANAGED_RULESETS, OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
 import { credentialForRun } from './vault';
@@ -132,9 +132,7 @@ async function gql(token: string, text: string, progress?: Progress, tries = 2):
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: text }), signal: AbortSignal.timeout(60_000), cache: 'no-store',
     });
-    const body = (await res.json().catch(() => null)) as { data?: { viewer?: { zones?: Record<string, unknown>[] } } | null; errors?: GqlError[] | null } | null;
-    const errors = Array.isArray(body?.errors) ? body.errors : [];
-    if (!res.ok && !errors.some((e) => e.message)) errors.push({ message: `HTTP ${res.status}` });
+    const { body, errors } = await readAnswer<{ data?: { viewer?: { zones?: Record<string, unknown>[] } } | null }>(res);
     a = { status: res.status, data: body?.data?.viewer?.zones?.[0] ?? null, errors };
   } catch {
     return { status: 0, data: null, errors: [{ message: 'Could not reach the Cloudflare API' }] };
@@ -353,9 +351,9 @@ async function readManaged(token: string, zoneId: string, names: Record<string, 
     return { list: [], note: 'Managed rules could not be read: the Cloudflare API was not reachable' };
   }
   if (res.status === 404) return { list: [] };
-  const body = (await res.json().catch(() => null)) as { success?: boolean; result?: { rules?: ExecuteRule[] }; errors?: GqlError[] } | null;
+  const { body, errors } = await readAnswer<{ success?: boolean; result?: { rules?: ExecuteRule[] } }>(res);
   if (!res.ok || !body?.success) {
-    return { list: [], note: `Managed rules could not be read${res.status === 403 ? ' — the token needs "Zone › Zone WAF › Read"' : ''} (${errorText(body?.errors ?? [{ message: `HTTP ${res.status}` }])})` };
+    return { list: [], note: `Managed rules could not be read${res.status === 403 ? ' — the token needs "Zone › Zone WAF › Read"' : ''} (${errorText(errors)})` };
   }
   const list = (body.result?.rules ?? []).filter((r) => r.action === 'execute' && r.action_parameters?.id).map((r): ManagedDeployment => {
     const id = r.action_parameters!.id!;
