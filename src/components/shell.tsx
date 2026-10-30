@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Activity, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
 import { cx } from './ui';
@@ -39,6 +39,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'Cloudflare',
     items: [
       { href: '/zone-explorer', label: 'Zone explorer', icon: Globe },
+      { href: '/traffic', label: 'Traffic analytics', icon: BarChart3 },
       { href: '/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
     ],
   },
