@@ -3,12 +3,13 @@ import { cached, cacheBackend } from './cache';
 import { HttpError } from './http';
 import { credentialForRun } from './vault';
 import { listZones } from './zone-explorer';
+import type { ZoneListItem } from './zone-catalog';
 import { csvFile } from './zone-format';
-import { EMPTY_TOTALS, type StatusClass, type TrafficAccount, type TrafficCountry, type TrafficDay, type TrafficPending, type TrafficReport, type TrafficSlice, type TrafficTotals, type TrafficZone } from './traffic-types';
+import { EMPTY_TOTALS, type StatusClass, type TrafficCountry, type TrafficDay, type TrafficPending, type TrafficReport, type TrafficSlice, type TrafficTotals, type TrafficZone } from './traffic-types';
 
-// Monthly traffic analysis: one month of HTTP traffic for every zone the stored Cloudflare tokens
-// can read, from Cloudflare's GraphQL Analytics API (httpRequests1dGroups: one row per zone and day),
-// added up per account and for everything. Read-only: the only call is a fixed GraphQL *query*
+// Monthly traffic analysis: one month of HTTP traffic for the account (or the one zone of it) someone
+// chooses, from Cloudflare's GraphQL Analytics API (httpRequests1dGroups: one row per zone and day),
+// added up for the account. Only the chosen zones are queried. Read-only: the only call is a fixed GraphQL *query*
 // (POST is how GraphQL takes it); zone IDs and dates are checked before they go into it.
 // Each token needs "Zone › Analytics › Read"; zones it cannot read are listed, not hidden.
 
@@ -155,14 +156,36 @@ async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>)
 /** Batches planned and finished, for the "still reading" answer. */
 interface Progress { done: number; total: number }
 
-function readMonth(month: string, fresh: boolean, progress: Progress = { done: 0, total: 0 }): Promise<RawMonth> {
+/** What is read: one account (all of its zones) or one zone of it. Only these zones are ever queried. */
+interface Scope {
+  accountId: string;
+  accountName: string;
+  zoneId?: string;
+  zones: ZoneListItem[];
+  credentialOf: Record<string, { id: string; name: string }>;
+}
+const scopeKey = (s: Pick<Scope, 'accountId' | 'zoneId'>) => `account=${encodeURIComponent(s.accountId)}${s.zoneId ? `&zone=${encodeURIComponent(s.zoneId)}` : ''}`;
+
+/** The account (and zone) from the cached zone list — no Cloudflare call. */
+async function scopeOf(accountId: string, zoneId?: string): Promise<Scope> {
+  if (!accountId) throw new HttpError(400, 'Choose an account');
+  const list = await listZones();
+  const inAccount = list.zones.filter((z) => z.accountId === accountId);
+  if (!inAccount.length) throw new HttpError(404, 'No stored token can read zones in this account');
+  if (zoneId && !inAccount.some((z) => z.id === zoneId)) throw new HttpError(404, 'This zone is not in that account');
+  return {
+    accountId, accountName: inAccount[0].accountName || accountId, ...(zoneId ? { zoneId } : {}),
+    zones: zoneId ? inAccount.filter((z) => z.id === zoneId) : inAccount, credentialOf: list.credentialOf,
+  };
+}
+
+function readMonth(month: string, scope: Scope, fresh: boolean, progress: Progress = { done: 0, total: 0 }): Promise<RawMonth> {
   const { since, until, partial } = rangeOf(month);
-  return cached(`path:/api/traffic?month=${month}`, partial ? RUNNING_TTL : CLOSED_TTL, async () => {
-    const list = await listZones();
-    // Zones grouped by the stored credential that reads them; each token is decrypted once.
+  return cached(`path:/api/traffic?month=${month}&${scopeKey(scope)}`, partial ? RUNNING_TTL : CLOSED_TTL, async () => {
+    // The scope's zones grouped by the stored credential that reads them; each token is decrypted once.
     const byCredential = new Map<string, string[]>();
-    for (const z of list.zones) {
-      const c = list.credentialOf[z.id];
+    for (const z of scope.zones) {
+      const c = scope.credentialOf[z.id];
       if (c && ZONE_TAG.test(z.id)) byCredential.set(c.id, [...(byCredential.get(c.id) ?? []), z.id]);
     }
     const state = { detail: 'full' as 'full' | 'basic' };
@@ -173,7 +196,7 @@ function readMonth(month: string, fresh: boolean, progress: Progress = { done: 0
       let token = '';
       try { token = (await credentialForRun(id, 'cloudflare')).fields.apiToken; } catch { /* below */ }
       if (!token) {
-        problems.push({ credential: Object.values(list.credentialOf).find((c) => c.id === id)?.name ?? id, error: 'Could not be decrypted' });
+        problems.push({ credential: Object.values(scope.credentialOf).find((c) => c.id === id)?.name ?? id, error: 'Could not be decrypted' });
         for (const t of tags) zones[t] = failed('error', 'The stored credential for this zone could not be decrypted');
         continue;
       }
@@ -184,7 +207,7 @@ function readMonth(month: string, fresh: boolean, progress: Progress = { done: 0
       try { return await readZones(j.token, j.tags, since, until, state); } finally { progress.done++; }
     });
     for (const part of parts) Object.assign(zones, part);
-    return { generatedAt: new Date().toISOString(), detail: state.detail, zones, problems: [...list.problems, ...problems] };
+    return { generatedAt: new Date().toISOString(), detail: state.detail, zones, problems };
   }, fresh);
 }
 
@@ -253,61 +276,51 @@ interface Job extends Progress { p: Promise<TrafficReport>; startedAt: string }
 const gj = globalThis as unknown as { __trafficJobs?: Map<string, Job> };
 const jobs = (gj.__trafficJobs ??= new Map());
 
-/** GET /api/traffic?month=YYYY-MM: the month for everything, per account and per zone — or how far reading it got. */
-export async function trafficReport(month: string, fresh = false, waitMs = WAIT_MS): Promise<TrafficReport | TrafficPending> {
+/**
+ * GET /api/traffic?month=YYYY-MM&account=ID[&zone=ID]: one account's month (its zones added up, and each
+ * zone), or one zone's — or how far reading it got. Nothing outside the chosen account or zone is read.
+ */
+export async function trafficReport(month: string, accountId: string, zoneId?: string, fresh = false, waitMs = WAIT_MS): Promise<TrafficReport | TrafficPending> {
   const months = trafficMonths();
   if (!months.includes(month)) throw new HttpError(400, `Pick a month from the last ${MONTHS} (YYYY-MM)`);
-  let job = jobs.get(month);
+  const scope = await scopeOf(accountId, zoneId || undefined);
+  const key = `${month}&${scopeKey(scope)}`;
+  let job = jobs.get(key);
   if (!job) {
     const progress: Progress = { done: 0, total: 0 };
-    const p = buildReport(month, fresh, months, progress).finally(() => jobs.delete(month));
+    const p = buildReport(month, scope, fresh, months, progress).finally(() => jobs.delete(key));
     p.catch(() => { /* answered to whoever waits; the next request starts again */ });
     job = Object.assign(progress, { p, startedAt: new Date().toISOString() });
-    jobs.set(month, job);
+    jobs.set(key, job);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const out = await Promise.race([job.p, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); })]).finally(() => clearTimeout(timer));
-  return out ?? { pending: true, month, done: job.done, total: job.total, startedAt: job.startedAt };
+  return out ?? { pending: true, month, accountId: scope.accountId, ...(scope.zoneId ? { zoneId: scope.zoneId } : {}), done: job.done, total: job.total, startedAt: job.startedAt };
 }
 
-async function buildReport(month: string, fresh: boolean, months: string[], progress: Progress): Promise<TrafficReport> {
+async function buildReport(month: string, scope: Scope, fresh: boolean, months: string[], progress: Progress): Promise<TrafficReport> {
   const asked = Date.now();
   const { since, until, partial, days } = rangeOf(month);
   // Both months at once; the previous one only feeds the comparison, so if it cannot be read there is none.
   const [raw, prev] = await Promise.all([
-    readMonth(month, fresh, progress),
-    readMonth(addMonths(month, -1), false, progress).catch(() => null),
+    readMonth(month, scope, fresh, progress),
+    readMonth(addMonths(month, -1), scope, false, progress).catch(() => null),
   ]);
   const span = partial ? days : null;
 
-  const list = await listZones();
-  const groups = new Map<string, { name: string; zones: typeof list.zones }>();
-  for (const z of list.zones) {
-    if (!raw.zones[z.id]) continue;
-    const key = z.accountId || z.accountName || 'unknown';
-    const g = groups.get(key) ?? { name: z.accountName || z.accountId || 'Unknown account', zones: [] };
-    g.zones.push(z);
-    groups.set(key, g);
-  }
-
-  const accounts: TrafficAccount[] = [...groups].map(([id, g]) => {
-    const zones: TrafficZone[] = g.zones.map((z) => {
-      const r = raw.zones[z.id];
-      return {
-        id: z.id, name: z.name, plan: z.plan, status: r.status, ...(r.message ? { message: r.message } : {}),
-        ...slice([r], prev, [z.id], span),
-      };
-    }).sort((a, b) => b.totals.requests - a.totals.requests || a.name.localeCompare(b.name));
-    const ids = g.zones.map((z) => z.id);
-    return { id, name: g.name, zones, unavailable: zones.filter((z) => z.status !== 'ok').length, ...slice(ids.map((zid) => raw.zones[zid]), prev, ids, span) };
+  const zones: TrafficZone[] = scope.zones.filter((z) => raw.zones[z.id]).map((z) => {
+    const r = raw.zones[z.id];
+    return { id: z.id, name: z.name, plan: z.plan, status: r.status, ...(r.message ? { message: r.message } : {}), ...slice([r], prev, [z.id], span) };
   }).sort((a, b) => b.totals.requests - a.totals.requests || a.name.localeCompare(b.name));
+  const ids = zones.map((z) => z.id);
+  const zone = scope.zoneId ? scope.zones[0] : undefined;
 
-  const all = Object.keys(raw.zones);
   return {
     month, since, until, partial, generatedAt: raw.generatedAt, detail: raw.detail, months,
+    scope: { accountId: scope.accountId, accountName: scope.accountName, ...(zone ? { zoneId: zone.id, zoneName: zone.name } : {}) },
     ...(Date.parse(raw.generatedAt) < asked ? { cachedIn: cacheBackend() } : {}),
-    ...slice(all.map((id) => raw.zones[id]), prev, all, span),
-    accounts, problems: raw.problems,
+    ...slice(ids.map((id) => raw.zones[id]), prev, ids, span),
+    zones, unavailable: zones.filter((z) => z.status !== 'ok').length, problems: raw.problems,
   };
 }
 
@@ -316,15 +329,15 @@ async function buildReport(month: string, fresh: boolean, months: string[], prog
 const pct = (part: number, whole: number) => (whole ? ((part / whole) * 100).toFixed(1) : '');
 const change = (now: number, before: number | undefined) => (before ? (((now - before) / before) * 100).toFixed(1) : '');
 
-/** GET /api/traffic/export.csv?month=YYYY-MM: one row per zone. */
+/** GET /api/traffic/export.csv?month=YYYY-MM&account=ID[&zone=ID]: one row per zone. */
 export function trafficCsv(r: TrafficReport): string {
   const head = ['Account', 'Zone', 'Plan', 'Status', 'Requests', 'Cached requests', 'Cached %', 'Bandwidth (bytes)', 'Cached bandwidth (bytes)', 'Threats', 'Page views',
     'Avg. daily visitors', '2xx', '3xx', '4xx', '5xx', 'Previous requests', 'Change %', 'Note'];
-  const rows = r.accounts.flatMap((a) => a.zones.map((z) => [
-    a.name, z.name, z.plan, z.status, z.totals.requests, z.totals.cachedRequests, pct(z.totals.cachedRequests, z.totals.requests), z.totals.bytes, z.totals.cachedBytes,
+  const rows = r.zones.map((z) => [
+    r.scope.accountName, z.name, z.plan, z.status, z.totals.requests, z.totals.cachedRequests, pct(z.totals.cachedRequests, z.totals.requests), z.totals.bytes, z.totals.cachedBytes,
     z.totals.threats, z.totals.pageViews, z.totals.days ? Math.round(z.totals.uniquesSum / z.totals.days) : 0,
     z.statuses?.['2xx'] ?? '', z.statuses?.['3xx'] ?? '', z.statuses?.['4xx'] ?? '', z.statuses?.['5xx'] ?? '',
     z.previous?.requests ?? '', change(z.totals.requests, z.previous?.requests), z.message ?? '',
-  ]));
+  ]);
   return csvFile([head, ...rows]);
 }

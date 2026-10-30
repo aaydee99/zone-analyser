@@ -18,7 +18,7 @@ export interface TrafficDay { date: string; requests: number; cachedRequests: nu
 export type StatusClass = '1xx' | '2xx' | '3xx' | '4xx' | '5xx';
 export interface TrafficCountry { country: string; requests: number; bytes: number; threats: number }
 
-/** What a zone, an account and the whole report each carry. */
+/** What a zone and an account each carry. */
 export interface TrafficSlice {
   totals: TrafficTotals;
   /** The same days of the previous month (the first N days while the month is still running); null when unreadable. */
@@ -36,13 +36,8 @@ export interface TrafficZone extends TrafficSlice {
   message?: string;
 }
 
-export interface TrafficAccount extends TrafficSlice {
-  id: string;
-  name: string;
-  zones: TrafficZone[];
-  /** Zones the stored tokens cannot read analytics for. */
-  unavailable: number;
-}
+/** What a report covers: one account (all its zones), or one zone of it. */
+export interface TrafficScope { accountId: string; accountName: string; zoneId?: string; zoneName?: string }
 
 export interface TrafficReport extends TrafficSlice {
   /** YYYY-MM */
@@ -56,7 +51,11 @@ export interface TrafficReport extends TrafficSlice {
   cachedIn?: 'redis' | 'memory';
   /** 'basic' when Cloudflare refused the per-country and status-code breakdown. */
   detail: 'full' | 'basic';
-  accounts: TrafficAccount[];
+  scope: TrafficScope;
+  /** The account's zones (busiest first), or just the chosen zone. */
+  zones: TrafficZone[];
+  /** Zones the stored tokens cannot read analytics for. */
+  unavailable: number;
   problems: { credential: string; error: string }[];
   /** Months that can be asked for, newest first. */
   months: string[];
@@ -66,6 +65,8 @@ export interface TrafficReport extends TrafficSlice {
 export interface TrafficPending {
   pending: true;
   month: string;
+  accountId: string;
+  zoneId?: string;
   /** Queries finished and planned so far (zones are read in batches; both this and last month). */
   done: number;
   total: number;

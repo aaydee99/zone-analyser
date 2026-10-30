@@ -3,9 +3,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import type { StatusClass, TrafficAccount, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
+import type { StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import type { ZoneListItem } from '@/lib/zone-catalog';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -209,7 +210,8 @@ function SliceBody({ s, r, totals = true }: { s: TrafficSlice; r: TrafficReport;
   );
 }
 
-function ZoneTable({ a, r }: { a: TrafficAccount; r: TrafficReport }) {
+
+function ZoneTable({ zones, r }: { zones: TrafficZone[]; r: TrafficReport }) {
   const [open, setOpen] = useState<string | null>(null);
   const head = ['Zone', 'Requests', 'Change', 'Bandwidth', 'From cache', 'Threats', 'Visitors / day'];
   return (
@@ -217,7 +219,7 @@ function ZoneTable({ a, r }: { a: TrafficAccount; r: TrafficReport }) {
       <table className="w-full min-w-[720px] text-left text-[12.5px]">
         <thead className="bg-raised/50 text-muted"><tr>{head.map((x, i) => <th key={x} className={cx('px-3 py-2 font-medium whitespace-nowrap', i > 0 && 'text-right')}>{x}</th>)}</tr></thead>
         <tbody className="tabular-nums">
-          {a.zones.map((z: TrafficZone) => {
+          {zones.map((z) => {
             const ok = z.status === 'ok';
             const expanded = open === z.id;
             return (
@@ -260,29 +262,63 @@ function ZoneTable({ a, r }: { a: TrafficAccount; r: TrafficReport }) {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+/** What to read: an account, optionally one zone of it, and a month. */
+interface Choice { account: string; zone: string; month: string }
+const CHOICE_KEY = 'traffic.choice';
+const query = (c: Choice) => new URLSearchParams({ month: c.month, account: c.account, ...(c.zone ? { zone: c.zone } : {}) }).toString();
+const sameChoice = (a: Choice | null, b: Choice | null) => !!a && !!b && a.account === b.account && a.zone === b.zone && a.month === b.month;
+
 export default function TrafficPage() {
   const toast = useToast();
   const months = useMemo(lastMonths, []);
-  const [month, setMonth] = useState(months[0]);
+  // The account and zone lists come from the zone explorer's (cached) zone list: no analytics are read for them.
+  const [zoneList, setZoneList] = useState<ZoneListItem[] | null>(null);
+  const [listError, setListError] = useState('');
+  const [form, setForm] = useState<Choice>({ account: '', zone: '', month: months[0] });
+  const [applied, setApplied] = useState<Choice | null>(null);
   const [r, setR] = useState<TrafficReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [pending, setPending] = useState<TrafficPending | null>(null);
 
-  // Reading a month can take minutes: the API answers "still reading" (202) and this asks again
-  // until it is ready. A newer load (another month, Refresh) ends the older one's loop.
+  useEffect(() => {
+    api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((x) => {
+      setZoneList(x.zones);
+      // The last choice is filled in again (not read: that waits for "Show traffic").
+      try {
+        const last = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? 'null') as Choice | null;
+        if (last && x.zones.some((z) => z.accountId === last.account)) {
+          setForm({ account: last.account, zone: x.zones.some((z) => z.id === last.zone && z.accountId === last.account) ? last.zone : '', month: months.includes(last.month) ? last.month : months[0] });
+        }
+      } catch { /* storage blocked */ }
+    }).catch((e) => setListError(e instanceof Error ? e.message : String(e)));
+  }, [months]);
+
+  const accounts = useMemo(() => {
+    const by = new Map<string, { id: string; name: string; zones: number }>();
+    for (const z of zoneList ?? []) {
+      if (!z.accountId) continue;
+      const a = by.get(z.accountId) ?? { id: z.accountId, name: z.accountName || z.accountId, zones: 0 };
+      a.zones++;
+      by.set(z.accountId, a);
+    }
+    return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [zoneList]);
+  const zonesOfAccount = useMemo(() => (zoneList ?? []).filter((z) => z.accountId === form.account).sort((a, b) => a.name.localeCompare(b.name)), [zoneList, form.account]);
+
+  // Reading can take a while: the API answers "still reading" (202) and this asks again until it is
+  // ready. A newer load (another choice, Refresh) ends the older one's loop.
   const loadSeq = useRef(0);
-  const load = useCallback(async (m: string, fresh = false) => {
+  const load = useCallback(async (c: Choice, fresh = false) => {
     const seq = ++loadSeq.current;
-    setBusy(true); setError(''); setPending(null);
+    setApplied(c); setBusy(true); setError(''); setPending(null);
+    try { localStorage.setItem(CHOICE_KEY, JSON.stringify(c)); } catch { /* storage blocked */ }
     try {
       for (let first = true; ; first = false) {
-        const rep = await api<TrafficReport | TrafficPending>(`/api/traffic?month=${m}${fresh && first ? '&fresh=1' : ''}`);
+        const rep = await api<TrafficReport | TrafficPending>(`/api/traffic?${query(c)}${fresh && first ? '&fresh=1' : ''}`);
         if (seq !== loadSeq.current) return;
         if (!('pending' in rep)) {
           setR(rep); setPending(null);
-          if (rep.accounts.length === 1) setOpen({ [rep.accounts[0].id]: true });
           if (fresh) toast('Traffic read again from Cloudflare', 'info');
           break;
         }
@@ -297,37 +333,56 @@ export default function TrafficPage() {
     }
   }, [toast]);
 
-  useEffect(() => { void load(month); }, [month, load]);
-
-  const shown = r?.month === month ? r : null;
-  const zoneCount = shown?.accounts.reduce((n, a) => n + a.zones.length, 0) ?? 0;
-  const unavailable = shown?.accounts.reduce((n, a) => n + a.unavailable, 0) ?? 0;
+  const shown = r && applied && r.month === applied.month && r.scope.accountId === applied.account && (r.scope.zoneId ?? '') === applied.zone ? r : null;
   const lastDay = shown ? new Date(Date.parse(`${shown.until}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10) : '';
+  const formShown = sameChoice(form, applied);
+  const accountName = (id: string) => accounts.find((a) => a.id === id)?.name ?? id;
+  const zoneName = (id: string) => zoneList?.find((z) => z.id === id)?.name ?? id;
 
   return (
     <div>
       <PageHeader eyebrow="Cloudflare" title="Traffic analytics"
-        description="Monthly HTTP traffic for every zone the stored Cloudflare tokens can read: all accounts together, each account, then each zone. Numbers come from Cloudflare's analytics (UTC days)."
-        actions={(
-          <>
-            <label htmlFor="traffic-month" className="sr-only">Month</label>
-            <select id="traffic-month" className="input w-auto" value={month} onChange={(e) => setMonth(e.target.value)} disabled={busy && !shown}>
+        description="Monthly HTTP traffic for one account (all of its zones, then each zone) or one zone. Only what you choose is read from Cloudflare's analytics (UTC days)." />
+
+      <Card className="mb-5">
+        <SectionHeader title="What to analyse" description="Choose an account, and a zone if you want just that zone. Nothing is read until you press Show traffic." />
+        <form className="grid gap-4 p-5 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,1fr)_auto] md:items-end"
+          onSubmit={(e) => { e.preventDefault(); if (form.account) void load(form); }}>
+          <label className="block text-sm">
+            <span className="mb-1.5 block text-xs font-medium text-ink-2">Account</span>
+            <select id="traffic-account" className="input w-full" value={form.account} disabled={!zoneList}
+              onChange={(e) => setForm({ ...form, account: e.target.value, zone: '' })}>
+              <option value="">{zoneList ? 'Choose an account…' : 'Loading accounts…'}</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1.5 block text-xs font-medium text-ink-2">Zone <span className="font-normal text-faint">(optional)</span></span>
+            <select id="traffic-zone" className="input w-full" value={form.zone} disabled={!form.account}
+              onChange={(e) => setForm({ ...form, zone: e.target.value })}>
+              <option value="">{form.account ? `Whole account (${zonesOfAccount.length} zone${zonesOfAccount.length === 1 ? '' : 's'})` : 'Choose an account first'}</option>
+              {zonesOfAccount.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1.5 block text-xs font-medium text-ink-2">Month</span>
+            <select id="traffic-month" className="input w-full" value={form.month} onChange={(e) => setForm({ ...form, month: e.target.value })}>
               {months.map((m, i) => <option key={m} value={m}>{monthName(m)}{i === 0 ? ' (so far)' : ''}</option>)}
             </select>
-            <Button variant="ghost" onClick={() => load(month, true)} loading={busy} icon={<RefreshCw className="size-4" />}>Refresh</Button>
-            <a href={`/api/traffic/export.csv?month=${month}`} className={cx('inline-flex items-center gap-1.5 rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-2 hover:border-faint hover:text-ink', !shown && 'pointer-events-none opacity-50')} aria-disabled={!shown}>
-              <Download className="size-4" />CSV
-            </a>
-          </>
-        )} />
+          </label>
+          <Button type="submit" variant="primary" disabled={!form.account || (busy && formShown)} loading={busy && formShown} icon={<BarChart3 className="size-4" />}>Show traffic</Button>
+        </form>
+        {listError && <div className="px-5 pb-5"><Alert tone="bad" title="Accounts could not be listed">{listError}</Alert></div>}
+        {zoneList && !accounts.length && <div className="px-5 pb-5"><EmptyState icon={<BarChart3 className="size-5" />} title="No accounts" description="No stored Cloudflare token can list zones. Add a credential in the vault." /></div>}
+      </Card>
 
       {error && <div className="mb-5"><Alert tone="bad" title="Traffic could not be read">{error}</Alert></div>}
 
-      {(pending?.month === month || (!shown && !error)) && (
+      {applied && busy && (
         <Card className={cx('px-5 text-center text-sm text-muted', shown ? 'mb-5 py-4' : 'py-10')}>
           <RefreshCw className={cx('mx-auto size-5 animate-spin text-faint', shown ? 'mb-2' : 'mb-3')} />
-          Reading {monthName(month)} from Cloudflare{shown ? ' again' : ''} — the first read of a month can take a few minutes with many zones.
-          {pending?.month === month && pending.total > 0 && (
+          Reading {applied.zone ? zoneName(applied.zone) : accountName(applied.account)} for {monthName(applied.month)} from Cloudflare{shown ? ' again' : ''}…
+          {pending && pending.total > 0 && (
             <div className="mx-auto mt-3 max-w-xs">
               <div className="h-1.5 overflow-hidden rounded-full bg-raised"><div className="h-full rounded-full bg-signal transition-all" style={{ width: `${Math.min(100, (pending.done / pending.total) * 100)}%` }} /></div>
               <div className="mt-1 text-xs tabular-nums text-faint">{pending.done} of {pending.total} parts read</div>
@@ -336,60 +391,41 @@ export default function TrafficPage() {
         </Card>
       )}
 
-      {shown && (
+      {shown && applied && (
         <div className="space-y-5">
-          <p className="text-xs text-muted">
-            {dayLabel(shown.since)} – {dayLabel(lastDay)} {shown.since.slice(0, 4)}
-            {shown.partial && ' · month still running: totals so far, compared with the same days of last month'}
-            {' · '}read {fmtDate(shown.generatedAt)}{shown.cachedIn ? ' (cached — Refresh reads again)' : ''}
-          </p>
-
           {shown.problems.map((p) => <Alert key={p.credential} tone="warn" title={p.credential}>{p.error}</Alert>)}
-          {unavailable > 0 && (
-            <Alert tone="warn" title={`${unavailable} of ${zoneCount} zones have no analytics here`}>
-              Their tokens cannot read analytics. Give the token <span className="font-mono">Zone › Analytics › Read</span> in the Cloudflare dashboard; the zones are listed in their accounts below.
+          {shown.unavailable > 0 && (
+            <Alert tone="warn" title={shown.scope.zoneId ? 'This zone has no analytics here' : `${shown.unavailable} of ${shown.zones.length} zones have no analytics here`}>
+              The stored token cannot read analytics. Give it <span className="font-mono">Zone › Analytics › Read</span> in the Cloudflare dashboard.
             </Alert>
           )}
           {shown.detail === 'basic' && <Alert tone="info">Cloudflare did not return the status-code and country breakdown this month; totals and daily numbers are complete.</Alert>}
 
-          {!zoneCount ? (
-            <EmptyState icon={<BarChart3 className="size-5" />} title="No zones" description="No stored Cloudflare token can list zones. Add a credential in the vault." />
-          ) : (
-            <>
-              <Card>
-                <SectionHeader title="All accounts" description={`${shown.accounts.length} account${shown.accounts.length === 1 ? '' : 's'} · ${zoneCount} zone${zoneCount === 1 ? '' : 's'} · ${monthName(shown.month)}`} />
-                <div className="p-5"><SliceBody s={shown} r={shown} /></div>
-              </Card>
+          <Card>
+            <SectionHeader
+              title={shown.scope.zoneName ?? shown.scope.accountName}
+              description={`${shown.scope.zoneId ? `Zone in ${shown.scope.accountName}` : `Account · ${shown.zones.length} zone${shown.zones.length === 1 ? '' : 's'}`} · ${dayLabel(shown.since)} – ${dayLabel(lastDay)} ${shown.since.slice(0, 4)}${shown.partial ? ' (so far, compared with the same days of last month)' : ''}`}
+              aside={(
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => load(applied, true)} disabled={busy} icon={<RefreshCw className="size-3.5" />}>Refresh</Button>
+                  <a href={`/api/traffic/export.csv?${query(applied)}`} className="inline-flex items-center gap-1.5 rounded-md border border-line-strong px-2.5 py-1 text-xs text-ink-2 hover:border-faint hover:text-ink">
+                    <Download className="size-3.5" />CSV
+                  </a>
+                </div>
+              )} />
+            <div className="p-5">
+              {shown.unavailable === shown.zones.length ? (
+                <p className="text-sm text-muted">No analytics could be read for {shown.scope.zoneId ? 'this zone' : 'any zone of this account'}.</p>
+              ) : <SliceBody s={shown} r={shown} />}
+              <p className="mt-4 text-[11px] text-faint">Read {fmtDate(shown.generatedAt)}{shown.cachedIn ? ' (cached — Refresh reads again)' : ''}</p>
+            </div>
+          </Card>
 
-              <Card className="overflow-hidden">
-                <SectionHeader title="By account" description="Each account's month, then its zones. Open a zone for its own days, status codes and countries." />
-                {shown.accounts.map((a) => {
-                  const expanded = !!open[a.id];
-                  return (
-                    <section key={a.id} className="border-b border-line/60 last:border-0">
-                      <button type="button" aria-expanded={expanded} aria-controls={`tr-acct-${a.id}`} onClick={() => setOpen({ ...open, [a.id]: !expanded })}
-                        className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-left hover:bg-raised/50">
-                        <ChevronRight className={cx('size-4 shrink-0 text-faint transition-transform', expanded && 'rotate-90')} aria-hidden />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[14px] font-medium text-ink">{a.name}</span>
-                          <span className="block text-[11.5px] text-faint">{a.zones.length} zone{a.zones.length === 1 ? '' : 's'}{a.unavailable ? ` · ${a.unavailable} without analytics` : ''}</span>
-                        </span>
-                        <span className="text-right text-xs">
-                          <span className="block text-[14px] font-medium text-ink tabular-nums">{num(a.totals.requests)} requests</span>
-                          <span className="block text-muted tabular-nums">{bytes(a.totals.bytes)} · <Change now={a.totals.requests} before={a.previous?.requests} month={shown.month} short /></span>
-                        </span>
-                      </button>
-                      {expanded && (
-                        <div id={`tr-acct-${a.id}`} className="space-y-5 px-5 pt-1 pb-5">
-                          <SliceBody s={a} r={shown} />
-                          <div><div className="eyebrow mb-2">Zones</div><ZoneTable a={a} r={shown} /></div>
-                        </div>
-                      )}
-                    </section>
-                  );
-                })}
-              </Card>
-            </>
+          {!shown.scope.zoneId && shown.zones.length > 0 && (
+            <Card>
+              <SectionHeader title="Zones" description="Busiest first. Open a zone for its own days, status codes and countries." />
+              <div className="p-5"><ZoneTable zones={shown.zones} r={shown} /></div>
+            </Card>
           )}
         </div>
       )}
