@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Fira_Code, Fira_Sans } from 'next/font/google';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import { ToastProvider } from '@/components/toast';
 import './globals.css';
 
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
       <body className="min-h-screen">
         <ToastProvider>{children}</ToastProvider>
+        <SpeedInsights />
       </body>
     </html>
   );
