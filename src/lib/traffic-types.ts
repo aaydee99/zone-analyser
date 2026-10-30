@@ -73,4 +73,48 @@ export interface TrafficPending {
   startedAt: string;
 }
 
+// ── Zone detail: security events and requests, from Cloudflare's adaptive datasets ──
+
+/** One row of a breakdown: its values (rule ID, IP, path …), and its events or requests (and bytes for requests). */
+export interface DetailRow { dims: Record<string, string>; count: number; bytes?: number }
+
+/** One security event as Cloudflare logged it (the fields the zone's plan offers). */
+export type FirewallEvent = Record<string, string | number | null>;
+
+export interface DatasetDetail {
+  available: boolean;
+  /** Why it is not available, or what is missing (a breakdown the plan does not offer …). */
+  message?: string;
+  notes: string[];
+  /** What was read (ISO times): can be shorter than the month — Cloudflare keeps this data for `retentionDays`. */
+  since?: string;
+  until?: string;
+  retentionDays: number | null;
+  /** Queries per breakdown: Cloudflare limits how long one query's time range can be. With more than one, top lists are the best of each part. */
+  parts: number;
+  total: number;
+  breakdowns: Record<string, DetailRow[]>;
+}
+
+/** Narrows the detail to one client IP or one rule. */
+export interface DetailFilter { ip?: string; rule?: string }
+
+export interface ZoneDetail {
+  month: string;
+  zoneId: string;
+  zoneName: string;
+  accountName: string;
+  filter: DetailFilter | null;
+  /** WAF / firewall events: which rules matched, what they did, who triggered them. */
+  security: DatasetDetail & { events: FirewallEvent[]; eventsSince?: string };
+  /** All HTTP requests (not available when the detail is narrowed to a rule). */
+  requests: DatasetDetail;
+  /** Ruleset IDs → names (managed rulesets included), for the rules table. */
+  rulesetNames: Record<string, string>;
+  generatedAt: string;
+  cachedIn?: 'redis' | 'memory';
+}
+
+export interface ZoneDetailPending { pending: true; month: string; zoneId: string; filter: DetailFilter | null; done: number; total: number; startedAt: string }
+
 export const EMPTY_TOTALS: TrafficTotals = { requests: 0, cachedRequests: 0, bytes: 0, cachedBytes: 0, threats: 0, pageViews: 0, uniquesSum: 0, days: 0 };

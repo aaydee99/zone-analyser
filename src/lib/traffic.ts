@@ -1,4 +1,5 @@
 import 'server-only';
+import { inBackground, type Progress } from './bg-job';
 import { cached, cacheBackend } from './cache';
 import { HttpError } from './http';
 import { credentialForRun } from './vault';
@@ -13,13 +14,13 @@ import { EMPTY_TOTALS, type StatusClass, type TrafficCountry, type TrafficDay, t
 // (POST is how GraphQL takes it); zone IDs and dates are checked before they go into it.
 // Each token needs "Zone › Analytics › Read"; zones it cannot read are listed, not hidden.
 
-const GRAPHQL = 'https://api.cloudflare.com/client/v4/graphql';
+export const GRAPHQL = 'https://api.cloudflare.com/client/v4/graphql';
 /** Zones per query. */
 const BATCH = 10;
 const PARALLEL = 4;
 const MONTHS = 12;
-const RUNNING_TTL = 15 * 60_000;
-const CLOSED_TTL = 6 * 60 * 60_000;
+export const RUNNING_TTL = 15 * 60_000;
+export const CLOSED_TTL = 6 * 60 * 60_000;
 const TOP_COUNTRIES = 10;
 
 const FULL_FIELDS = 'sum { requests cachedRequests bytes cachedBytes threats pageViews countryMap { clientCountryName requests bytes threats } responseStatusMap { edgeResponseStatus requests } } uniq { uniques }';
@@ -39,7 +40,7 @@ export function trafficMonths(now = new Date()): string[] {
 }
 
 /** First day, the day after the last one with data (today counts), and whether the month is still running. */
-function rangeOf(month: string, now = new Date()) {
+export function rangeOf(month: string, now = new Date()) {
   const next = firstOf(addMonths(month, 1));
   const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
   const until = next < tomorrow ? next : tomorrow;
@@ -48,7 +49,7 @@ function rangeOf(month: string, now = new Date()) {
 
 // ── Cloudflare GraphQL ──────────────────────────────────────────────────────
 
-interface GqlError { message?: string }
+export interface GqlError { message?: string }
 interface Group {
   dimensions?: { date?: string };
   sum?: {
@@ -82,10 +83,10 @@ function zonesQuery(tags: string[], since: string, until: string, fields: string
     + `httpRequests1dGroups(limit: 62, filter: { date_geq: "${since}", date_lt: "${until}" }, orderBy: [date_ASC]) { dimensions { date } ${fields} } } } }`;
 }
 
-const errorText = (errors: GqlError[]) => [...new Set(errors.map((e) => e.message).filter(Boolean))].join('; ') || 'Cloudflare returned an error';
+export const errorText = (errors: GqlError[]) => [...new Set(errors.map((e) => e.message).filter(Boolean))].join('; ') || 'Cloudflare returned an error';
 /** The breakdown fields are unknown to this API (schema change): fall back to the totals. */
 const schemaError = (errors: GqlError[]) => errors.some((e) => /unknown field|cannot query field|not defined|does not exist|undefined field/i.test(e.message ?? ''));
-const permissionError = (errors: GqlError[], status: number) => status === 401 || status === 403 || errors.some((e) => /not authori[sz]ed|permission|access/i.test(e.message ?? ''));
+export const permissionError = (errors: GqlError[], status: number) => status === 401 || status === 403 || errors.some((e) => /not authori[sz]ed|permission|access/i.test(e.message ?? ''));
 
 // ── One month of raw numbers, per zone (cached) ─────────────────────────────
 
@@ -144,7 +145,7 @@ async function readZones(token: string, tags: string[], since: string, until: st
   return out;
 }
 
-async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+export async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
@@ -153,11 +154,8 @@ async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>)
   return out;
 }
 
-/** Batches planned and finished, for the "still reading" answer. */
-interface Progress { done: number; total: number }
-
 /** What is read: one account (all of its zones) or one zone of it. Only these zones are ever queried. */
-interface Scope {
+export interface Scope {
   accountId: string;
   accountName: string;
   zoneId?: string;
@@ -167,7 +165,7 @@ interface Scope {
 const scopeKey = (s: Pick<Scope, 'accountId' | 'zoneId'>) => `account=${encodeURIComponent(s.accountId)}${s.zoneId ? `&zone=${encodeURIComponent(s.zoneId)}` : ''}`;
 
 /** The account (and zone) from the cached zone list — no Cloudflare call. */
-async function scopeOf(accountId: string, zoneId?: string): Promise<Scope> {
+export async function scopeOf(accountId: string, zoneId?: string): Promise<Scope> {
   if (!accountId) throw new HttpError(400, 'Choose an account');
   const list = await listZones();
   const inAccount = list.zones.filter((z) => z.accountId === accountId);
@@ -268,13 +266,8 @@ function slice(raws: RawZone[], prev: RawMonth | null, ids: string[], days: numb
   return { totals: totalsOf(daily), previous: previousOf(prev, ids, days), daily, statuses: mergeStatuses(ok.map((z) => z.statuses)), countries: topCountries(mergeCountries(ok.map((z) => z.countries))) };
 }
 
-// A month is read in the background: a request waits at most WAIT_MS for it and otherwise answers
-// "still reading" (202), so no request runs into the Cloudflare, Vercel or worker-relay timeouts.
-// Later requests join the read that is running; it keeps going when nobody waits.
-const WAIT_MS = 20_000;
-interface Job extends Progress { p: Promise<TrafficReport>; startedAt: string }
-const gj = globalThis as unknown as { __trafficJobs?: Map<string, Job> };
-const jobs = (gj.__trafficJobs ??= new Map());
+/** How long a request waits for a read before answering "still reading" (202); see bg-job.ts. */
+export const WAIT_MS = 20_000;
 
 /**
  * GET /api/traffic?month=YYYY-MM&account=ID[&zone=ID]: one account's month (its zones added up, and each
@@ -284,18 +277,8 @@ export async function trafficReport(month: string, accountId: string, zoneId?: s
   const months = trafficMonths();
   if (!months.includes(month)) throw new HttpError(400, `Pick a month from the last ${MONTHS} (YYYY-MM)`);
   const scope = await scopeOf(accountId, zoneId || undefined);
-  const key = `${month}&${scopeKey(scope)}`;
-  let job = jobs.get(key);
-  if (!job) {
-    const progress: Progress = { done: 0, total: 0 };
-    const p = buildReport(month, scope, fresh, months, progress).finally(() => jobs.delete(key));
-    p.catch(() => { /* answered to whoever waits; the next request starts again */ });
-    job = Object.assign(progress, { p, startedAt: new Date().toISOString() });
-    jobs.set(key, job);
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const out = await Promise.race([job.p, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); })]).finally(() => clearTimeout(timer));
-  return out ?? { pending: true, month, accountId: scope.accountId, ...(scope.zoneId ? { zoneId: scope.zoneId } : {}), done: job.done, total: job.total, startedAt: job.startedAt };
+  const out = await inBackground(`traffic:${month}&${scopeKey(scope)}`, (progress) => buildReport(month, scope, fresh, months, progress), waitMs);
+  return 'pending' in out ? { ...out, month, accountId: scope.accountId, ...(scope.zoneId ? { zoneId: scope.zoneId } : {}) } : out;
 }
 
 async function buildReport(month: string, scope: Scope, fresh: boolean, months: string[], progress: Progress): Promise<TrafficReport> {

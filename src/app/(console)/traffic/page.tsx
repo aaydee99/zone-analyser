@@ -7,23 +7,14 @@ import type { StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficRe
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
+import { bytes, dayLabel, num, pct, whole } from './format';
+import { ZoneDetailView } from './zone-detail';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-const whole = new Intl.NumberFormat();
-const num = (n: number) => (n < 10_000 ? whole.format(n) : compact.format(n));
-function bytes(b: number) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let i = 0;
-  while (b >= 1000 && i < units.length - 1) { b /= 1000; i++; }
-  return `${b >= 100 || i === 0 ? Math.round(b) : b.toFixed(1)} ${units[i]}`;
-}
-const pct = (part: number, of: number) => (of ? `${((part / of) * 100).toFixed(1)}%` : '—');
 const perDay = (t: TrafficTotals) => (t.days ? Math.round(t.uniquesSum / t.days) : 0);
 const monthName = (m: string, style: 'long' | 'short' = 'long') => new Date(`${m}-01T00:00:00Z`).toLocaleString(undefined, { month: style, year: style === 'long' ? 'numeric' : undefined, timeZone: 'UTC' });
 const prevMonth = (m: string) => { const d = new Date(`${m}-01T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 7); };
-const dayLabel = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
 /** The last twelve months, this one first (UTC, like the API). */
 function lastMonths() {
@@ -425,9 +416,11 @@ export default function TrafficPage() {
             </div>
           </Card>
 
+          {shown.scope.zoneId && <ZoneDetailView month={shown.month} account={shown.scope.accountId} zone={shown.scope.zoneId} />}
+
           {!shown.scope.zoneId && shown.zones.length > 0 && (
             <Card>
-              <SectionHeader title="Zones" description="Busiest first. Open a zone for its own days, status codes and countries." />
+              <SectionHeader title="Zones" description="Busiest first. Open a zone for its own days, status codes and countries; choose it above as the zone for its security events, rules and top IPs." />
               <div className="p-5"><ZoneTable zones={shown.zones} r={shown} /></div>
             </Card>
           )}
