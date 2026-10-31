@@ -56,6 +56,7 @@ const FIRST_COST: Record<CheckId, Partial<Record<ScopeKind, number>>> = {
   posture: { account: 1 }, certificates: { zone: 4, account: 1 }, governance: { account: 2, global: 3 }, drift: { account: 1, zone: 26 },
   alerts: { account: 3, global: 0 }, availability: { zone: 2, account: 2 }, platform: { account: 6 }, appsec: { zone: 4 }, pagerules: { zone: 1 },
   dns: { zone: 3 }, loadbalancing: { account: 3, zone: 2 }, lists: { account: 3, zone: 0 },
+  logpush: { account: 1, zone: 1 },
 };
 
 interface Lane { key: string; token: string; names: string[]; credentialIds: Set<string>; accounts: number; zones: number; /** Accounts of the zones and accounts this token reads. */ accountIds: Set<string> }

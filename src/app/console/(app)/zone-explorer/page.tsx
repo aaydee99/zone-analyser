@@ -1,13 +1,18 @@
 'use client';
 
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronRight, Download, FileJson, Globe, RefreshCw, Search } from 'lucide-react';
+import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { ZoneGroupReport, ZoneListItem, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
-import { Alert, Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonText, Stat, cx } from '@/components/ui';
+import { Alert, Badge, Button, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonText, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { zoneList } from '@/lib/zone-list-client';
+import { filterToParams, isFilterEmpty, parseTags, type ZoneMeta, type ZoneMetaFilter, type ZoneMetaLite } from '@/lib/zone-meta-types';
+import { TagChips, TagFilter } from '@/components/tag-filter';
+import { FavouriteStar } from '@/components/quick-zones';
+import { SavedViews } from '@/components/saved-views';
+import { ZoneMetaPanel } from './zone-meta-panel';
 
 const ROWS = 300;
 /** Columns worth showing first for a list of objects. */
@@ -287,6 +292,12 @@ export default function ZoneExplorerPage() {
   const [error, setError] = useState('');
   const [find, setFind] = useState('');
   const [saving, setSaving] = useState('');
+  // Console tags and owners: the filter is resolved by the server (?tags=&owner=), the chips come with it.
+  const [zf, setZf] = useState<ZoneMetaFilter>({});
+  const [meta, setMeta] = useState<Record<string, ZoneMetaLite>>({});
+  const [matching, setMatching] = useState<Set<string> | null>(null);
+  const [metaError, setMetaError] = useState('');
+  const [openMeta, setOpenMeta] = useState<ZoneMeta | null>(null);
 
   const list = useCallback(async (fresh = false) => {
     setListing(true);
@@ -297,6 +308,19 @@ export default function ZoneExplorerPage() {
     } catch (e) { setZones([]); toast((e as Error).message, 'bad'); } finally { setListing(false); }
   }, [toast]);
   useEffect(() => { list(); }, [list]);
+
+  /** Tags and owners of every zone, and the zones the tag filter matches (no zone list: the page has it). */
+  const filterKey = filterToParams(zf).toString();
+  const [metaVersion, setMetaVersion] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const p = new URLSearchParams(filterKey);
+    p.set('meta', '1'); p.set('list', '0');
+    api<{ ids: string[] | null; meta?: Record<string, ZoneMetaLite>; metaError?: string }>(`/api/zone-explorer?${p}`)
+      .then((r) => { if (!live) return; setMeta(r.meta ?? {}); setMatching(r.ids ? new Set(r.ids) : null); setMetaError(r.metaError ?? ''); })
+      .catch((e) => { if (live) { setMatching(null); setMetaError((e as Error).message); } });
+    return () => { live = false; };
+  }, [filterKey, metaVersion]);
 
   const readPart = useCallback(async (href: string, key: string, fresh: boolean) => {
     setParts((cur) => ({ ...cur, [key]: { ...cur[key], state: 'loading' } }));
@@ -335,8 +359,45 @@ export default function ZoneExplorerPage() {
 
   const shownZones = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return (zones ?? []).filter((z) => !s || [z.name, z.accountName, z.id, z.plan, z.status].some((x) => x.toLowerCase().includes(s)));
-  }, [zones, q]);
+    return (zones ?? []).filter((z) => (!matching || matching.has(z.id)) && (!s || [z.name, z.accountName, z.id, z.plan, z.status].some((x) => x.toLowerCase().includes(s))));
+  }, [zones, q, matching]);
+  const filtering = !!q.trim() || !isFilterEmpty(zf);
+
+  // The address keeps the filters and the open zone (?q=&tags=&owner=&zone=): shareable, and what a saved view holds.
+  const viewQuery = useMemo(() => { const p = filterToParams(zf); if (q.trim()) p.set('q', q.trim()); p.sort(); return p.toString(); }, [zf, q]);
+  const applyQuery = useCallback((qs: string) => {
+    const p = new URLSearchParams(qs);
+    setQ(p.get('q') ?? '');
+    setZf({ tags: parseTags(p.get('tags') ?? '').tags, owner: p.get('owner') ?? '', q: p.get('mq') ?? '' });
+  }, []);
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    const p = new URLSearchParams(window.location.search);
+    applyQuery(p.toString());
+    const z = p.get('zone');
+    if (z && /^[A-Za-z0-9_-]{1,64}$/.test(z)) void open(z);
+  }, [applyQuery, open]);
+  useEffect(() => {
+    if (!started.current) return;
+    const p = new URLSearchParams(viewQuery);
+    if (selected) p.set('zone', selected);
+    const next = `${window.location.pathname}${p.size ? `?${p}` : ''}`;
+    if (next !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(window.history.state, '', next);
+  }, [viewQuery, selected]);
+
+  // The open zone's full tags, owner, contact and notes.
+  useEffect(() => {
+    let live = true;
+    setOpenMeta(null);
+    if (!selected) return;
+    api<{ meta: Record<string, ZoneMeta> }>(`/api/zones/meta?ids=${encodeURIComponent(selected)}`)
+      .then((r) => { if (live) setOpenMeta(r.meta[selected] ?? { zoneId: selected, zoneName: '', accountName: '', tags: [], owner: '', contact: '', notes: '' }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [selected]);
+  const pickTag = (t: string) => setZf((cur) => ({ ...cur, tags: [...new Set([...(cur.tags ?? []), t])].sort() }));
   const byAccount = useMemo(() => {
     const m = new Map<string, { id: string; name: string; zones: ZoneListItem[] }>();
     for (const z of shownZones) {
@@ -359,7 +420,7 @@ export default function ZoneExplorerPage() {
     try { localStorage.setItem('zx.openAccounts', JSON.stringify(next)); } catch { /* storage blocked */ }
   };
   const isOpen = (g: { id: string; zones: ZoneListItem[] }) =>
-    !!q.trim() || (openAccounts[g.id] ?? (byAccount.length === 1 || g.zones.some((z) => z.id === selected)));
+    filtering || (openAccounts[g.id] ?? (byAccount.length === 1 || g.zones.some((z) => z.id === selected)));
   const allOpen = byAccount.every(isOpen);
 
   const loaded = useMemo(() => (summary?.sections ?? []).map((x) => parts[x.key]?.data).filter((x): x is ZoneGroupReport => !!x), [summary, parts]);
@@ -406,8 +467,16 @@ export default function ZoneExplorerPage() {
               <Search className="pointer-events-none absolute top-1/2 left-6 size-4 -translate-y-1/2 text-faint" aria-hidden />
               <input className="input !pl-9" placeholder={zones ? `Find among ${zones.length} zones…` : 'Loading zones…'} value={q} onChange={(e) => setQ(e.target.value)} />
             </label>
+            <div className="space-y-2 border-b border-line px-3 py-2.5">
+              <TagFilter value={zf} onChange={setZf} />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SavedViews path="/console/zone-explorer" query={viewQuery} onApply={applyQuery} />
+                {matching && zones && <span className="text-[11px] text-muted">{shownZones.length} of {zones.length} zones</span>}
+              </div>
+              {metaError && <p className="text-[11px] text-warn">{metaError}</p>}
+            </div>
             <div className="max-h-[60vh] overflow-y-auto lg:max-h-[calc(100vh-12rem)]">
-              {byAccount.length > 1 && !q.trim() && (
+              {byAccount.length > 1 && !filtering && (
                 <div className="flex items-center justify-between border-b border-line/60 px-4 py-2 text-[11px] text-muted">
                   <span>{byAccount.length} accounts</span>
                   <button type="button" className="hover:text-ink" onClick={() => setAccountsOpen(Object.fromEntries(byAccount.map((g) => [g.id, !allOpen])))}>
@@ -437,7 +506,10 @@ export default function ZoneExplorerPage() {
                           <button key={z.id} type="button" onClick={() => open(z.id)} aria-pressed={selected === z.id} disabled={loading}
                             title={loading ? 'Wait for the open zone to finish loading' : undefined}
                             className={cx('flex w-full items-center gap-2 py-2 pr-4 pl-9 text-left text-[13px] transition-colors enabled:hover:bg-raised/60 disabled:cursor-not-allowed', selected === z.id ? 'bg-raised text-ink' : loading && 'opacity-50')}>
-                            <span className="min-w-0 flex-1 truncate">{z.name}</span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate">{z.name}</span>
+                              {meta[z.id] && <TagChips tags={meta[z.id].tags} owner={meta[z.id].owner} max={3} className="mt-0.5" />}
+                            </span>
                             {z.status !== 'active' && <Badge tone="warn">{z.status}</Badge>}
                             <span className="shrink-0 text-[11px] text-faint">{z.plan.replace(/ Website$/, '')}</span>
                           </button>
@@ -489,11 +561,13 @@ export default function ZoneExplorerPage() {
                       <p className="mt-0.5 font-mono text-[11.5px] break-all text-muted">{summary.zone.id}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <FavouriteStar zoneId={summary.zone.id} zoneName={zoneName} />
                       <Button size="sm" icon={<RefreshCw className={cx('size-3.5', loading && 'animate-spin')} />} onClick={() => open(summary.zone.id, true)} disabled={loading}>Read again</Button>
                       <Button size="sm" icon={<FileJson className="size-3.5" />} loading={saving === 'json'} disabled={loading} onClick={() => save('json', `${zoneName}-cloudflare.json`)}>JSON</Button>
                       <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'csv'} disabled={loading} title="All configuration: one row per value" onClick={() => save('csv', `${zoneName}-cloudflare.csv`)}>All as CSV</Button>
                       <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'dnsCsv'} disabled={!Array.isArray(dns?.data) || !dns.data.length} onClick={() => save('dnsCsv', `${zoneName}-dns.csv`)}>DNS CSV</Button>
                       <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'bind'} disabled={dns?.status !== 'ok'} onClick={() => save('bind', `${zoneName}.txt`)}>BIND file</Button>
+                      <ButtonLink size="sm" variant="ghost" href={`/console/investigate/timeline?zone=${encodeURIComponent(summary.zone.id)}`} icon={<History className="size-3.5" />}>Timeline</ButtonLink>
                     </div>
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[13px] sm:grid-cols-3">
@@ -512,6 +586,8 @@ export default function ZoneExplorerPage() {
                       <div key={k} className="min-w-0"><dt className="text-xs text-muted">{k}</dt><dd className="break-words text-ink-2">{v || '—'}</dd></div>
                     ))}
                   </dl>
+                  <ZoneMetaPanel zoneId={summary.zone.id} zoneName={zoneName} meta={openMeta} onPickTag={pickTag}
+                    onSaved={(m) => { setOpenMeta(m); setMetaVersion((n) => n + 1); }} />
                 </Card>
 
                 <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">

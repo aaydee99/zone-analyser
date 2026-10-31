@@ -55,6 +55,16 @@ export const CHANGE_AREA: Record<string, ChangeArea> = {
   'zone_meta.tag_renamed': 'settings',
   'zone_meta.tag_removed': 'settings',
   'zone_meta.imported': 'settings',
+  'report.created': 'settings',
+  'report.updated': 'settings',
+  'report.deleted': 'settings',
+  'slack.user_linked': 'settings',
+  'slack.user_unlinked': 'settings',
+  'compare.template_created': 'settings',
+  'compare.template_updated': 'settings',
+  'compare.template_deleted': 'settings',
+  'api_query.saved': 'presets',
+  'api_query.deleted': 'presets',
 };
 
 export const CHANGE_ACTIONS = Object.keys(CHANGE_AREA);
@@ -73,6 +83,9 @@ export const ACTIVITY: { key: string; label: string; actions: string[]; tone?: '
   { key: 'reveals', label: 'Secrets revealed', actions: ['credential.revealed'], tone: 'warn' },
   { key: 'credentialTests', label: 'Credential tests', actions: ['credential.tested'] },
   { key: 'cloudflareReverts', label: 'Cloudflare changes reverted', actions: ['cloudflare.reverted'], tone: 'warn' },
+  { key: 'apiQueries', label: 'API console reads', actions: ['cloudflare.query'] },
+  { key: 'workerTails', label: 'Live Worker log sessions', actions: ['worker_tail.started'] },
+  { key: 'logpushOwnership', label: 'Logpush ownership challenges', actions: ['logpush.ownership_requested', 'logpush.ownership_failed'] },
 ];
 
 export interface ChangeReport {
@@ -173,11 +186,22 @@ export function describeChange(e: AuditEntry): string {
     case 'cloudflare.revert_failed': return `Cloudflare refused a revert in ${str(e.target)}: ${str(d.summary)} — ${str(d.error)}`;
     case 'security.denied': return `Was refused ${str(d.method)} ${str(e.target)} (${str(d.reason)})`;
     case 'security.rate_limited': return `Was rate limited on ${str(d.method)} ${str(e.target)}`;
+    case 'compare.template_created': return `Created the comparison template ${q(e.target)} (${str(d.items)} items${d.fromZone ? ` from ${str(d.fromZone)}` : ''})`;
+    case 'compare.template_updated': return `Changed the comparison template ${q(e.target)}: ${Array.isArray(d.changed) ? d.changed.map(str).join(', ') : 'updated'}`;
+    case 'compare.template_deleted': return `Deleted the comparison template ${q(e.target)}`;
+    case 'search.index_rebuilt': return 'Rebuilt the zone search index';
     case 'zone_meta.updated': return `Changed the tags or owner of ${str(e.target)}${Array.isArray((d.tags as { to?: unknown } | undefined)?.to) ? ` — tags ${((d.tags as { to: unknown[] }).to.map(str).join(', ')) || 'none'}` : ''}`;
     case 'zone_meta.bulk_updated': return `Tagged ${str(d.zones)} zones${Array.isArray(d.add) && d.add.length ? ` +${d.add.map(str).join(' +')}` : ''}${Array.isArray(d.remove) && d.remove.length ? ` −${d.remove.map(str).join(' −')}` : ''}${typeof d.owner === 'string' ? ` · owner → ${q(d.owner)}` : ''}`;
     case 'zone_meta.tag_renamed': return `Renamed the zone tag ${q(d.from)} to ${q(d.to)} on ${str(d.zones)} zones`;
     case 'zone_meta.tag_removed': return `Removed the zone tag ${q(d.from)} from ${str(d.zones)} zones`;
     case 'zone_meta.imported': return `Imported zone tags and owners from CSV: ${str(d.changed)} zones changed`;
+    case 'api_query.saved': return `Saved the API console query ${q(e.target)}: ${str(d.path)}`;
+    case 'api_query.deleted': return `Deleted the API console query ${q(e.target)}`;
+    case 'cloudflare.query': return `Read GET ${str(e.target)} with ${q(d.credential)} (HTTP ${str(d.status)})`;
+    case 'worker_tail.started': return `Started following the logs of Worker ${str(e.target)}`;
+    case 'worker_tail.stopped': return `Stopped following the logs of Worker ${str(e.target)} (${str(d.events)} events)`;
+    case 'logpush.ownership_requested': return `Asked Cloudflare for a Logpush ownership challenge in ${str(e.target)} (${str(d.destination)})`;
+    case 'logpush.ownership_failed': return `Cloudflare refused a Logpush ownership challenge in ${str(e.target)}: ${str(d.error)}`;
     default: return `${e.action}${e.target ? ` ${e.target}` : ''}`;
   }
 }

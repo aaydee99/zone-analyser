@@ -168,10 +168,10 @@ function enqueue(key: string, task: () => Promise<void>) {
 function pump() {
   const s = state();
   while (s.running < 2 && s.pending.size) {
-    const [key, task] = s.pending.entries().next().value!;
+    const [key, task]: [string, () => Promise<void>] = s.pending.entries().next().value!;
     s.pending.delete(key);
     s.running++;
-    void task().catch((err) => {
+    void task().catch((err: unknown) => {
       if (notSetUp(err)) { if (!s.warned) { s.warned = true; log('not indexing: 0016_zone_search.sql is not applied'); } return; }
       log(`${key}: ${message(err)}`);
     }).finally(() => { s.running--; setImmediate(pump); });
@@ -293,13 +293,13 @@ async function pace(n = 1) {
  * ZONE_SEARCH_BUCKET_RPM requests a minute). Zones whose newest backup is already indexed are skipped.
  * One rebuild runs at a time; asking again while it runs returns it.
  */
-export function rebuildIndex(by: string): RebuildState {
+export function rebuildIndex(by: string): { job: RebuildState; started: boolean } {
   const s = state();
-  if (s.rebuild && !s.rebuild.finishedAt) return s.rebuild;
+  if (s.rebuild && !s.rebuild.finishedAt) return { job: s.rebuild, started: false };
   const r: RebuildState = { startedAt: new Date().toISOString(), by, step: 'Starting', done: 0, total: 0, indexed: { backup: 0, drift: 0, monitor: 0 } };
   s.rebuild = r;
   void rebuild(r).catch((err) => { r.error = message(err); log(`rebuild failed: ${r.error}`); }).finally(() => { r.finishedAt = new Date().toISOString(); r.step = r.error ? 'Failed' : 'Done'; });
-  return r;
+  return { job: r, started: true };
 }
 
 async function rebuild(r: RebuildState) {

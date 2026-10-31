@@ -2,6 +2,7 @@ import 'server-only';
 import crypto from 'node:crypto';
 import { cfList, cfOne, inParallel } from '../cf-read';
 import { db } from '../supabase';
+import { filteredRows } from '../stored-rows';
 import { rulesetRefs, type ListRef, type RulesetLike } from '../list-refs';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
@@ -57,13 +58,14 @@ export const lists: CheckDef = {
       let zonesPending = 0;
       if (all.length) {
         const [rows, pending] = await Promise.all([
-          db().from('monitor_rows').select('data').eq('check_id', 'lists').eq('section', 'refs').eq('scope_kind', 'zone').eq('data->>accountId', a.accountId).limit(20_000),
+          filteredRows<Row>('lists', 'refs', { account: a.accountId, limit: 20_000 }),
           db().from('monitor_targets').select('scope_id', { count: 'exact', head: true }).eq('check_id', 'lists').eq('scope_kind', 'zone').eq('account_id', a.accountId).is('last_ok_at', null),
         ]);
-        for (const r of (rows.data ?? []) as { data: Row }[]) {
-          const k = String(r.data.list ?? '');
+        for (const r of rows.rows) {
+          if (!r.zoneId) continue; // the account's own uses are counted from this run
+          const k = String(r.list ?? '');
           const u = zoneUse.get(k) ?? { n: 0, where: new Set<string>() };
-          u.n++; u.where.add(String(r.data.where ?? ''));
+          u.n++; u.where.add(String(r.where ?? ''));
           zoneUse.set(k, u);
         }
         zonesPending = pending.count ?? 0;

@@ -8,16 +8,37 @@ import { can } from './rbac';
 import { newApproval, requestNote, type Approval } from './approvals-store';
 import { noteDetails } from './change-note';
 import { zoneToken } from './zone-explorer';
+import crypto from 'node:crypto';
+import { openRelay, sealRelay } from './vault';
+import { editPermission, jobsPath, readRawJob, scopeToken, validateDestination, type LogpushScope } from './logpush';
+import { ChangeError, checkChanges, diffLines, fieldLines, scrubText, summarizeJob, type LogpushChanges, type RawJob } from './logpush-types';
 
-// Changes the console makes in Cloudflare besides a restore: purging the cache, and rolling a Worker
-// or a Pages project back to an earlier deployment. An admin asks; a super admin approves (or acts
-// directly). Each runs with the stored token for that zone or account, so the token needs the
-// matching write permission; Cloudflare's refusal is shown as it is.
+// Changes the console makes in Cloudflare besides a restore: purging the cache, rolling a Worker
+// or a Pages project back to an earlier deployment, and creating, changing or deleting a Logpush
+// job. An admin asks; a super admin approves (or acts directly). Each runs with the stored token for
+// that zone or account, so the token needs the matching write permission; Cloudflare's refusal is
+// shown as it is.
+
+type Sealed = Awaited<ReturnType<typeof sealRelay>>;
 
 export type CfAction =
   | { type: 'purge'; zoneId: string; zoneName: string; mode: 'everything' | 'files' | 'tags' | 'hosts' | 'prefixes'; values: string[] }
   | { type: 'worker-rollback'; accountId: string; accountName: string; script: string; versionId: string; versionLabel: string }
-  | { type: 'pages-rollback'; accountId: string; accountName: string; project: string; deploymentId: string; deploymentLabel: string };
+  | { type: 'pages-rollback'; accountId: string; accountName: string; project: string; deploymentId: string; deploymentLabel: string }
+  | LogpushAction;
+
+/**
+ * A Logpush job change. `before` / `after` are what the approver sees (destinations as their host
+ * only); `print` is the job as it was asked about, so a job changed meanwhile is not overwritten.
+ * The destination and ownership challenge (they hold credentials) are sealed with the server key in
+ * `secret`, never shown, and opened only to send them to Cloudflare.
+ */
+export interface LogpushAction {
+  type: 'logpush'; op: 'create' | 'update' | 'delete'; scope: LogpushScope; scopeId: string; scopeName: string;
+  jobId?: number; jobLabel: string; changes: Omit<LogpushChanges, 'destination_conf' | 'ownership_challenge'>;
+  before: Record<string, string>; after: Record<string, string>; print?: string; ownership?: boolean;
+  secret?: { nonce: string; sealed: Sealed };
+}
 
 const PURGE_MODES = ['everything', 'files', 'tags', 'hosts', 'prefixes'] as const;
 const MAX_VALUES = 100;
@@ -75,7 +96,101 @@ export async function validateAction(raw: unknown): Promise<CfAction> {
     if (d.current) throw new HttpError(409, 'That deployment is already live');
     return { type: 'pages-rollback', accountId, accountName: target.accountName, project, deploymentId, deploymentLabel: d.label };
   }
+  if (a.type === 'logpush') return validateLogpush(a);
   throw new HttpError(400, 'Unknown action');
+}
+
+// ── Logpush jobs ────────────────────────────────────────────────────────────
+
+const LOGPUSH_OPS = ['create', 'update', 'delete'] as const;
+const MUTABLE = ['name', 'dataset', 'enabled', 'destination_conf', 'filter', 'frequency', 'logpull_options', 'output_options', 'max_upload_bytes', 'max_upload_records', 'max_upload_interval_seconds', 'kind'] as const;
+const EMPTY: Record<string, unknown> = { name: '', filter: '', frequency: '', enabled: false, output_options: null, max_upload_bytes: 0, max_upload_records: 0, max_upload_interval_seconds: 0 };
+
+/** The job's settings (not its last run), to tell whether it changed since the request. */
+const fingerprint = (j: RawJob) => crypto.createHash('sha256').update(JSON.stringify(MUTABLE.map((k) => j[k] ?? null))).digest('base64url');
+/** The fields of `job` that `keys` name, as summarizeJob shows them. */
+const pick = (job: RawJob, keys: string[]) => summarizeJob(Object.fromEntries(keys.map((k) => [k, (job as unknown as Record<string, unknown>)[k] ?? EMPTY[k] ?? null])) as Partial<RawJob>);
+
+async function validateLogpush(a: Record<string, unknown>): Promise<LogpushAction> {
+  const op = LOGPUSH_OPS.find((x) => x === a.op);
+  if (!op) throw new HttpError(400, 'Choose create, update or delete');
+  const scope: LogpushScope | null = a.scope === 'zone' ? 'zone' : a.scope === 'account' ? 'account' : null;
+  if (!scope) throw new HttpError(400, 'Choose an account or a zone');
+  const scopeId = str(a.scopeId, scope === 'zone' ? 'Zone' : 'Account', 64);
+  const t = await scopeToken(scope, scopeId);
+  let changes: LogpushChanges = {};
+  if (op !== 'delete') {
+    try { changes = checkChanges(a.changes, op); } catch (err) { throw err instanceof ChangeError ? new HttpError(400, err.message) : err; }
+  }
+  const { destination_conf, ownership_challenge, ...plain } = changes;
+  const base = { type: 'logpush' as const, op, scope, scopeId, scopeName: t.scopeName, changes: plain, ownership: !!ownership_challenge };
+  let out: LogpushAction;
+  if (op === 'create') {
+    // Cloudflare checks the destination first (this also tells a token without Logs Edit at once).
+    await validateDestination(t.token, scope, scopeId, destination_conf!);
+    out = { ...base, jobLabel: plain.name || plain.dataset!, before: {}, after: summarizeJob({ ...plain, enabled: plain.enabled ?? true, destination_conf }) };
+  } else {
+    const jobId = Number(a.jobId);
+    if (!Number.isInteger(jobId) || jobId < 1) throw new HttpError(400, 'Unknown Logpush job');
+    const job = await readRawJob(t.token, scope, scopeId, jobId);
+    const jobLabel = job.name || `#${job.id}`;
+    if (op === 'delete') {
+      out = { ...base, jobId, jobLabel, print: fingerprint(job), before: pick(job, ['name', 'dataset', 'enabled', 'destination_conf', 'filter']), after: {} };
+    } else {
+      const keys = [...Object.keys(plain), ...(destination_conf ? ['destination_conf'] : [])];
+      const before = pick(job, keys);
+      const after = summarizeJob({ ...plain, ...(destination_conf ? { destination_conf } : {}) } as Partial<RawJob>);
+      // A new destination with the same host still changes (its path or keys): say so.
+      if (destination_conf && destination_conf !== job.destination_conf && after.destination === before.destination) after.destination = `${after.destination} (path or keys changed)`;
+      if (!diffLines(before, after).length && !ownership_challenge) throw new HttpError(400, 'Nothing would change');
+      if (destination_conf && destination_conf !== job.destination_conf) await validateDestination(t.token, scope, scopeId, destination_conf);
+      out = { ...base, jobId, jobLabel, print: fingerprint(job), before, after };
+    }
+  }
+  if (destination_conf || ownership_challenge) {
+    const nonce = crypto.randomBytes(12).toString('hex');
+    out.secret = { nonce, sealed: await sealRelay(Buffer.from(JSON.stringify({ destination_conf, ownership_challenge }), 'utf8'), `logpush-action:${nonce}`) };
+  }
+  return out;
+}
+
+function describeLogpush(a: LogpushAction): { title: string; details: string[] } {
+  const where = `${a.scope === 'zone' ? 'zone' : 'account'} ${a.scopeName}`;
+  const head = `${a.scope === 'zone' ? 'Zone' : 'Account'} ${a.scopeName}`;
+  if (a.op === 'create') return { title: `Create a Logpush job for ${a.changes.dataset} in ${where}`, details: [head, ...fieldLines(a.after), ...(a.ownership ? ['With the ownership challenge from the destination.'] : [])] };
+  if (a.op === 'delete') return { title: `Delete Logpush job “${a.jobLabel}” in ${where}`, details: [head, 'Its logs stop being pushed; the destination keeps what it already has.', ...fieldLines(a.before)] };
+  const lines = diffLines(a.before, a.after);
+  const onlyToggle = Object.keys(a.after).length === 1 && 'enabled' in a.after;
+  const title = onlyToggle ? `Turn ${a.changes.enabled ? 'on' : 'off'} Logpush job “${a.jobLabel}” in ${where}` : `Change Logpush job “${a.jobLabel}” in ${where}`;
+  return { title, details: [head, ...lines, ...(a.ownership ? ['With a new ownership challenge from the destination.'] : [])] };
+}
+
+async function executeLogpush(a: LogpushAction): Promise<string> {
+  const t = await scopeToken(a.scope, a.scopeId);
+  const secret = a.secret ? JSON.parse((await openRelay(a.secret.sealed, `logpush-action:${a.secret.nonce}`)).toString('utf8')) as Pick<LogpushChanges, 'destination_conf' | 'ownership_challenge'> : {};
+  const need = editPermission(a.scope);
+  const fail = (r: { status: number; body: { errors?: { message?: string }[] } | null }) => new HttpError(refused(r) ? 403 : 502, refused(r) ? `Cloudflare refused it: the stored token needs “${need}” (${scrubText(cfReason(r))})` : `Cloudflare: ${scrubText(cfReason(r))}`);
+  let done: string;
+  if (a.op === 'create') {
+    const r = await cfCall<{ id?: number }>(t.token, 'POST', jobsPath(a.scope, a.scopeId), { ...a.changes, ...secret });
+    if (!ok(r)) throw fail(r);
+    done = `Created Logpush job ${r.body!.result?.id ? `#${r.body!.result.id} ` : ''}for ${a.changes.dataset} in ${a.scopeName}`;
+  } else {
+    const job = await readRawJob(t.token, a.scope, a.scopeId, a.jobId!);
+    if (a.print && fingerprint(job) !== a.print) throw new HttpError(409, 'The job changed in Cloudflare since this was asked — ask again with its current settings');
+    if (a.op === 'delete') {
+      const r = await cfCall(t.token, 'DELETE', jobsPath(a.scope, a.scopeId, a.jobId));
+      if (!ok(r)) throw fail(r);
+      done = `Deleted Logpush job “${a.jobLabel}” in ${a.scopeName}`;
+    } else {
+      const r = await cfCall(t.token, 'PUT', jobsPath(a.scope, a.scopeId, a.jobId), { ...a.changes, ...secret });
+      if (!ok(r)) throw fail(r);
+      done = `${describeLogpush(a).title.replace(/^Turn/, 'Turned').replace(/^Change/, 'Changed')}`;
+    }
+  }
+  // The Logpush page shows the job as it is now after the check reads this scope again.
+  void import('./monitor-queue').then((m) => m.requestRun({ checks: ['logpush'], ...(a.scope === 'zone' ? { zoneId: a.scopeId } : { accountId: a.scopeId }) })).catch(() => {});
+  return done;
 }
 
 export function describe(a: CfAction): { title: string; details: string[] } {
@@ -83,6 +198,7 @@ export function describe(a: CfAction): { title: string; details: string[] } {
     const what = a.mode === 'everything' ? 'everything' : `${a.values.length} ${a.mode === 'files' ? 'URL' : a.mode.replace(/es$|s$/, '')}${a.values.length === 1 ? '' : 's'}`;
     return { title: `Purge ${what} from the cache of ${a.zoneName}`, details: a.mode === 'everything' ? ['Every cached file of the zone is dropped; the origin serves them again until they are cached anew.'] : [`Purge by ${a.mode}:`, ...a.values.slice(0, 20), ...(a.values.length > 20 ? [`…and ${a.values.length - 20} more`] : [])] };
   }
+  if (a.type === 'logpush') return describeLogpush(a);
   if (a.type === 'worker-rollback') return { title: `Roll Worker “${a.script}” back`, details: [`Account ${a.accountName || a.accountId}`, `Deploy version ${a.versionLabel} to 100% of traffic. Bindings and secrets are not rolled back.`] };
   return { title: `Roll Pages project “${a.project}” back`, details: [`Account ${a.accountName || a.accountId}`, `Make deployment ${a.deploymentLabel} live again.`] };
 }
@@ -105,6 +221,7 @@ export async function executeAction(a: CfAction): Promise<string> {
     if (!ok(r)) throw refusal(r, 'Zone › Cache Purge › Purge');
     return describe(a).title.replace(/^Purge/, 'Purged');
   }
+  if (a.type === 'logpush') return executeLogpush(a);
   const token = await accountToken(a.accountId);
   if (a.type === 'worker-rollback') {
     const r = await cfCall(token, 'POST', `/accounts/${a.accountId}/workers/scripts/${encodeURIComponent(a.script)}/deployments`, {

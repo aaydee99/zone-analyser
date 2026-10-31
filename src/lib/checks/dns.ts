@@ -1,6 +1,6 @@
 import 'server-only';
 import { cfList, cfOne } from '../cf-read';
-import { db } from '../supabase';
+import { snapshotDnssec } from '../stored-rows';
 import { Lookups, dataOf, dohEnabled } from '../doh';
 import { compareDelegation, compareDnssec, inZone, nsSet, originLeaks, takeoverService, type DnsRecord } from '../dns-hygiene';
 import type { NewFinding } from '../monitor-store';
@@ -35,13 +35,9 @@ interface TargetState { s: number; at: string }
 interface State { targets?: Record<string, TargetState> }
 
 /** The newest drift snapshot's DNSSEC status for the zone, when it is recent (null otherwise). */
-async function snapshotDnssec(zoneId: string): Promise<string | null> {
-  try {
-    const { data } = await db().from('monitor_snapshots').select('taken_at, dnssec:data->dnssec').eq('zone_id', zoneId).eq('kind', 'latest').maybeSingle();
-    const row = data as { taken_at?: string; dnssec?: unknown } | null;
-    if (!row || typeof row.dnssec !== 'string' || (daysSince(row.taken_at) ?? 99) > 2) return null;
-    return row.dnssec;
-  } catch { return null; }
+async function recentDnssec(zoneId: string): Promise<string | null> {
+  const s = await snapshotDnssec(zoneId);
+  return s && (daysSince(s.takenAt) ?? 99) <= 2 ? s.dnssec : null;
 }
 
 const status = (s: number) => (s === 0 ? 'resolves' : s === 3 ? 'NXDOMAIN' : s === 2 ? 'SERVFAIL' : s === -1 ? 'no answer' : `RCODE ${s}`);
@@ -66,7 +62,7 @@ export const dns: CheckDef = {
       try { records = await cfList<Rec>(z.token, `/zones/${z.id}/dns_records`, { perPage: 5_000, max: 50_000, signal: ctx.signal }); } catch (err) { p.skip('DNS records', err); }
 
       // DNSSEC: drift's recent snapshot when it says off (nothing to compare a key with), else Cloudflare.
-      let dnssec: string | null = await snapshotDnssec(z.id);
+      let dnssec: string | null = await recentDnssec(z.id);
       let keyTag: number | null = null;
       if (dnssec === null || (dnssec !== '' && dnssec !== 'disabled')) {
         try { const d = await cfOne<Dnssec>(z.token, `/zones/${z.id}/dnssec`, ctx.signal); dnssec = d.status ?? ''; keyTag = typeof d.key_tag === 'number' ? d.key_tag : null; } catch (err) { if (notAvailable(err)) dnssec = ''; else { p.skip('DNSSEC', err); dnssec = null; } }

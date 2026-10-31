@@ -127,7 +127,8 @@ begin
     select mf.id, mf.check_id, mf.severity, mf.title, mf.detail, mf.account_id, mf.account_name, mf.zone_id, mf.zone_name,
       mf.first_seen, mf.last_seen, mf.resolved_at, mf.dismissed_at, mf.dismissed_by, mf.notified_at, mf.severity_rank
     from public.monitor_findings mf
-    where mf.zone_id = any (p_zone_ids) and mf.check_id = any (p_checks) and mf.resolved_at is null
+    -- A semi-join (hashed), not "= any(array)": thousands of ids are compared once each, not per row.
+    where mf.zone_id in (select unnest(p_zone_ids)) and mf.check_id = any (p_checks) and mf.resolved_at is null
       and (case when p_dismissed then mf.dismissed_at is not null else mf.dismissed_at is null end)
       and (p_severity is null or mf.severity = p_severity)
       and (coalesce(p_term, '') = '' or mf.title ilike '%' || p_term || '%')

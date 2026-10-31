@@ -10,6 +10,8 @@ import type { RunMeta } from '@/lib/run-types';
 import type { BackupConfig } from '@/lib/config';
 import { ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonTable, Stat, StatusBadge, cx } from '@/components/ui';
 import { RunTable } from '@/components/run-table';
+import { QuickZones } from '@/components/quick-zones';
+import { HealthCard } from '@/components/health-card';
 
 interface Preset { id: string; name: string; config: BackupConfig; updatedAt: string }
 interface Check { ok: boolean; detail: string }
@@ -116,9 +118,12 @@ export default function Overview() {
               <RunTable runs={runs.slice(0, 6)} />
             )}
           </Card>
+
+          <QuickZones />
         </div>
 
         <div className="space-y-6">
+          <HealthCard />
           {canRun && !loaded && (
             <Card>
               <Loading label="Loading setup checklist">

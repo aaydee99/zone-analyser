@@ -60,6 +60,10 @@ export function scrubText(s: string | null | undefined, max = 500): string {
   return s.replace(URL_IN_TEXT, (u) => redactDestination(u)).replace(SECRET_PARAM, '$1=••••').slice(0, max);
 }
 
+/** Datasets offered when creating a job (Cloudflare lists more; any lower-case name is accepted). */
+export const ZONE_DATASETS = ['http_requests', 'firewall_events', 'dns_logs', 'nel_reports', 'page_shield_events', 'spectrum_events', 'zaraz_events'];
+export const ACCOUNT_DATASETS = ['audit_logs', 'audit_logs_v2', 'access_requests', 'gateway_dns', 'gateway_http', 'gateway_network', 'workers_trace_events', 'network_analytics_logs', 'magic_ids_detections', 'zero_trust_network_sessions', 'device_posture_results', 'casb_findings', 'dns_firewall_logs', 'email_security_alerts', 'sinkhole_http_logs', 'ssh_logs', 'dlp_forensic_copies', 'ipsec_logs'];
+
 // ── Changes the console may ask for ─────────────────────────────────────────
 
 export interface LogpushChanges {
@@ -198,6 +202,11 @@ export function summarizeJob(j: Partial<RawJob> & { destination?: string }): Rec
 }
 
 const FIELD_LABEL: Record<string, string> = { name: 'Name', enabled: 'Enabled', dataset: 'Dataset', destination: 'Destination', filter: 'Filter', output: 'Output', frequency: 'Frequency', max_upload_bytes: 'Max batch size', max_upload_records: 'Max records per batch', max_upload_interval_seconds: 'Max seconds between batches' };
+
+/** "Dataset: http_requests" for each field. */
+export function fieldLines(rec: Record<string, string>): string[] {
+  return Object.entries(rec).map(([k, v]) => `${FIELD_LABEL[k] ?? k}: ${v}`);
+}
 
 /** "Enabled: on → off" for each field that changes. */
 export function diffLines(before: Record<string, string>, after: Record<string, string>): string[] {

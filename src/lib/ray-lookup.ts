@@ -3,6 +3,7 @@ import type { Progress } from './bg-job';
 import { HttpError } from './http';
 import { FIELD, J, ZONE_ID, errorText, fieldsFor, gql, isLimit, isPermission, tokenCache, zoneLimits } from './investigate-gql';
 import { rankZones, zonesOf } from './investigate-scope';
+import { parseRay, rayWindow } from './ray-parse';
 import { RAY_WINDOWS, type Cell, type Fields, type RayResult, type RaySecurityEvent } from './investigate-types';
 import { MANAGED_RULESETS } from './traffic-types';
 import type { ZoneListItem } from './zone-catalog';
@@ -19,21 +20,13 @@ import { rulesetNames } from './zone-explorer';
 //    busiest zones first (when their traffic is cached), newest day first, and it stops at the first hit.
 // A lookup never sends more than its query cap (RAY_MAX_QUERIES, 60 by default — a quarter of one
 // token's GraphQL budget): beyond it, it says how far it got instead of fanning out over every zone.
+// (A batch Cloudflare refuses is split to find the zone it refuses; those splits are capped at as many again.)
 // Then one more query (plus the zone's limits, kept for six hours) reads the request in full.
 
-/** A Ray ID: 16 hex characters, optionally with the data center ("-AMS"). */
-const RAY = /^([0-9a-f]{16})(?:-[a-z]{3,4})?$/i;
-/** The 16-character Ray ID (rayName), or null. */
-export function parseRay(v: string): string | null {
-  const m = RAY.exec(v.trim());
-  return m ? m[1].toLowerCase() : null;
-}
+export { parseRay };
 
 const ZONES_PER_QUERY = 10;
-const SLICE_MS = 24 * 3600_000;
 const PARALLEL = 3;
-/** Every plan keeps the adaptive datasets for at least 31 days. */
-const KEPT_MS = 31 * 86_400_000 - 120_000;
 export const RAY_MAX_QUERIES = Math.min(200, Math.max(5, Number(process.env.RAY_MAX_QUERIES) || 60));
 
 // Fields read for the request and its security events. The plan's field list (settings) says which
@@ -76,21 +69,6 @@ function batchesOf(zones: ZoneListItem[], credentialOf: Record<string, { id: str
   return out;
 }
 
-/** The window: back from now, or centred on `at`, never older than Cloudflare keeps. */
-export function rayWindow(hours: number, at?: string, now = Date.now()) {
-  let since: number, until: number;
-  if (at) {
-    const t = Date.parse(at);
-    if (Number.isNaN(t)) throw new HttpError(400, 'Not a time (use ISO 8601, e.g. 2026-10-31T14:05:00Z)');
-    since = t - (hours * 3600_000) / 2; until = Math.min(now, t + (hours * 3600_000) / 2);
-  } else { until = now; since = now - hours * 3600_000; }
-  since = Math.max(since, now - KEPT_MS);
-  if (since >= until) throw new HttpError(400, 'Cloudflare keeps single requests and security events for about 31 days — choose a later time');
-  const slices: { since: string; until: string }[] = [];
-  for (let end = until; end > since; end -= SLICE_MS) slices.push({ since: new Date(Math.max(since, end - SLICE_MS)).toISOString(), until: new Date(end).toISOString() });
-  return { since: new Date(since).toISOString(), until: new Date(until).toISOString(), slices };
-}
-
 type Rows = { datetime?: string }[];
 interface SearchZone { zoneTag?: string; fw?: Rows; rq?: Rows }
 
@@ -112,7 +90,8 @@ export async function lookupRay(input: string, opts: RayOptions = {}): Promise<R
   const progress = opts.progress ?? { done: 0, total: 0 };
   const scope = await zonesOf(opts);
   const { zones, ranking } = await rankZones(scope.zones);
-  const w = rayWindow(hours, opts.at);
+  let w: ReturnType<typeof rayWindow>;
+  try { w = rayWindow(hours, opts.at); } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : String(e)); }
   const maxQueries = Math.min(RAY_MAX_QUERIES, Math.max(1, opts.maxQueries ?? RAY_MAX_QUERIES));
   const batches = batchesOf(zones, scope.list.credentialOf);
   // Newest day first across all zones: most lookups are for a request of the last hours.

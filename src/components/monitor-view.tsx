@@ -235,6 +235,7 @@ export function FindingList({ check, counts, canManage, version, onChange, showC
                         {f.zoneId && zoneMeta[f.zoneId] && <TagChips tags={zoneMeta[f.zoneId].tags} owner={zoneMeta[f.zoneId].owner} max={4}
                           onPick={(t) => setZf((cur) => ({ ...cur, tags: [...new Set([...(cur.tags ?? []), t])].sort() }))} />}
                         <span title={fmtDate(f.firstSeen)}>found {relTime(f.firstSeen)}</span>
+                        {f.zoneId && <Link href={`/console/investigate/timeline?zone=${encodeURIComponent(f.zoneId)}`} className="text-signal hover:underline">Zone timeline</Link>}
                         {f.dismissedAt && <span>dismissed by {f.dismissedBy} {relTime(f.dismissedAt)}</span>}
                       </div>
                     </div>

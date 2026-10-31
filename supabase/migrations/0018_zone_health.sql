@@ -2,7 +2,7 @@
 -- by severity and check, units that fail or were never read, the nearest certificate expiry, drift),
 -- kept in a table that triggers bring up to date whenever a zone's monitoring unit finishes or one of
 -- its findings is dismissed or resolved — so the Health page reads one indexed table. Also indexes
--- for the DNS hygiene and IP & ASN list pages (apply after 0011).
+-- and readers of stored rows for the DNS hygiene, load balancing and IP & ASN list pages (apply after 0011).
 -- Rollback: supabase/rollbacks/0018_zone_health.down.sql
 -- Only the service role reads these tables (RLS on, no policies), like the rest of the console.
 
@@ -26,8 +26,9 @@ create index if not exists zone_health_name_idx on public.zone_health (lower(zon
 
 -- Open findings of a zone, whatever the check (the score reads them per zone).
 create index if not exists monitor_findings_open_zone_idx on public.monitor_findings (zone_id) where resolved_at is null;
--- The lists page and the DNS hygiene zones (onboarding) filter stored rows by account and status.
-create index if not exists monitor_rows_account_idx on public.monitor_rows (check_id, section, (data->>'accountId')) where check_id in ('lists', 'dns', 'loadbalancing');
+-- The lists page and the DNS hygiene zones (onboarding) filter stored rows by account, list, kind and status.
+create index if not exists monitor_rows_account_idx on public.monitor_rows (check_id, section, (data->>'accountId'), (data->>'list')) where check_id in ('lists', 'dns', 'loadbalancing');
+create index if not exists monitor_rows_kind_idx on public.monitor_rows (check_id, section, (data->>'kind')) where check_id = 'lists';
 create index if not exists monitor_rows_status_idx on public.monitor_rows (check_id, section, (data->>'status')) where check_id = 'dns';
 
 -- Recomputes the score of the given zones (removes the ones monitoring no longer has).
@@ -209,11 +210,48 @@ language sql stable set search_path = public as $$
   from public.zone_health h where h.account_id is not null group by h.account_id order by max(h.account_name) limit 1000
 $$;
 
+-- One page of a check's stored rows filtered by fields of the row (the lists page, the DNS hygiene
+-- zones not active yet, and the checks' own reads): each filter is optional; p_q searches the row's
+-- text (LIKE wildcards already removed by the console); p_status_not leaves out rows with that status.
+create or replace function public.monitor_rows_filtered(p_check text, p_section text, p_account text, p_list text, p_kind text,
+  p_status_not text, p_q text, p_offset integer, p_limit integer)
+returns table (data jsonb, total bigint)
+language sql stable set search_path = public as $$
+  select r.data, count(*) over ()
+  from public.monitor_rows r
+  where r.check_id = p_check and r.section = p_section
+    and (p_account is null or r.data->>'accountId' = p_account)
+    and (p_list is null or r.data->>'list' = p_list)
+    and (p_kind is null or r.data->>'kind' = p_kind)
+    and (p_status_not is null or r.data->>'status' is distinct from p_status_not)
+    and (coalesce(p_q, '') = '' or r.search like '%' || lower(p_q) || '%')
+  order by r.sort, r.id
+  offset greatest(0, coalesce(p_offset, 0)) limit least(20000, greatest(1, coalesce(p_limit, 50)))
+$$;
+
+-- The accounts a check's stored rows name (the lists page's account filter).
+create or replace function public.monitor_rows_accounts(p_check text, p_section text)
+returns table (account_id text, account_name text)
+language sql stable set search_path = public as $$
+  select r.data->>'accountId', max(r.data->>'account') from public.monitor_rows r
+  where r.check_id = p_check and r.section = p_section and r.data->>'accountId' is not null
+  group by r.data->>'accountId' order by 2 limit 2000
+$$;
+
+-- A zone's DNSSEC status in its newest drift snapshot, without reading the whole snapshot.
+create or replace function public.monitor_snapshot_dnssec(p_zone text)
+returns table (dnssec text, taken_at timestamptz)
+language sql stable set search_path = public as $$
+  select s.data->>'dnssec', s.taken_at from public.monitor_snapshots s where s.zone_id = p_zone and s.kind = 'latest' and jsonb_typeof(s.data->'dnssec') = 'string'
+$$;
+
 -- Scores for what monitoring already stored.
 select public.zone_health_compute(coalesce((select array_agg(distinct scope_id) from public.monitor_targets where scope_kind = 'zone'), '{}'));
 
 alter table public.zone_health enable row level security;
 revoke all on public.zone_health from anon, authenticated;
 revoke all on function public.zone_health_compute(text[]), public.zone_health_on_targets(), public.zone_health_on_findings(),
-  public.zone_health_page(text, text[], text, text, integer, integer), public.zone_health_summary(text, text[]), public.zone_health_accounts() from public, anon, authenticated;
-grant execute on function public.zone_health_compute(text[]), public.zone_health_page(text, text[], text, text, integer, integer), public.zone_health_summary(text, text[]), public.zone_health_accounts() to service_role;
+  public.zone_health_page(text, text[], text, text, integer, integer), public.zone_health_summary(text, text[]), public.zone_health_accounts(),
+  public.monitor_rows_filtered(text, text, text, text, text, text, text, integer, integer), public.monitor_rows_accounts(text, text), public.monitor_snapshot_dnssec(text) from public, anon, authenticated;
+grant execute on function public.zone_health_compute(text[]), public.zone_health_page(text, text[], text, text, integer, integer), public.zone_health_summary(text, text[]), public.zone_health_accounts(),
+  public.monitor_rows_filtered(text, text, text, text, text, text, text, integer, integer), public.monitor_rows_accounts(text, text), public.monitor_snapshot_dnssec(text) to service_role;

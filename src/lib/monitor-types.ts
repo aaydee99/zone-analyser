@@ -7,7 +7,8 @@ export const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'inf
 export const SEVERITY_RANK: Record<Severity, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
 
 export type CheckId = 'posture' | 'certificates' | 'governance' | 'drift' | 'alerts' | 'availability' | 'platform' | 'appsec' | 'pagerules'
-  | 'dns' | 'loadbalancing' | 'lists';
+  | 'dns' | 'loadbalancing' | 'lists'
+  | 'logpush';
 
 export interface CheckMeta {
   id: CheckId;
@@ -49,6 +50,8 @@ export const CHECKS: CheckMeta[] = [
     description: 'Load balancers, pools and origins with their health in each region, and failovers in the last 24 hours. Read-only: nothing is drained or switched.' },
   { id: 'lists', every: 24, unit: "each account’s lists and account rules (and the rules of its zones, when it has lists)", label: 'IP & ASN lists', perm: 'runs:read', needs: ['Account: Account Filter Lists Read', 'Account: Account Rulesets Read', 'Zone: Zone WAF / Rulesets Read'],
     description: 'IP, ASN, hostname and redirect lists, their size, and the rules that use each one.' },
+  { id: 'logpush', every: 1, unit: "each account’s Logpush jobs (each zone’s every 6 hours; zones without jobs once a day)", label: 'Logpush', perm: 'runs:read', needs: ['Account: Logs Read', 'Zone: Logs Read'],
+    description: 'Logpush jobs of every account and zone: failing, stale (nothing pushed for a day) or turned off. Destinations show their host only.' },
 ];
 export const CHECK: Record<CheckId, CheckMeta> = Object.fromEntries(CHECKS.map((c) => [c.id, c])) as Record<CheckId, CheckMeta>;
 export const isCheckId = (v: unknown): v is CheckId => typeof v === 'string' && v in CHECK;

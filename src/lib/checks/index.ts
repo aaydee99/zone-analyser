@@ -13,5 +13,6 @@ import { pagerules } from './pagerules';
 import { dns } from './dns';
 import { loadbalancing } from './loadbalancing';
 import { lists } from './lists';
+import { logpush } from './logpush';
 
-export const DEFS: Record<CheckId, CheckDef> = { posture, certificates, governance, drift, alerts, availability, platform, appsec, pagerules, dns, loadbalancing, lists };
+export const DEFS: Record<CheckId, CheckDef> = { posture, certificates, governance, drift, alerts, availability, platform, appsec, pagerules, dns, loadbalancing, lists, logpush };

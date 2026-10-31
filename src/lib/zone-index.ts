@@ -318,7 +318,7 @@ export function resourceRows(r: HclResource, zone: string): IndexRow[] {
       const key = ident ? relName(ident, zone) : '-';
       for (const [p, v] of leaves(b)) {
         if (p === 'id') continue;
-        push({ kind: 'resource', item: `${short}:${key}:${p}`, path: `${short}${ident ? ` ${ident}` : ''} ${p}`, subject: ident || short, value: v });
+        push({ kind: /(^|\.)expression$/.test(p) ? 'rule' : 'resource', item: `${short}:${key}:${p}`, path: `${short}${ident ? ` ${ident}` : ''} ${p}`, subject: ident || short, value: v });
       }
       return out;
     }
@@ -348,8 +348,8 @@ export function backupZone(files: { name: string; text: string }[]): { zoneId: s
   let zoneId: string | null = null, accountId: string | null = null;
   for (const f of files) {
     if (!zoneId) zoneId = /^\s*zone_id\s*=\s*"([0-9a-f]{32})"/m.exec(f.text)?.[1] ?? null;
-    if (f.name === 'cloudflare_zone.tf') {
-      const z = parseHcl(f.text)[0];
+    if (f.text.includes('resource "cloudflare_zone" ')) {
+      const z = parseHcl(f.text).find((r) => r.type === 'cloudflare_zone');
       if (z) {
         zoneId = /^terraform_managed_resource_([0-9a-f]{32})/.exec(z.label)?.[1] ?? zoneId;
         const acct = z.body.account;
