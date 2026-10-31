@@ -368,7 +368,7 @@ function DailyTools() {
         </Reveal>
         <p className="mt-8 max-w-3xl text-[13.5px] leading-relaxed text-faint">
           The only writes to Cloudflare in the console are a restore apply, a revert, a cache purge, a Worker or Pages rollback and Logpush job changes.
-          Each is limited to the roles allowed to make it, and Logpush changes, purges and rollbacks always wait for a super admin’s approval.
+          Each is limited to the roles allowed to make it: when an admin asks for a purge, a rollback, a Logpush change or a restore apply, it waits for a super admin’s approval.
         </p>
       </div>
     </section>
@@ -489,7 +489,7 @@ function Security() {
   const items: { title: string; body: string }[] = [
     { title: 'Encrypted vault', body: 'Credentials are sealed with AES-256-GCM under one random 256-bit key. The copy that opens the vault is wrapped with scrypt of a separate vault password. The database only ever holds ciphertext.' },
     { title: 'Secrets stay out of logs', body: 'Backups get their secrets as environment variables, and every log line shows them as ••••••••. Only a super admin with the vault unlocked can reveal one.' },
-    { title: 'Reads unless you restore', body: 'Backups, the explorer, activity, analytics, monitoring, search and the investigation tools only read. During compare and plan, a guard stops any write from reaching Cloudflare. Only an apply, a revert, or an approved purge, rollback or Logpush change writes.' },
+    { title: 'Reads unless you restore', body: 'Backups, the explorer, activity, analytics, monitoring, search and the investigation tools only read. During compare and plan, a guard stops any write from reaching Cloudflare. Only an apply, a revert, a cache purge, a rollback or a Logpush change writes.' },
     { title: 'Keys held in memory', body: 'The Global API Key a restore or revert needs is kept in the console’s memory only: never on disk, in the database, the audit log or the request.' },
     { title: 'Roles on every request', body: 'Permissions are checked on the server for each call; the interface only hides what a role cannot use. Role changes and password resets sign people out everywhere.' },
     { title: 'Sessions and sign-in', body: 'Idle sessions sign out (30 minutes at most), the vault locks itself, and sign-in can require a Cloudflare Turnstile CAPTCHA.' },
@@ -554,7 +554,7 @@ function Plans() {
 // ── FAQ ─────────────────────────────────────────────────────────────────────
 function Faq() {
   const qa: { q: string; a: string }[] = [
-    { q: 'Does it need write access to Cloudflare?', a: 'Not for its everyday work. Backups, the Zone explorer, Cloudflare activity, analytics, monitoring, search and the investigation tools only read. Applying a restore or reverting a change ask for a Global API Key at that moment, held in memory only. Cache purges, rollbacks and Logpush changes need a token that allows them, and always wait for a super admin to approve.' },
+    { q: 'Does it need write access to Cloudflare?', a: 'Not for its everyday work. Backups, the Zone explorer, Cloudflare activity, analytics, monitoring, search and the investigation tools only read. Applying a restore or reverting a change ask for a Global API Key at that moment, held in memory only. Cache purges, rollbacks and Logpush changes need a token that allows them; when an admin asks for one, it waits for a super admin to approve.' },
     { q: 'Will it slow down with thousands of zones?', a: 'It is built for that. Search, comparisons, the health score and reports read what is already stored instead of calling Cloudflare. Live reads run on the worker within each token’s rate limit, lists load a page at a time, and nothing refreshes until you ask.' },
     { q: 'Can we label zones by team or customer?', a: 'Yes. Tags, an owner and a contact can be set per zone, one by one or from a CSV, and every list can be filtered by them. They are kept in your Supabase project and never sent to Cloudflare.' },
     { q: 'What exactly is in a backup?', a: `Terraform files for each zone and the account, generated with cf-terraforming across ${TF_ZONE_TYPES + TF_ACCOUNT_TYPES} resource types, plus JSON from Cloudflare’s API for what Terraform cannot express. It is uploaded to your R2 or S3 bucket, and you can download any run as a .zip.` },
