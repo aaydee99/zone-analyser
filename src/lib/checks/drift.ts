@@ -1,6 +1,6 @@
 import 'server-only';
 import crypto from 'node:crypto';
-import { cfGet, cfList, cfOne, cfReason, inParallel, ok, mask, refused } from '../cf-read';
+import { BudgetError, ReadError, cfGet, cfList, cfOne, cfReason, inParallel, ok, mask, refused } from '../cf-read';
 import { db } from '../supabase';
 import { must } from '../monitor-store';
 import { SETTING_IDS } from '../zone-catalog';
@@ -35,10 +35,14 @@ export interface ZoneSnapshot {
   accountName: string;
   settings: Record<string, string>;
   rulesets: Record<string, { name: string; phase: string; version: string }>;
-  /** DNS records, one per line ("name TTL class type value"), without the SOA. */
-  dns: string[];
-  dnssec: string;
+  /** DNS records, one per line ("name TTL class type value"), without the SOA; null: not read (nothing to compare). */
+  dns: string[] | null;
+  /** DNSSEC status ('' when the zone has none); null: not read. */
+  dnssec: string | null;
 }
+
+/** A snapshot, the parts of it that could not be read, and why. */
+interface Taken { snap: ZoneSnapshot; failedSettings: string[]; problems: string[] }
 
 interface SnapshotRow { zone_id: string; kind: 'baseline' | 'latest'; data: ZoneSnapshot; taken_at: string; accepted_at: string | null; accepted_by: string | null }
 
@@ -56,22 +60,45 @@ function dnsLines(text: string): string[] {
   return text.split(/\r?\n/).map((l) => l.replace(/;.*$/, '').trim().replace(/\s+/g, ' ')).filter((l) => l && !l.startsWith('$') && !/\bSOA\b/.test(l)).sort();
 }
 
-async function snapshot(z: UnitTarget, signal?: AbortSignal): Promise<ZoneSnapshot> {
+/**
+ * A new snapshot of a zone. What could not be read is left out (a setting) or null (DNS records,
+ * DNSSEC) instead of looking empty, so it is not compared — a failed DNS export must not look like
+ * every record was deleted.
+ */
+async function snapshot(z: UnitTarget, signal?: AbortSignal): Promise<Taken> {
   const settings: Record<string, string> = {};
+  const failedSettings: string[] = [];
+  const problems: string[] = [];
   await inParallel(WATCHED, 6, async (id) => {
     const r = await cfGet<{ value?: unknown }>(z.token, `/zones/${z.id}/settings/${id}`, signal);
     if (ok(r)) settings[id] = show(r.body!.result?.value);
+    // Not there (404, or not on the plan): nothing to watch. Anything else: not known this time.
+    else if (!notAvailable(new ReadError(r.status, cfReason(r)))) failedSettings.push(id);
   });
+  if (failedSettings.length) problems.push(`Settings not read (${failedSettings.join(', ')}): not compared this time`);
   const rulesets: ZoneSnapshot['rulesets'] = {};
   for (const rs of await cfList<{ id: string; name?: string; phase?: string; kind?: string; version?: string }>(z.token, `/zones/${z.id}/rulesets`, { perPage: 0, signal })) {
     if (rs.kind === 'managed') continue; // Cloudflare's own rulesets change with every release
     rulesets[rs.id] = { name: rs.name ?? '', phase: rs.phase ?? '', version: String(rs.version ?? '') };
   }
   const exp = await cfGet(z.token, `/zones/${z.id}/dns_records/export`, signal);
-  const dns = exp.status === 200 && exp.text !== undefined ? dnsLines(exp.text) : [];
-  let dnssec = '';
-  try { dnssec = (await cfOne<{ status?: string }>(z.token, `/zones/${z.id}/dnssec`, signal)).status ?? ''; } catch (err) { if (!notAvailable(err)) throw err; }
-  return { takenAt: new Date().toISOString(), zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName, settings, rulesets, dns, dnssec };
+  const dns = exp.status === 200 && exp.text !== undefined ? dnsLines(exp.text) : null;
+  if (!dns) problems.push(`DNS records could not be exported (${exp.status === 200 ? 'no BIND file in the answer' : cfReason(exp)}): not compared this time`);
+  let dnssec: string | null = '';
+  try { dnssec = (await cfOne<{ status?: string }>(z.token, `/zones/${z.id}/dnssec`, signal)).status ?? ''; } catch (err) {
+    if (err instanceof BudgetError || (err instanceof Error && err.name === 'AbortError')) throw err;
+    if (!notAvailable(err)) { dnssec = null; problems.push(`DNSSEC could not be read (${err instanceof Error ? err.message : String(err)}): not compared this time`); }
+  }
+  return { snap: { takenAt: new Date().toISOString(), zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName, settings, rulesets, dns, dnssec }, failedSettings, problems };
+}
+
+/** The snapshot to keep as the newest: what could not be read now stays as it was in `older`. */
+function keepUnread(t: Taken, older: ZoneSnapshot | null): ZoneSnapshot {
+  const s = t.snap;
+  if (!older) return s;
+  const settings = { ...s.settings };
+  for (const id of t.failedSettings) if (older.settings?.[id] !== undefined) settings[id] = older.settings[id];
+  return { ...s, settings, dns: s.dns ?? older.dns ?? null, dnssec: s.dnssec ?? older.dnssec ?? null };
 }
 
 interface Change { area: string; item: string; before: string; after: string; severity: Severity }
@@ -89,9 +116,12 @@ function diff(base: ZoneSnapshot, now: ZoneSnapshot): Change[] {
     else if (!b) out.push({ area: 'Rules', item: name, before: `version ${a.version}`, after: 'removed', severity: 'medium' });
     else if (a.version !== b.version) out.push({ area: 'Rules', item: name, before: `version ${a.version}`, after: `version ${b.version}`, severity: 'medium' });
   }
-  const was = new Set(base.dns), is = new Set(now.dns);
-  for (const l of now.dns) if (!was.has(l)) out.push({ area: 'DNS', item: l, before: '—', after: 'added', severity: 'low' });
-  for (const l of base.dns) if (!is.has(l)) out.push({ area: 'DNS', item: l, before: 'present', after: 'removed', severity: 'low' });
+  // DNS records not read (now, or when the baseline was taken) are not compared.
+  if (Array.isArray(base.dns) && Array.isArray(now.dns)) {
+    const was = new Set(base.dns), is = new Set(now.dns);
+    for (const l of now.dns) if (!was.has(l)) out.push({ area: 'DNS', item: l, before: '—', after: 'added', severity: 'low' });
+    for (const l of base.dns) if (!is.has(l)) out.push({ area: 'DNS', item: l, before: 'present', after: 'removed', severity: 'low' });
+  }
   if (base.dnssec !== now.dnssec && base.dnssec && now.dnssec) out.push({ area: 'DNSSEC', item: 'status', before: base.dnssec, after: now.dnssec, severity: 'medium' });
   return out;
 }
@@ -110,17 +140,34 @@ export const drift: CheckDef = {
       if (!since || !Number.isFinite(Date.parse(since))) return { rows: {}, findings: [], complete: true, state: { since: before.toISOString() } };
       const zones = new Set<string>();
       let cursor = '';
+      let done = false;
+      /** The newest entry read. The log is read oldest first, so a run that stops at AUDIT_PAGES leaves the rest for the next. */
+      let last = '';
       for (let page = 0; page < AUDIT_PAGES; page++) {
-        const q = new URLSearchParams([['since', since], ['before', before.toISOString()], ['limit', '1000'], ['direction', 'desc'], ...CHANGES_ONLY]);
+        const q = new URLSearchParams([['since', since], ['before', before.toISOString()], ['limit', '1000'], ['direction', 'asc'], ...CHANGES_ONLY]);
         if (cursor) q.set('cursor', cursor);
-        const r = await cfGet<{ zone?: { id?: string } }[]>(a.token, `/accounts/${a.accountId}/logs/audit?${q}`, ctx.signal);
+        const r = await cfGet<{ zone?: { id?: string }; action?: { time?: string }; when?: string }[]>(a.token, `/accounts/${a.accountId}/logs/audit?${q}`, ctx.signal);
         if (!ok(r)) {
           const why = refused(r) ? `The audit log cannot be read (${cfReason(r)}): add Account Settings Read — until then, changes show up at the weekly read of every zone` : `The audit log could not be read (${cfReason(r)})`;
           return { rows: {}, findings: [], complete: false, problems: [why], state: { since }, ...(zones.size ? { wake: { kind: 'zone' as const, ids: [...zones] } } : {}) };
         }
-        for (const e of Array.isArray(r.body!.result) ? r.body!.result : []) if (e?.zone?.id) zones.add(e.zone.id);
+        for (const e of Array.isArray(r.body!.result) ? r.body!.result : []) {
+          if (e?.zone?.id) zones.add(e.zone.id);
+          const t = e?.action?.time ?? e?.when;
+          if (typeof t === 'string' && Number.isFinite(Date.parse(t)) && (!last || Date.parse(t) > Date.parse(last))) last = t;
+        }
         cursor = r.body!.result_info?.cursor ?? '';
-        if (!cursor) break;
+        if (!cursor) { done = true; break; }
+      }
+      if (!done) {
+        // More changes than one run reads: the next run, in a few minutes, starts at the newest one read.
+        const from = last && Date.parse(last) > Date.parse(since) ? last : since;
+        return {
+          rows: {}, findings: [], complete: false, counts: { auditChanged: zones.size }, dueInHours: 0.1,
+          problems: [`More than ${(AUDIT_PAGES * 1000).toLocaleString('en-US')} changes in the audit log since ${since}: read up to ${from}, the rest in a few minutes`],
+          state: { since: from },
+          ...(zones.size ? { wake: { kind: 'zone' as const, ids: [...zones] } } : {}),
+        };
       }
       return {
         rows: {}, findings: [], complete: true, counts: { auditChanged: zones.size },
@@ -131,12 +178,20 @@ export const drift: CheckDef = {
     // One zone: a new snapshot, compared with its baseline.
     zone: async (z, ctx) => {
       const scope = { zoneId: z.id, zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName };
-      const snap = await snapshot(z, ctx.signal);
+      const taken = await snapshot(z, ctx.signal);
+      const snap = taken.snap;
       let base = await readSnapshot(z.id, 'baseline');
       const first = !base;
-      await saveSnapshot({ zone_id: z.id, kind: 'latest', data: snap, taken_at: snap.takenAt, accepted_at: null, accepted_by: null });
+      // What could not be read now is kept as it was in the newest snapshot, not saved as missing.
+      const prev = first ? null : await readSnapshot(z.id, 'latest');
+      const latest = keepUnread(taken, prev?.data ?? base?.data ?? null);
+      await saveSnapshot({ zone_id: z.id, kind: 'latest', data: latest, taken_at: snap.takenAt, accepted_at: null, accepted_by: null });
       if (!base) {
-        base = { zone_id: z.id, kind: 'baseline', data: snap, taken_at: snap.takenAt, accepted_at: snap.takenAt, accepted_by: 'first check' };
+        base = { zone_id: z.id, kind: 'baseline', data: latest, taken_at: snap.takenAt, accepted_at: snap.takenAt, accepted_by: 'first check' };
+        await saveSnapshot(base);
+      } else if ((base.data.dns == null && snap.dns) || (base.data.dnssec == null && snap.dnssec != null)) {
+        // A part the baseline could not read when it was taken comes from the first read that has it.
+        base = { ...base, data: { ...base.data, dns: base.data.dns ?? snap.dns, dnssec: base.data.dnssec ?? snap.dnssec } };
         await saveSnapshot(base);
       }
       const changes = first ? [] : diff(base.data, snap);
@@ -145,8 +200,8 @@ export const drift: CheckDef = {
       if (snap.dnssec === 'error' || snap.dnssec === 'pending') {
         findings.push({ key: `${z.id}:dnssec:${snap.dnssec}`, severity: snap.dnssec === 'error' ? 'high' : 'medium', title: `DNSSEC is ${snap.dnssec} on ${z.zoneName}`, detail: snap.dnssec === 'pending' ? 'Add the DS record at your registrar to finish turning DNSSEC on.' : 'The DS record at the registrar does not match: resolvers that validate DNSSEC may fail to resolve the zone.', ...scope });
       }
-      const zoneRow: Row = { zoneId: z.id, zone: z.zoneName, account: z.accountName, changes: changes.length, baseline: base.accepted_at ?? base.taken_at, acceptedBy: base.accepted_by ?? '', dnssec: snap.dnssec || '—', records: snap.dns.length, _tone: changes.length ? 'warn' : 'ok', _sort: changes.length ? 0 : 1 };
-      return { rows: { changes: rows, zones: [zoneRow] }, findings, complete: true, counts: { zones: 1, changed: changes.length ? 1 : 0, changes: changes.length, newBaseline: first ? 1 : 0 } };
+      const zoneRow: Row = { zoneId: z.id, zone: z.zoneName, account: z.accountName, changes: changes.length, baseline: base.accepted_at ?? base.taken_at, acceptedBy: base.accepted_by ?? '', dnssec: latest.dnssec || '—', records: latest.dns?.length ?? null, _tone: changes.length ? 'warn' : 'ok', _sort: changes.length ? 0 : 1 };
+      return { rows: { changes: rows, zones: [zoneRow] }, findings, complete: !taken.problems.length, problems: taken.problems, counts: { zones: 1, changed: changes.length ? 1 : 0, changes: changes.length, newBaseline: first ? 1 : 0 } };
     },
   },
   sections: [

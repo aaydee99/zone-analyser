@@ -1,5 +1,5 @@
 import 'server-only';
-import { ReadError } from '../cf-read';
+import { BudgetError, ReadError } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { CheckId, Column, ReportStat, Row, Severity } from '../monitor-types';
 
@@ -85,19 +85,45 @@ export interface Totals {
   targets: { total: number; read: number; failing: number; never: number };
 }
 
+/** Cloudflare's words for a product the plan does not include (as opposed to a token without the permission). */
+const NOT_ENTITLED = /not entitled|entitlement|subscri|upgrade|your plan|plan does not|not available (?:on|for) (?:this|your) plan/i;
+
+/**
+ * A read of something that is not there: 404, or a 401/403 saying the plan lacks the product.
+ * Nothing to check, so the unit is still complete.
+ */
+export const notAvailable = (err: unknown) => err instanceof ReadError && (err.status === 404 || ((err.status === 401 || err.status === 403) && NOT_ENTITLED.test(err.message)));
+/**
+ * The token may not read this (401/403 for any other reason). Not a reason to give up on the unit,
+ * but what was not read is not known: the unit is incomplete, so its old findings stay open.
+ */
+export const refusedRead = (err: unknown) => err instanceof ReadError && (err.status === 401 || err.status === 403) && !NOT_ENTITLED.test(err.message);
+
 /** Collects read failures instead of stopping the unit. */
 export class Problems {
-  list: string[] = [];
+  private errors: string[] = [];
+  private refusedWhat: string[] = [];
   complete = true;
+  /** What failed, for the check's page: each failure, and one line for the reads the token may not do. */
+  get list(): string[] {
+    return [...this.errors, ...(this.refusedWhat.length ? [`The token may not read ${this.refusedWhat.join(', ')} — give it the permission, or these are not checked`] : [])];
+  }
+  /** A read failed: the unit is incomplete. Waiting for the budget, or being stopped, ends the unit instead. */
   add(what: string, err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') throw err;
+    if (err instanceof BudgetError) throw err;
     this.complete = false;
-    this.list.push(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+    this.errors.push(`${what}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  /** Like add(), but something that is not there (notAvailable) is fine, and a refused read is listed once with the others. */
+  skip(what: string, err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    if (err instanceof BudgetError) throw err;
+    if (notAvailable(err)) return;
+    if (refusedRead(err)) { this.complete = false; if (!this.refusedWhat.includes(what)) this.refusedWhat.push(what); return; }
+    this.add(what, err);
   }
 }
-
-/** A read the plan or token does not allow (403/404) is "not available", not a failure worth listing per item. */
-export const notAvailable = (err: unknown) => err instanceof ReadError && (err.status === 403 || err.status === 404 || err.status === 401);
 
 export const DAY = 86_400_000;
 export const daysUntil = (iso: string | null | undefined, now = Date.now()) => (iso && Number.isFinite(Date.parse(iso)) ? Math.floor((Date.parse(iso) - now) / DAY) : null);

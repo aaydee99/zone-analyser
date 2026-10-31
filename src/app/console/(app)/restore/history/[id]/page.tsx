@@ -7,7 +7,7 @@ import { api, duration, fmtDate } from '@/lib/client';
 import type { RestoreOutcome, RestoreRecord } from '@/lib/restore-history';
 import { OutcomeBadge } from '@/components/restore-table';
 import { Terminal } from '@/components/terminal';
-import { Badge, Button, Card, Loading, Skeleton, cx } from '@/components/ui';
+import { Badge, ButtonLink, Card, Loading, Skeleton, cx } from '@/components/ui';
 
 type Detail = RestoreRecord & { outcome: RestoreOutcome; live: boolean };
 
@@ -74,9 +74,9 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
         </div>}
         <div className="flex gap-2">
           {r?.live && (r.outcome === 'running' || r.outcome === 'open') && (
-            <Link href="/console/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{running ? 'Watch live' : 'Continue in New restore'}</Button></Link>
+            <ButtonLink href="/console/restore/new" variant="primary" icon={<ArrowRight className="size-4" />}>{running ? 'Watch live' : 'Continue in New restore'}</ButtonLink>
           )}
-          <Link href="/console/restore/new"><Button icon={<RotateCcw className="size-4" />}>New restore</Button></Link>
+          <ButtonLink href="/console/restore/new" icon={<RotateCcw className="size-4" />}>New restore</ButtonLink>
         </div>
       </div>
 

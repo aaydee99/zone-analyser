@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import Link from 'next/link';
 import { Check, Loader2, X } from 'lucide-react';
 import type { RunStatus } from '@/lib/run-types';
+import { useFocusTrap } from './use-focus-trap';
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
@@ -16,28 +18,44 @@ const VARIANTS: Record<Variant, string> = {
   danger: 'bg-bad/10 text-bad border border-bad/30 hover:bg-bad/20',
 };
 
+type Size = 'sm' | 'md' | 'lg';
+const buttonClass = (variant: Variant, size: Size, className?: string) => cx(
+  'inline-flex items-center justify-center gap-2 rounded-[10px] font-medium transition-[color,background-color,border-color,box-shadow,transform] duration-200 select-none',
+  'disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px',
+  size === 'sm' && 'h-8 px-3 text-[13px]',
+  size === 'md' && 'h-9 px-4 text-sm',
+  size === 'lg' && 'h-11 px-5 text-[15px]',
+  VARIANTS[variant],
+  className,
+);
+
 export function Button({
   variant = 'secondary', size = 'md', loading, icon, children, className, disabled, ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg'; loading?: boolean; icon?: ReactNode }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size; loading?: boolean; icon?: ReactNode }) {
   return (
     <button
       {...rest}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
-      className={cx(
-        'inline-flex items-center justify-center gap-2 rounded-[10px] font-medium transition-[color,background-color,border-color,box-shadow,transform] duration-200 select-none',
-        'disabled:opacity-50 disabled:cursor-not-allowed active:translate-y-px',
-        size === 'sm' && 'h-8 px-3 text-[13px]',
-        size === 'md' && 'h-9 px-4 text-sm',
-        size === 'lg' && 'h-11 px-5 text-[15px]',
-        VARIANTS[variant],
-        className,
-      )}
+      className={buttonClass(variant, size, className)}
     >
       {loading ? <Loader2 className="size-4 animate-spin" /> : icon}
       {children}
     </button>
   );
+}
+
+/**
+ * A link that looks like a Button (a <button> inside an <a> is invalid HTML and is announced twice).
+ * `download` uses a plain <a> (a file, not a page); `disabled` renders a disabled Button instead.
+ */
+export function ButtonLink({ href, variant = 'secondary', size = 'md', icon, children, className, disabled, download }: {
+  href: string; variant?: Variant; size?: Size; icon?: ReactNode; children: ReactNode; className?: string; disabled?: boolean; download?: boolean;
+}) {
+  if (disabled) return <Button variant={variant} size={size} icon={icon} className={className} disabled>{children}</Button>;
+  const cls = buttonClass(variant, size, className);
+  if (download) return <a href={href} className={cls}>{icon}{children}</a>;
+  return <Link href={href} className={cls}>{icon}{children}</Link>;
 }
 
 // ── Layout primitives ───────────────────────────────────────────────────────
@@ -78,17 +96,45 @@ export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?:
 }
 
 // ── Form controls ───────────────────────────────────────────────────────────
+const FORM_CONTROLS = new Set(['input', 'select', 'textarea']);
+
+/**
+ * A labelled form row. The label is tied to its control: by `htmlFor`, or, when the only child is
+ * a plain input / select / textarea, by an id given to it here. Anything else (a button group, a
+ * slider with a number box) is a labelled group; give its own inputs labels or ids.
+ */
 export function Field({ label, hint, error, children, htmlFor, optional }: {
   label: string; hint?: ReactNode; error?: string; children: ReactNode; htmlFor?: string; optional?: boolean;
 }) {
+  const auto = useId();
+  const noteId = useId();
+  const note = error ? <p id={noteId} className="text-xs text-bad">{error}</p> : hint ? <p id={noteId} className="text-xs text-muted">{hint}</p> : null;
+  const only = Children.count(children) === 1 && isValidElement<{ id?: string; 'aria-describedby'?: string }>(children) && typeof children.type === 'string' && FORM_CONTROLS.has(children.type) ? children : null;
+  const controlId = htmlFor ?? (only ? only.props.id ?? auto : undefined);
+  const content = only && !htmlFor
+    ? cloneElement(only, { id: controlId, 'aria-describedby': [only.props['aria-describedby'], note ? noteId : null].filter(Boolean).join(' ') || undefined })
+    : children;
+  const text = (
+    <>
+      {label}
+      {optional && <span className="text-[11px] font-normal text-faint">optional</span>}
+    </>
+  );
+  const labelCls = 'flex items-center gap-2 text-[13px] font-medium text-ink-2';
+  if (!controlId) {
+    return (
+      <div role="group" aria-labelledby={`${auto}-label`} aria-describedby={note ? noteId : undefined} className="space-y-1.5">
+        <div id={`${auto}-label`} className={labelCls}>{text}</div>
+        {children}
+        {note}
+      </div>
+    );
+  }
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="flex items-center gap-2 text-[13px] font-medium text-ink-2">
-        {label}
-        {optional && <span className="text-[11px] font-normal text-faint">optional</span>}
-      </label>
-      {children}
-      {error ? <p className="text-xs text-bad">{error}</p> : hint ? <p className="text-xs text-muted">{hint}</p> : null}
+      <label htmlFor={controlId} className={labelCls}>{text}</label>
+      {content}
+      {note}
     </div>
   );
 }
@@ -255,24 +301,22 @@ export function Alert({ tone = 'warn', title, children }: { tone?: 'warn' | 'bad
 export function Modal({ open, onClose, title, description, children, footer, width = 'max-w-lg' }: {
   open: boolean; onClose: () => void; title: string; description?: string; children: ReactNode; footer?: ReactNode; width?: string;
 }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  const panel = useRef<HTMLDivElement>(null);
+  // Focus moves in on open, Tab stays inside, Escape closes, focus goes back to the opener.
+  useFocusTrap(panel, open, onClose);
   const titleId = useId();
+  const descId = useId();
   if (!open) return null;
   // Rendered into <body>: an ancestor with a transform or backdrop blur would otherwise pin the overlay to itself.
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-canvas/70 p-4 pt-[10vh] backdrop-blur-sm" onMouseDown={onClose}>
-      <div role="dialog" aria-modal aria-labelledby={titleId} className={cx('rise w-full rounded-2xl border border-line-strong bg-surface/90 shadow-pop backdrop-blur-xl', width)} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={panel} tabIndex={-1} role="dialog" aria-modal aria-labelledby={titleId} aria-describedby={description ? descId : undefined} className={cx('rise outline-none w-full rounded-2xl border border-line-strong bg-surface/90 shadow-pop backdrop-blur-xl', width)} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
           <div>
             <h2 id={titleId} className="text-base font-semibold">{title}</h2>
-            {description && <p className="mt-0.5 text-[13px] text-muted">{description}</p>}
+            {description && <p id={descId} className="mt-0.5 text-[13px] text-muted">{description}</p>}
           </div>
-          <button type="button" onClick={onClose} className="rounded-md p-1.5 text-muted transition-colors hover:bg-raised hover:text-ink" aria-label="Close">
+          <button type="button" onClick={onClose} data-skip-initial-focus className="rounded-md p-1.5 text-muted transition-colors hover:bg-raised hover:text-ink" aria-label="Close">
             <X className="size-4" />
           </button>
         </div>

@@ -1,7 +1,7 @@
 import 'server-only';
 import crypto from 'node:crypto';
 import { db } from './supabase';
-import { isLoopbackHost } from './hosts';
+import { hasLocalToken, isLoopbackHost } from './hosts';
 import { openRelay, sealRelay, signRelay } from './vault';
 import type { Me } from './auth';
 
@@ -24,7 +24,7 @@ export const isWebRole = () => consoleRole() === 'web';
 /** The header a worker's own server trusts instead of a session cookie. */
 export const RELAY_HEADER = 'x-console-relay';
 /** A worker that has not been seen for this long is offline. */
-const ONLINE_MS = 30_000;
+const ONLINE_MS = 180_000;
 /** Answers up to this size come back in one piece; larger ones (downloads) in chunks. */
 export const RELAY_CHUNK = Number(process.env.CONSOLE_RELAY_CHUNK) || 512 * 1024;
 const MAX_REQUEST_BODY = 2 * 1024 * 1024;
@@ -127,6 +127,18 @@ async function onlineWorker(me: Me): Promise<WorkerInfo> {
 // ── Relaying a request (web side) ────────────────────────────────────────────
 
 /** What the web side queues: the request as the browser sent it, and who sent it. */
+/**
+ * Calls that only look (the console's status poll every 20 s, health checks, the lists pages poll):
+ * they are answered, but do not count as work, so an open console tab does not keep the worker
+ * from stopping when idle.
+ */
+const PASSIVE_GETS = [/^\/api\/auth\/me$/, /^\/api\/health$/, /^\/api\/runs$/, /^\/api\/approvals$/, /^\/api\/restore\/history$/];
+export const passiveCall = (r: Pick<RelayRequest, 'method' | 'path'>) => {
+  if (r.method !== 'GET' && r.method !== 'HEAD') return false;
+  const url = new URL(r.path, 'http://worker');
+  return url.searchParams.get('peek') === '1' || PASSIVE_GETS.some((re) => re.test(url.pathname));
+};
+
 export interface RelayRequest {
   method: string;
   path: string;
@@ -166,7 +178,9 @@ export async function relay(req: Request, me: Me, timeoutMs = relayTimeout()): P
   }
   const headers: Record<string, string> = {};
   for (const h of FORWARD_REQUEST_HEADERS) { const v = req.headers.get(h); if (v) headers[h] = v; }
-  return send({ method: req.method, path: url.pathname + url.search, headers, body, me }, timeoutMs, req.signal);
+  const r = { method: req.method, path: url.pathname + url.search, headers, body, me };
+  // A poll does not start a stopped worker (or an open tab would keep restarting it); real use does.
+  return send(r, timeoutMs, req.signal, !passiveCall(r));
 }
 
 /** A JSON GET through the worker (used to add the worker's live state to /api/auth/me). */
@@ -181,10 +195,10 @@ export async function relayJson<T>(me: Me, path: string, timeoutMs: number): Pro
 
 async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal?: AbortSignal, wake = true): Promise<Response> {
   const id = crypto.randomUUID();
-  const claims = JSON.stringify({ me: r.me, method: r.method, path: r.path, call: id, exp: Date.now() + timeoutMs + 60_000 });
+  const claims = JSON.stringify(relayClaims(r.me, r.method, r.path, id, Date.now() + timeoutMs + 60_000, r.body ? Buffer.from(r.body, 'base64') : Buffer.alloc(0)));
   const [, sig] = await Promise.all([
     wake ? onlineWorker(r.me) : latestWorker().then((w) => { if (!w?.online) throw new RelayError(503, OFFLINE); }),
-    signRelay(claims),
+    signClaims(claims),
   ]);
   const identity = `${Buffer.from(claims).toString('base64url')}.${sig}`;
   const request: RelayRequest = { ...r, identity };
@@ -246,27 +260,86 @@ async function cleanup(id: string) {
   await db().from('worker_calls').delete().eq('id', id);
 }
 
-// ── Accepting a relayed request (worker side) ────────────────────────────────
+// ── Signing (both sides) ─────────────────────────────────────────────────────
+
+/** What the web side signs for each call: who, what (method, path and a SHA-256 of the body), which call, until when. */
+export interface RelayClaims { v: 2; me: Me; method: string; path: string; call: string; exp: number; body: string }
+
+const sha256 = (b: Uint8Array) => crypto.createHash('sha256').update(b).digest('hex');
+
+export function relayClaims(me: Me, method: string, path: string, call: string, exp: number, body: Uint8Array): RelayClaims {
+  return { v: 2, me, method, path, call, exp, body: sha256(body) };
+}
 
 /**
- * The identity of a request the worker loop replays on this server: only on a worker, only over
- * loopback, only with a valid signature for this method and path, and only before it expires.
- * null when the request carries no relay header.
+ * HMAC-SHA256 (base64url) of the claims. With RELAY_SIGNING_KEY set (the same value on the web side
+ * and the worker, at least 32 characters) that key signs; otherwise one derived from the vault server key.
+ */
+export async function signClaims(claims: string): Promise<string> {
+  const own = process.env.RELAY_SIGNING_KEY?.trim();
+  if (!own) return signRelay(claims);
+  if (own.length < 32) throw new RelayError(503, 'RELAY_SIGNING_KEY must be at least 32 characters (the same value on Vercel and the worker)');
+  const k = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(own, 'utf8'), Buffer.alloc(0), 'backup-console relay sign env v1', 32));
+  try { return crypto.createHmac('sha256', k).update(claims).digest('base64url'); } finally { k.fill(0); }
+}
+
+// ── Accepting a relayed request (worker side) ────────────────────────────────
+
+const gu = globalThis as unknown as { __relayUsed?: Map<string, number> };
+const usedHere = (gu.__relayUsed ??= new Map<string, number>());
+let nonceTableMissing = 0;
+
+/**
+ * A call id is accepted once: remembered in this process, and in public.relay_calls_used
+ * (0014_rate_limits.sql) so no other worker accepts it either. Without that table, in memory only.
+ */
+async function useCallOnce(call: string, exp: number): Promise<boolean> {
+  const now = Date.now();
+  if (usedHere.has(call)) return false;
+  usedHere.set(call, exp);
+  if (usedHere.size > 5_000) for (const [k, until] of usedHere) if (until < now) usedHere.delete(k);
+  if (now < nonceTableMissing) return true;
+  const { data, error } = await db().rpc('relay_call_use', { p_call: call, p_expires_at: new Date(exp).toISOString() });
+  if (error) {
+    if (/PGRST202|PGRST205|42883|42P01|relay_call/.test(`${error.code} ${error.message}`)) {
+      if (!nonceTableMissing) console.warn('[worker] relayed calls are remembered in memory only: apply supabase/migrations/0014_rate_limits.sql');
+      nonceTableMissing = now + 5 * 60_000;
+      return true;
+    }
+    throw new RelayError(503, 'Could not check the relayed call');
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { used?: boolean } | undefined;
+  return row?.used === true;
+}
+
+/**
+ * The identity of a request the worker loop replays on this server: only on a worker, only from the
+ * worker loop of this same process (loopback Host AND its per-process token, src/lib/hosts.ts), only
+ * with a valid signature over this method, path and body, only before it expires, and only once per
+ * call id. null when the request carries no relay header.
  */
 export async function relayedMe(req: Request): Promise<Me | null> {
   const header = req.headers.get(RELAY_HEADER);
   if (!header) return null;
   const refuse = () => new RelayError(401, 'Relayed request refused');
-  if (consoleRole() !== 'worker' || !isLoopbackHost(req.headers.get('host'))) throw refuse();
+  if (consoleRole() !== 'worker' || !isLoopbackHost(req.headers.get('host')) || !hasLocalToken(req.headers)) throw refuse();
   const [b64, sig] = header.split('.');
   if (!b64 || !sig) throw refuse();
   const claims = Buffer.from(b64, 'base64url').toString('utf8');
-  const want = Buffer.from(await signRelay(claims));
+  const want = Buffer.from(await signClaims(claims));
   const got = Buffer.from(sig);
   if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) throw refuse();
-  const c = JSON.parse(claims) as { me: Me; method: string; path: string; exp: number };
+  let c: Partial<RelayClaims>;
+  try { c = JSON.parse(claims) as Partial<RelayClaims>; } catch { throw refuse(); }
   const url = new URL(req.url);
+  if (c.v !== 2 || !c.me || typeof c.call !== 'string' || typeof c.body !== 'string' || typeof c.exp !== 'number') throw refuse();
   if (c.exp < Date.now() || c.method !== req.method || c.path !== url.pathname + url.search) throw refuse();
+  // The body as received (a copy: the route reads the request itself).
+  const body = req.method === 'GET' || req.method === 'HEAD' ? new Uint8Array(0) : new Uint8Array(await req.clone().arrayBuffer());
+  const gotBody = Buffer.from(sha256(body));
+  const wantBody = Buffer.from(c.body);
+  if (gotBody.length !== wantBody.length || !crypto.timingSafeEqual(gotBody, wantBody)) throw refuse();
+  if (!(await useCallOnce(c.call, c.exp))) throw refuse();
   return c.me;
 }
 

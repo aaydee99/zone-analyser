@@ -1,8 +1,8 @@
 import 'server-only';
-import { cfList } from '../cf-read';
+import { cfList, laneGroup, laneOf } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
-import { Problems, daysSince, daysUntil, notAvailable, readStat, type CheckDef } from './common';
+import { Problems, daysSince, daysUntil, notAvailable, readStat, refusedRead, type CheckDef } from './common';
 
 // Who and what can change the accounts: API tokens (the users' tokens behind each stored credential,
 // GET /user/tokens, in one console-wide unit; and account-owned tokens, GET /accounts/{id}/tokens)
@@ -62,20 +62,27 @@ export const governance: CheckDef = {
       const rows: Row[] = [];
       const findings: NewFinding[] = [];
       const seen = new Set<string>();
+      // Tokens of the same Cloudflare user (when the queue could tell, see cf-read.ts) see the same user tokens.
+      const read = new Set<string>(), refusedUsers: string[] = [];
       let refused = 0;
       for (const { token, credentialName } of g.tokens) {
+        const user = laneGroup(laneOf(token));
         try {
           for (const t of await cfList<Token>(token, '/user/tokens', { perPage: 50, signal: ctx.signal })) {
             if (seen.has(t.id)) continue;
             seen.add(t.id);
             judge(t, 'User token', {}, rows, findings);
           }
+          read.add(user);
         } catch (err) {
-          if (notAvailable(err)) refused++; else p.add(`User tokens (${credentialName})`, err);
+          if (refusedRead(err) || notAvailable(err)) { refused++; refusedUsers.push(user); } else p.add(`User tokens (${credentialName})`, err);
         }
       }
+      // A token that may not list its user's tokens leaves them unknown: their findings stay open,
+      // unless another token of the same user listed them.
+      const unknown = refusedUsers.filter((u) => !(u.startsWith('user:') && read.has(u))).length;
       return {
-        rows: { tokens: rows }, findings, complete: p.complete, problems: [...p.list, ...(refused ? [`${refused} stored token${refused === 1 ? '' : 's'} cannot list their user’s tokens: add “User › API Tokens › Read” to see them`] : [])],
+        rows: { tokens: rows }, findings, complete: p.complete && !unknown, problems: [...p.list, ...(refused ? [`${refused} stored token${refused === 1 ? '' : 's'} cannot list their user’s tokens: add “User › API Tokens › Read” to see them${unknown ? ' (until then, their findings are not closed)' : ''}`] : [])],
         counts: { tokens: rows.length },
       };
     },
@@ -87,7 +94,7 @@ export const governance: CheckDef = {
       const scope = { accountId: a.accountId, accountName: a.accountName || a.accountId };
       try {
         for (const t of await cfList<Token>(a.token, `/accounts/${a.accountId}/tokens`, { perPage: 50, signal: ctx.signal })) judge(t, `Account: ${scope.accountName}`, scope, tokenRows, findings);
-      } catch (err) { if (!notAvailable(err)) p.add('account tokens', err); }
+      } catch (err) { p.skip('account tokens', err); }
       try {
         for (const m of await cfList<Member>(a.token, `/accounts/${a.accountId}/members`, { perPage: 50, signal: ctx.signal })) {
           const email = m.user?.email ?? m.id;
@@ -101,7 +108,7 @@ export const governance: CheckDef = {
             findings.push({ key: `member:${a.accountId}:${m.id}:pending`, severity: 'info', title: `Invitation to ${email} is still pending`, detail: 'Revoke it if it is no longer needed.', ...scope });
           }
         }
-      } catch (err) { p.add('members', err); }
+      } catch (err) { p.skip('members', err); }
       const noTwoFa = memberRows.filter((r) => r.twoFactor === false && r.status === 'accepted').length;
       return { rows: { tokens: tokenRows, members: memberRows }, findings, complete: p.complete, problems: p.list, counts: { tokens: tokenRows.length, members: memberRows.length, noTwoFa } };
     },

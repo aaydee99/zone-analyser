@@ -5,6 +5,7 @@ import { db, isConfigured, must, NotConfiguredError, timedFetch } from './supaba
 import { cachedSettings, getSettings } from './settings';
 import { audit } from './audit';
 import { isRole, type Role } from './rbac';
+import { clearLimit, hitLimit, NO_LIMIT, peekLimit } from './rate-limit';
 
 // Supabase Auth verifies email + password. The console then issues its own
 // opaque session (only its SHA-256 is stored in `sessions`) so roles, disabled
@@ -40,9 +41,6 @@ interface Cached {
 
 interface State {
   sessions: Map<string, Cached>;
-  failures: Map<string, { count: number; blockedUntil: number }>;
-  /** Timestamps of failed sign-ins across all accounts (global limiter). */
-  recentFailures: number[];
   onEnd: Set<(sessionHash: string) => void>;
 }
 // A function declaration (hoisted), not a module-level const: vault.ts imports this module inside
@@ -50,9 +48,7 @@ interface State {
 // is still loading, before any const here is initialised.
 function authState(): State {
   const holder = globalThis as unknown as { __cfAuthState?: State };
-  const s = (holder.__cfAuthState ??= { sessions: new Map(), failures: new Map(), recentFailures: [], onEnd: new Set() });
-  s.recentFailures ??= [];
-  return s;
+  return (holder.__cfAuthState ??= { sessions: new Map(), onEnd: new Set() });
 }
 const state = authState();
 
@@ -94,22 +90,25 @@ export async function verifyPassword(email: string, password: string): Promise<s
   return data.user.id;
 }
 
-/** Accounts whose password is being checked right now (see login()). */
-const signingIn = new Set<string>();
+// The sign-in throttle keeps its counters in the shared store (src/lib/rate-limit.ts: Redis or
+// Supabase), so guesses spread over several instances (Vercel) are counted together.
 
-function throttle(key: string) {
-  const f = state.failures.get(key);
-  const wait = f ? f.blockedUntil - Date.now() : 0;
-  if (wait > 0) throw new AuthError(`Too many attempts — try again in ${Math.ceil(wait / 1000)}s`, 429);
+/** Misses in a row are forgotten after this long without one, or at the next successful sign-in. */
+const FAIL_WINDOW_MS = 3_600_000;
+/** How long one password check may hold its account's lock (longer than Supabase Auth's timeout). */
+const LOCK_MS = 20_000;
+
+async function throttle(key: string) {
+  const block = await peekLimit(`auth-block:${key}`);
+  if (block && block.resetMs > 0) throw new AuthError(`Too many attempts — try again in ${Math.ceil(block.resetMs / 1000)}s`, 429);
 }
-function fail(key: string) {
-  const f = state.failures.get(key) ?? { count: 0, blockedUntil: 0 };
-  f.count++;
+async function fail(key: string) {
+  const { count } = await hitLimit(`auth-fail:${key}`, FAIL_WINDOW_MS, NO_LIMIT);
   // Back-off after the 3rd consecutive miss: 2s, 4s, 8s, 16s, then 30s. Capped low so
   // nobody can keep a real user locked out; the global limiter below handles volume.
-  if (f.count >= 3) f.blockedUntil = Date.now() + Math.min(30_000, 1000 * 2 ** (f.count - 2));
-  state.failures.set(key, f);
-  state.recentFailures.push(Date.now());
+  // (Attempts are refused while blocked, so each block starts a fresh window.)
+  if (count >= 3) await hitLimit(`auth-block:${key}`, Math.min(30_000, 1000 * 2 ** (count - 2)), NO_LIMIT);
+  await hitLimit('auth-fail:all', GLOBAL_WINDOW_MS, NO_LIMIT);
 }
 
 // Password spraying (one guess per account across many accounts) never trips the
@@ -118,9 +117,7 @@ function fail(key: string) {
 const GLOBAL_WINDOW_MS = 60_000;
 const GLOBAL_THRESHOLD = 20;
 async function globalSlowdown() {
-  const cutoff = Date.now() - GLOBAL_WINDOW_MS;
-  while (state.recentFailures.length && state.recentFailures[0] < cutoff) state.recentFailures.shift();
-  const over = state.recentFailures.length - GLOBAL_THRESHOLD;
+  const over = ((await peekLimit('auth-fail:all'))?.count ?? 0) - GLOBAL_THRESHOLD;
   if (over > 0) await new Promise((r) => setTimeout(r, Math.min(5000, 250 * over)));
 }
 
@@ -184,18 +181,17 @@ export async function login(emailIn: string, password: string, userAgent?: strin
   const email = normEmail(emailIn);
   if (!email || typeof password !== 'string' || !password) throw new AuthError('Enter your email and password', 400);
   const key = `login:${email}`;
-  throttle(key);
-  // One password check per account at a time: otherwise many parallel guesses all pass the
-  // throttle before the first failure is counted.
-  if (signingIn.has(key)) throw new AuthError('A sign-in for this account is already being checked — try again in a moment', 429);
-  signingIn.add(key);
+  await throttle(key);
+  // One password check per account at a time (across instances): otherwise many parallel guesses
+  // all pass the throttle before the first failure is counted.
+  if (!(await hitLimit(`auth-lock:${key}`, LOCK_MS, 1)).allowed) throw new AuthError('A sign-in for this account is already being checked — try again in a moment', 429);
   let userId: string | null;
   try {
     await globalSlowdown();
     userId = await verifyPassword(email, password);
-    if (!userId) fail(key);
+    if (!userId) await fail(key);
   } finally {
-    signingIn.delete(key);
+    await clearLimit(`auth-lock:${key}`);
   }
   if (!userId) {
     await audit({ id: null, email }, 'auth.login_failed', email);
@@ -210,7 +206,7 @@ export async function login(emailIn: string, password: string, userAgent?: strin
     await audit({ id: userId, email }, 'auth.login_denied', email, { reason: 'disabled' });
     throw new AuthError('This account is disabled', 403);
   }
-  state.failures.delete(key);
+  await clearLimit(`auth-fail:${key}`);
 
   const token = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
@@ -301,9 +297,9 @@ export function sessionStillValid(hash: string) {
 
 export async function changeOwnPassword(me: Me, current: string, next: string) {
   const key = `pw:${me.id}`;
-  throttle(key);
-  if (!(await verifyPassword(me.email, current))) { fail(key); throw new AuthError('Current password is incorrect'); }
-  state.failures.delete(key);
+  await throttle(key);
+  if (!(await verifyPassword(me.email, current))) { await fail(key); throw new AuthError('Current password is incorrect'); }
+  await clearLimit(`auth-fail:${key}`);
   checkPassword(next, 'New password');
   if (next === current) throw new AuthError('Choose a different password', 400);
   const { error } = await db().auth.admin.updateUserById(me.id, { password: next });

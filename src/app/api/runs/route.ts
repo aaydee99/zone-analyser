@@ -5,7 +5,16 @@ import { canApprove, requestBackup } from '@/lib/approvals';
 
 export const dynamic = 'force-dynamic';
 
-export const GET = route(async () => ({ runs: await listRuns(), activeRunId: activeRunId() }), { perm: 'runs:read' });
+const PAGE = 200;
+const MAX = 5_000;
+
+/** The newest runs: `?limit=` (200 by default, in steps the page asks for with "Show more"); `more` says older ones exist. */
+export const GET = route(async (req) => {
+  const asked = Number(new URL(req.url).searchParams.get('limit'));
+  const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, MAX) : PAGE;
+  const runs = await listRuns(limit + 1);
+  return { runs: runs.slice(0, limit), more: runs.length > limit, activeRunId: activeRunId() };
+}, { perm: 'runs:read' });
 
 /** Admins and super admins start a backup; an operator's backup becomes a request an admin approves. */
 export const POST = route(async (req, _ctx, me) => {

@@ -212,8 +212,11 @@ const R2_SKIP_UPLOAD = envOr('R2_SKIP_UPLOAD', 'true');
 
 // ── R2 Bucket Lock ────────────────────────────────────────────────────────────
 // Bucket-lock rules use the Cloudflare API (CF_API_TOKEN), not the R2 S3 keys.
-// The bucket stays locked at rest; each run unlocks just long enough to upload,
-// then re-applies the rule set from R2_LOCK_RULES_FILE (JSON, top-level "rules").
+// The bucket stays locked at rest; each run saves the bucket's current rules,
+// unlocks just long enough to upload, then re-applies the rule set from
+// R2_LOCK_RULES_FILE (JSON, top-level "rules") when that file exists and has
+// rules — otherwise exactly the rules the bucket had before. The restore also
+// runs on SIGINT/SIGTERM/SIGHUP and uncaught errors; if it fails, the run fails.
 const R2_LOCK_RULES_FILE = `${SCRIPT_DIR}/r2_lock_rules.json`;
 
 // ── AWS S3 Upload ─────────────────────────────────────────────────────────────
@@ -223,6 +226,16 @@ const AWS_S3_BUCKET = envOr('AWS_S3_BUCKET', 'carters-cloudflare-backups');
 // Leave empty for auto-detection; set explicitly to skip the HEAD lookup.
 let AWS_REGION = envOr('AWS_REGION', '');
 const AWS_SKIP_UPLOAD = envOr('AWS_SKIP_UPLOAD', 'true');
+
+// ── Upload requirement ────────────────────────────────────────────────────────
+//   BACKUP_REQUIRE_UPLOAD  1/true — refuse to start unless R2 or AWS S3 upload
+//                          is enabled (the local copy will not survive the run).
+//                          0/false — never require it. Unset: required when
+//                          GITHUB_ACTIONS=true (the console worker, whose disk
+//                          is discarded with the job).
+const REQUIRE_UPLOAD = E.BACKUP_REQUIRE_UPLOAD
+  ? ['1', 'true', 'yes'].includes(E.BACKUP_REQUIRE_UPLOAD.toLowerCase())
+  : E.GITHUB_ACTIONS === 'true';
 
 // ╔═════════════════════════════════════════════════════════════════════════════╗
 // ║                      END OF CONFIGURATION                                  ║
@@ -441,12 +454,11 @@ function checkPrereqs() {
     if (!R2_SECRET_ACCESS_KEY) { logError('R2_SECRET_ACCESS_KEY not set'); fail++; }
     if (!R2_BUCKET_NAME) { logError('R2_BUCKET_NAME not set'); fail++; }
     if (!R2_ENDPOINT) { logError('R2_ENDPOINT not set'); fail++; }
-    // No rules file = restore the bucket's own rules after the upload (see r2Relock).
-    if (fs.existsSync(R2_LOCK_RULES_FILE)) {
-      if (!jqAlt(() => JSON.parse(fs.readFileSync(R2_LOCK_RULES_FILE, 'utf8')).rules, null)) {
-        logError(`R2_LOCK_RULES_FILE is not valid JSON with a top-level "rules" array: ${R2_LOCK_RULES_FILE}`);
-        fail++;
-      }
+    // No rules file = restore the bucket's own rules after the upload (see r2RestoreLock).
+    if (fs.existsSync(R2_LOCK_RULES_FILE)
+      && !Array.isArray(jqAlt(() => JSON.parse(fs.readFileSync(R2_LOCK_RULES_FILE, 'utf8')).rules, null))) {
+      logError(`R2_LOCK_RULES_FILE is not valid JSON with a top-level "rules" array: ${R2_LOCK_RULES_FILE}`);
+      fail++;
     }
   } else {
     logWarn('R2_SKIP_UPLOAD=true — R2 upload disabled');
@@ -459,6 +471,15 @@ function checkPrereqs() {
     if (!AWS_S3_BUCKET) { logError('AWS_S3_BUCKET not set'); fail++; }
   } else {
     logWarn('AWS_SKIP_UPLOAD=true — AWS S3 upload disabled');
+  }
+
+  // A run whose local folder is discarded afterwards must upload somewhere,
+  // or it "succeeds" with nothing kept.
+  if (REQUIRE_UPLOAD && R2_SKIP_UPLOAD === 'true' && AWS_SKIP_UPLOAD === 'true') {
+    logError(`No upload destination configured, but this run requires one (${E.BACKUP_REQUIRE_UPLOAD
+      ? 'BACKUP_REQUIRE_UPLOAD is set' : 'running on GitHub Actions, where the local backup is discarded'})`);
+    logError('  Enable R2 or AWS S3 upload (R2_SKIP_UPLOAD=false / AWS_SKIP_UPLOAD=false), or set BACKUP_REQUIRE_UPLOAD=0');
+    fail++;
   }
 
   // Bucket names, prefixes and regions end up in URLs (API paths, the S3 host name):
@@ -3085,16 +3106,23 @@ async function writeImports(dir, scope, { verify = true } = {}) {
 // Cloudflare API (CF_API_TOKEN) — separate from the R2 S3 keys used to upload.
 // =============================================================================
 const r2LockPath = () => `/accounts/${encodeURIComponent(CF_ACCOUNT_ID)}/r2/buckets/${encodeURIComponent(R2_BUCKET_NAME)}/lock`;
-// Rules the bucket had before this run unlocked it; restored when no desired rules are configured.
-let r2OriginalLockRules = [];
 
+// This run's lock state. `engaged` once r2Unlock started (nothing to restore
+// before that); `saved` = the rules the bucket had before (null = unreadable);
+// `cleared` once this run may have removed them; `restore` = the one restore
+// promise every exit path (normal finish, signal, crash) shares.
+const r2Lock = { engaged: false, saved: null, cleared: false, restore: null };
+let r2Guards = null;
+
+// Current rules, or null when they could not be read.
 async function r2GetLockRules() {
   const resp = await cfApi(r2LockPath());
   if (!(isObj(resp) && resp.success === true)) {
     logWarn(`  [R2] Could not fetch lock rules: ${jqAlt(() => errMessage(resp), 'unknown error')}`);
-    return [];
+    return null;
   }
-  return jqAlt(() => jqGet(resp, ['result', 'rules']), []);
+  const rules = jqAlt(() => jqGet(resp, ['result', 'rules']), []);
+  return Array.isArray(rules) ? rules : null;
 }
 
 async function r2SetLockRules(rules) {
@@ -3106,17 +3134,84 @@ async function r2SetLockRules(rules) {
   return true;
 }
 
-// Clears all lock rules so the bucket accepts writes/deletes during upload.
+// Rules from R2_LOCK_RULES_FILE, or null when there is no (valid) file.
+function r2ConfiguredLockRules() {
+  if (!fs.existsSync(R2_LOCK_RULES_FILE)) return null;
+  const rules = jqAlt(() => JSON.parse(fs.readFileSync(R2_LOCK_RULES_FILE, 'utf8')).rules, null);
+  return Array.isArray(rules) ? rules : null;
+}
+
+// While the bucket is unlocked, a signal or crash must put the rules back
+// before the process goes. Repeated signals just wait for the same restore.
+// stdout/stderr errors (EPIPE once the console has gone) are swallowed so they
+// cannot turn into uncaught exceptions mid-restore; the logfile still gets it.
+function r2InstallGuards() {
+  if (r2Guards) return;
+  const finish = (code) => r2RestoreLock().then((ok) => process.exit(ok ? code : 1), () => process.exit(1));
+  let reported = false;
+  const onSignal = (sig) => {
+    if (!reported) logError(`Received ${sig} while R2 bucket '${R2_BUCKET_NAME}' is unlocked — restoring its lock rules before exiting …`);
+    reported = true;
+    finish(128 + (os.constants.signals[sig] || 1));
+  };
+  const onCrash = (err) => {
+    if (!reported) logError(`ABORTED while R2 bucket '${R2_BUCKET_NAME}' is unlocked: ${err && err.message ? err.message : err} — restoring its lock rules …`);
+    reported = true;
+    finish(1);
+  };
+  const quiet = () => {};
+  r2Guards = { onSignal, onCrash, quiet };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, onSignal);
+  process.on('uncaughtException', onCrash);
+  process.on('unhandledRejection', onCrash);
+  process.stdout.on('error', quiet);
+  process.stderr.on('error', quiet);
+}
+
+// Windows cannot deliver a catchable signal (the console's cancel is a forced kill), so the console
+// first asks over IPC. While the bucket is unlocked the answer is "wait": the rules go back, then
+// the process exits; otherwise the console kills the process tree at once.
+if (process.send) {
+  process.channel?.unref();
+  process.on('message', (m) => {
+    if (!m || m.type !== 'cancel') return;
+    const unlocked = !!r2Guards;
+    try { process.send({ type: 'cancel-ack', unlocked }); } catch { /* console gone */ }
+    if (unlocked) r2Guards.onSignal('SIGTERM');
+  });
+}
+
+function r2RemoveGuards() {
+  if (!r2Guards) return;
+  const { onSignal, onCrash, quiet } = r2Guards;
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.off(sig, onSignal);
+  process.off('uncaughtException', onCrash);
+  process.off('unhandledRejection', onCrash);
+  process.stdout.off('error', quiet);
+  process.stderr.off('error', quiet);
+  r2Guards = null;
+}
+
+// Saves the bucket's current rules, then clears them so the bucket accepts
+// writes during upload. Rules that cannot be read are left in place (writes to
+// new keys still work; only overwrites/deletes are blocked).
 async function r2Unlock() {
+  r2Lock.engaged = true;
   logSection(`R2: unlocking bucket '${R2_BUCKET_NAME}'`);
   const existing = await r2GetLockRules();
-  r2OriginalLockRules = Array.isArray(existing) ? existing : [];
-  const ruleCount = jqLength(existing);
-  if (ruleCount === 0) {
+  if (existing === null) {
+    logWarn('  Could not read the current lock rules — leaving them in place (not unlocking)');
+    return;
+  }
+  r2Lock.saved = existing;
+  if (existing.length === 0) {
     logInfo('  Bucket has no lock rules — nothing to remove');
     return;
   }
-  logInfo(`  Removing ${ruleCount} existing lock rule(s) …`);
+  logInfo(`  Saved ${existing.length} existing lock rule(s); removing them for the upload …`);
+  // Guard before the PUT: a signal while it is in flight must still restore.
+  r2Lock.cleared = true;
+  r2InstallGuards();
   if (await r2SetLockRules([])) {
     logOk('  Bucket unlocked (lock rules cleared)');
   } else {
@@ -3125,31 +3220,61 @@ async function r2Unlock() {
   }
 }
 
-// Re-applies the desired lock policy (R2_LOCK_RULES_FILE) after upload completes.
-async function r2Relock() {
-  if (R2_SKIP_UPLOAD === 'true') return;
-  let desired = fs.existsSync(R2_LOCK_RULES_FILE) ? jqAlt(() => JSON.parse(fs.readFileSync(R2_LOCK_RULES_FILE, 'utf8')).rules, []) : [];
-  let ruleCount = jqAlt(() => jqLength(desired), 0);
-  logSection(`R2: re-locking bucket '${R2_BUCKET_NAME}'`);
-  // Never leave a bucket less protected than it was: with no configured rules,
-  // put back exactly what the bucket had before this run unlocked it.
-  if (ruleCount === 0) {
-    if (r2OriginalLockRules.length === 0) {
-      logInfo('  No lock rules configured and the bucket had none — leaving it as it was');
-      return;
-    }
-    desired = r2OriginalLockRules;
-    ruleCount = desired.length;
-    logInfo(`  No lock rules configured — restoring the bucket's original ${ruleCount} rule(s)`);
+// Puts the lock policy back: the rules in R2_LOCK_RULES_FILE when it has any,
+// else exactly the rules saved by r2Unlock — never less protected than before.
+// Idempotent — every caller gets the same promise. Resolves true when the
+// bucket is locked as intended (or there was nothing to do), false on failure.
+function r2RestoreLock() {
+  if (!r2Lock.engaged || R2_SKIP_UPLOAD === 'true') return Promise.resolve(true);
+  if (!r2Lock.restore) {
+    r2Lock.restore = r2DoRestore().catch((err) => {
+      logError(`  [R2] Restoring lock rules threw: ${err && err.message ? err.message : err}`);
+      return false;
+    }).then((ok) => { r2RemoveGuards(); return ok; });
   }
-  logInfo(`  Applying ${ruleCount} lock rule(s) …`);
-  if (await r2SetLockRules(desired)) {
-    logOk('  Lock rules applied — bucket is locked again');
+  return r2Lock.restore;
+}
+
+async function r2DoRestore() {
+  const configured = r2ConfiguredLockRules();
+  let desired;
+  let source;
+  if (configured && configured.length) {
+    desired = configured;
+    source = R2_LOCK_RULES_FILE;
+  } else if (r2Lock.cleared && r2Lock.saved && r2Lock.saved.length) {
+    desired = r2Lock.saved;
+    source = "the bucket's original rules (no rules configured)";
   } else {
-    logError(`  CRITICAL: Failed to re-lock bucket '${R2_BUCKET_NAME}'!`);
-    logError('  Re-apply manually via the Cloudflare dashboard. Desired rules:');
-    emit(process.stderr, JSON.stringify(desired, null, 2));
+    logInfo(`  R2: no lock rules configured and the bucket had none to restore on '${R2_BUCKET_NAME}' — leaving it as it was`);
+    return true;
   }
+  logSection(`R2: re-locking bucket '${R2_BUCKET_NAME}'`);
+  logInfo(`  Applying ${desired.length} lock rule(s) from ${source} …`);
+  let applied = false;
+  for (let attempt = 1; attempt <= 3 && !applied; attempt++) {
+    if (attempt > 1) {
+      logWarn(`  Re-lock attempt ${attempt}/3 …`);
+      await sleep((attempt - 1) * 3000);
+    }
+    applied = await r2SetLockRules(desired);
+  }
+  if (applied) {
+    // Read back: a PUT that "succeeded" but left fewer rules is still a failure.
+    const now = await r2GetLockRules();
+    if (now !== null && now.length < desired.length) {
+      logError(`  [R2] Bucket reports ${now.length} lock rule(s) after re-lock, expected ${desired.length}`);
+      applied = false;
+    }
+  }
+  if (applied) {
+    logOk('  Lock rules applied — bucket is locked again');
+    return true;
+  }
+  logError(`  CRITICAL: Failed to re-lock bucket '${R2_BUCKET_NAME}' — it may be UNLOCKED. This run is marked failed.`);
+  logError('  Re-apply manually via the Cloudflare dashboard. Desired rules:');
+  emit(process.stderr, JSON.stringify(desired, null, 2));
+  return false;
 }
 
 // =============================================================================
@@ -3182,8 +3307,12 @@ async function s3Request({ method, url, region, accessKey, secretKey, body = Buf
   const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
   const payloadHash = sha256Hex(body);
   const signed = { host: u.host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
+  // Canonical query: RFC 3986-encoded name=value pairs sorted by name.
+  const query = [...u.searchParams].map(([k, v]) => [uriEncode(k), uriEncode(v)])
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))
+    .map(([k, v]) => `${k}=${v}`).join('&');
   const authorization = sigV4Authorization({
-    method, canonicalUri: u.pathname, headers: signed, payloadHash, region, accessKey, secretKey, amzDate,
+    method, canonicalUri: u.pathname, query, headers: signed, payloadHash, region, accessKey, secretKey, amzDate,
   });
   return fetch(url, {
     method,
@@ -3217,70 +3346,170 @@ const contentTypeFor = (filepath) => CONTENT_TYPES[path.extname(filepath).toLowe
 const UPLOAD_EXTENSIONS = ['.tf'];
 const isUploadable = (filepath) => UPLOAD_EXTENSIONS.includes(path.extname(filepath).toLowerCase());
 
-// Generic single-file PUT. Used by both R2 and S3 paths.
+// S3 error bodies are XML; only <Code>/<Message> are logged (other fields can
+// echo the access key ID back).
+function s3ErrorText(code, body) {
+  if (code === '000') return 'network error';
+  const c = /<Code>([^<]*)<\/Code>/.exec(body || '');
+  const m = /<Message>([^<]*)<\/Message>/.exec(body || '');
+  return c ? `${c[1]}${m ? `: ${m[1]}` : ''}`.slice(0, 300) : 'no error details';
+}
+
+const UPLOAD_ATTEMPTS = 3;
+// Network errors, 408, 429 and 5xx are worth retrying; other 4xx (bad keys,
+// no permission, no such bucket) will not get better.
+const transientS3 = (code) => code === '000' || code === '408' || code === '429' || code.startsWith('5');
+
+// Generic single-object PUT with bounded retry. Used by both R2 and S3 paths.
+async function putObject(data, mime, objectKey, endpointUrl, bucket, accessKey, secretKey, region) {
+  for (let attempt = 1; ; attempt++) {
+    let code = '000';
+    let body = '';
+    try {
+      const r = await s3Request({
+        method: 'PUT',
+        url: `${endpointUrl}/${s3Path(bucket)}/${s3Path(objectKey)}`,
+        region, accessKey, secretKey,
+        body: data,
+        extraHeaders: { 'Content-Type': mime },
+      });
+      code = String(r.status);
+      body = await r.text();
+    } catch { /* network error → 000 */ }
+    if (code === '200') {
+      logOk(`    [${code}] ${objectKey}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+      return true;
+    }
+    if (!transientS3(code) || attempt >= UPLOAD_ATTEMPTS) {
+      logWarn(`    [${code}] ${objectKey} — ${s3ErrorText(code, body)}${attempt > 1 ? ` (gave up after ${attempt} attempts)` : ''}`);
+      return false;
+    }
+    logWarn(`    [${code}] ${objectKey} — ${s3ErrorText(code, body)}; retry ${attempt}/${UPLOAD_ATTEMPTS - 1} …`);
+    await sleep(attempt * 2000);
+  }
+}
+
 async function uploadFile(filepath, objectKey, endpointUrl, bucket, accessKey, secretKey, region) {
-  const mime = contentTypeFor(filepath);
-  let code = '000';
-  let body = 'no response';
-  try {
-    const r = await s3Request({
-      method: 'PUT',
-      url: `${endpointUrl}/${s3Path(bucket)}/${s3Path(objectKey)}`,
-      region, accessKey, secretKey,
-      body: fs.readFileSync(filepath),
-      extraHeaders: { 'Content-Type': mime },
-    });
-    code = String(r.status);
-    body = await r.text();
-  } catch { /* network error → 000 */ }
-  if (code === '200') {
-    logOk(`    [${code}] ${objectKey}`);
-    return true;
-  }
-  logWarn(`    [${code}] ${objectKey} — ${body}`);
-  return false;
+  return putObject(fs.readFileSync(filepath), contentTypeFor(filepath), objectKey, endpointUrl, bucket, accessKey, secretKey, region);
 }
 
-async function uploadTree(backupRoot, destPrefix, label, endpoint, bucket, accessKey, secretKey, region) {
-  const all = walk(backupRoot);
-  const files = all.filter(isUploadable);
-  logInfo(`  Files to upload to ${label}: ${files.length} .tf file(s) — ${all.length - files.length} other file(s) stay local`);
-  if (!files.length) logWarn(`  No .tf files in ${backupRoot} — nothing uploaded to ${label}`);
-  let uploaded = 0;
-  let failed = 0;
-  for (const filepath of files) {
-    let objectKey = path.relative(backupRoot, filepath).split(path.sep).join('/');
-    if (destPrefix) objectKey = `${destPrefix}/${objectKey}`;
-    if (await uploadFile(filepath, objectKey, endpoint, bucket, accessKey, secretKey, region)) uploaded++;
-    else failed++;
+const objectKeyFor = (destPrefix, rel) => (destPrefix ? `${destPrefix}/${rel}` : rel);
+
+// Uploads `files` (paths relative to backupRoot, '/'-separated) → { uploaded, failed } (lists of paths).
+async function uploadTree(backupRoot, files, destPrefix, label, endpoint, bucket, accessKey, secretKey, region) {
+  const uploaded = [];
+  const failed = [];
+  for (const rel of files) {
+    const ok = await uploadFile(path.join(backupRoot, ...rel.split('/')), objectKeyFor(destPrefix, rel),
+      endpoint, bucket, accessKey, secretKey, region);
+    (ok ? uploaded : failed).push(rel);
   }
-  return [uploaded, failed];
+  return { uploaded, failed };
 }
 
-async function r2Upload(backupRoot) {
+const xmlDecode = (s) => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (m, e) => (
+  e === 'lt' ? '<' : e === 'gt' ? '>' : e === 'amp' ? '&' : e === 'quot' ? '"' : e === 'apos' ? "'"
+    : String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1)))));
+
+// One ListObjectsV2 page → { items: [{key, size}], next: continuation token or null }.
+function parseListObjects(xml) {
+  const items = [...xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)].map((m) => ({
+    key: xmlDecode((/<Key>([\s\S]*?)<\/Key>/.exec(m[1]) || [])[1] || ''),
+    size: Number((/<Size>(\d+)<\/Size>/.exec(m[1]) || [])[1]),
+  }));
+  const truncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/.test(xml);
+  const token = /<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/.exec(xml);
+  return { items, next: truncated && token ? xmlDecode(token[1]) : null };
+}
+
+// Every object under `prefix/` → Map(key → size), or null (with the HTTP code
+// logged) when the keys may not list the bucket.
+async function listPrefix(prefix, endpoint, bucket, accessKey, secretKey, region) {
+  const found = new Map();
+  let token = null;
+  for (let page = 0; page < 10000; page++) {
+    let url = `${endpoint}/${s3Path(bucket)}?list-type=2&prefix=${uriEncode(`${prefix}/`)}`;
+    if (token) url += `&continuation-token=${uriEncode(token)}`;
+    let code = '000';
+    let body = '';
+    for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+      try {
+        const r = await s3Request({ method: 'GET', url, region, accessKey, secretKey });
+        code = String(r.status);
+        body = await r.text();
+      } catch { code = '000'; }
+      if (!transientS3(code)) break;
+      if (attempt < UPLOAD_ATTEMPTS) await sleep(attempt * 2000);
+    }
+    if (code !== '200') {
+      logWarn(`  Could not list ${bucket}/${prefix}/ to verify the upload: [${code}] ${s3ErrorText(code, body)}`);
+      return null;
+    }
+    const { items, next } = parseListObjects(body);
+    for (const it of items) found.set(it.key, it.size);
+    if (!next) return found;
+    token = next;
+  }
+  return found;
+}
+
+// Uploads one backup to one destination: the .tf files, then a check that the
+// bucket holds exactly those keys (and sizes), then — LAST — a completion
+// manifest listing exactly the files uploaded to this prefix. Its presence
+// means the backup under that prefix is complete.
+// → list of relative paths that failed (empty = success).
+async function uploadBackup(backupRoot, manifest, destPrefix, label, endpoint, bucket, accessKey, secretKey, region) {
+  const entries = manifest.files.filter((f) => isUploadable(f.path));
+  const files = entries.map((f) => f.path);
+  logInfo(`  Files to upload to ${label}: ${files.length} .tf file(s) — ${manifest.files.length - files.length} other file(s) stay local`);
+  if (!files.length) logWarn(`  No .tf files in ${backupRoot} — only ${MANIFEST_NAME} goes to ${label}`);
+  const { uploaded, failed } = await uploadTree(backupRoot, files, destPrefix, label, endpoint, bucket, accessKey, secretKey, region);
+  logInfo(`  ${label} upload done: ${uploaded.length} ok, ${failed.length} failed`);
+  if (failed.length) return failed;
+
+  const listed = await listPrefix(destPrefix, endpoint, bucket, accessKey, secretKey, region);
+  if (listed) {
+    const missing = entries.filter((f) => listed.get(objectKeyFor(destPrefix, f.path)) !== f.bytes).map((f) => f.path);
+    if (missing.length) {
+      logError(`  ${label}: ${missing.length} uploaded file(s) missing or the wrong size in the bucket listing`);
+      return missing;
+    }
+    logOk(`  ${label}: bucket listing matches all ${files.length} file(s)`);
+  } else {
+    // Keys without list permission: every PUT above returned 200 for every file.
+    logWarn(`  ${label}: verified by upload count only (${uploaded.length}/${files.length} PUTs returned 200)`);
+    if (uploaded.length !== files.length) return files.filter((f) => !uploaded.includes(f));
+  }
+
+  const remote = { version: 1, createdAt: manifest.createdAt, files: entries };
+  if (!(await putObject(Buffer.from(`${JSON.stringify(remote, null, 2)}\n`), 'application/json',
+    objectKeyFor(destPrefix, MANIFEST_NAME), endpoint, bucket, accessKey, secretKey, region))) return [MANIFEST_NAME];
+  return [];
+}
+
+// → list of relative paths that failed (empty = success).
+async function r2Upload(backupRoot, manifest) {
   const destPrefix = `${R2_PREFIX ? `${R2_PREFIX}/` : ''}${path.basename(backupRoot)}`;
-
-  await r2Unlock();
+  let failed = ['(upload did not run)'];
   try {
+    await r2Unlock();
     logSection(`R2: uploading backup to ${R2_BUCKET_NAME}/${destPrefix}`);
     logInfo(`  Source  : ${backupRoot}/`);
     logInfo(`  Dest    : ${R2_BUCKET_NAME}/${destPrefix}/`);
     logInfo(`  Endpoint: ${R2_ENDPOINT}`);
-    logInfo(`  Files   : ${walk(backupRoot).filter(isUploadable).length} (.tf only)`);
+    logInfo(`  Files   : ${manifest.files.filter((f) => isUploadable(f.path)).length} (.tf only) + ${MANIFEST_NAME}`);
 
-    const [uploaded, failed] = await uploadTree(backupRoot, destPrefix, 'R2', R2_ENDPOINT, R2_BUCKET_NAME,
+    failed = await uploadBackup(backupRoot, manifest, destPrefix, 'R2', R2_ENDPOINT, R2_BUCKET_NAME,
       R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, 'auto');
-    logInfo(`  R2 upload done: ${uploaded} ok, ${failed} failed`);
-    if (failed === 0) {
-      logOk(`  R2 upload complete → ${R2_BUCKET_NAME}/${destPrefix}/`);
-      return true;
-    }
-    logError(`  R2 upload had failures — local backup intact at: ${backupRoot}`);
-    return false;
+    if (failed.length === 0) logOk(`  R2 upload complete → ${R2_BUCKET_NAME}/${destPrefix}/`);
+    else logError(`  R2 upload had failures — local backup intact at: ${backupRoot}`);
   } finally {
-    // Re-lock even when the upload fails part-way.
-    await r2Relock();
+    // Re-lock even when the upload fails part-way; a failed re-lock fails the run.
+    if (!(await r2RestoreLock())) {
+      logError(`R2 bucket '${R2_BUCKET_NAME}' lock rules could NOT be restored — the run will exit non-zero`);
+    }
   }
+  return failed;
 }
 
 // HEAD against us-east-1 and read the x-amz-bucket-region response header.
@@ -3308,7 +3537,8 @@ async function awsDetectRegion() {
   logInfo(`  AWS region (detected): ${AWS_REGION}`);
 }
 
-async function awsUpload(backupRoot) {
+// → list of relative paths that failed (empty = success).
+async function awsUpload(backupRoot, manifest) {
   const destPrefix = path.basename(backupRoot);
   await awsDetectRegion();
 
@@ -3316,41 +3546,74 @@ async function awsUpload(backupRoot) {
   logInfo(`  Source  : ${backupRoot}/`);
   logInfo(`  Dest    : s3://${AWS_S3_BUCKET}/${destPrefix}/`);
   logInfo(`  Region  : ${AWS_REGION}`);
-  logInfo(`  Files   : ${walk(backupRoot).filter(isUploadable).length} (.tf only)`);
+  logInfo(`  Files   : ${manifest.files.filter((f) => isUploadable(f.path)).length} (.tf only) + ${MANIFEST_NAME}`);
 
-  const [uploaded, failed] = await uploadTree(backupRoot, destPrefix, 'AWS S3', `https://s3.${AWS_REGION}.amazonaws.com`,
+  const failed = await uploadBackup(backupRoot, manifest, destPrefix, 'AWS S3', `https://s3.${AWS_REGION}.amazonaws.com`,
     AWS_S3_BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION);
-  logInfo(`  AWS S3 upload done: ${uploaded} ok, ${failed} failed`);
-  if (failed === 0) {
-    logOk(`  AWS S3 upload complete → s3://${AWS_S3_BUCKET}/${destPrefix}/`);
-    return true;
-  }
-  logError(`  AWS S3 upload had failures — local backup intact at: ${backupRoot}`);
-  return false;
+  if (failed.length === 0) logOk(`  AWS S3 upload complete → s3://${AWS_S3_BUCKET}/${destPrefix}/`);
+  else logError(`  AWS S3 upload had failures — local backup intact at: ${backupRoot}`);
+  return failed;
 }
 
 // =============================================================================
 // COMBINED UPLOAD ORCHESTRATOR
-// Runs both destinations in sequence; each failure is logged but does not
-// abort the remaining destination.
+// Runs both destinations in sequence; a failure in one does not abort the
+// other, but any failed file (or a failed R2 re-lock) fails the run.
+// → true when every enabled destination got every file and its manifest.
 // =============================================================================
-async function runUploads(backupRoot) {
+async function runUploads(backupRoot, manifest) {
+  const problems = [];
   if (R2_SKIP_UPLOAD !== 'true') {
-    if (!(await r2Upload(backupRoot))) logError('R2 upload failed (continuing)');
+    const failed = await r2Upload(backupRoot, manifest);
+    if (failed.length) problems.push(['R2', failed]);
+    if (!(await r2RestoreLock())) problems.push(['R2', [`(bucket '${R2_BUCKET_NAME}' lock rules not restored)`]]);
   } else {
     logInfo('R2_SKIP_UPLOAD=true — skipping R2 upload');
   }
   if (AWS_SKIP_UPLOAD !== 'true') {
-    if (!(await awsUpload(backupRoot))) logError('AWS S3 upload failed');
+    const failed = await awsUpload(backupRoot, manifest);
+    if (failed.length) problems.push(['AWS S3', failed]);
   } else {
     logInfo('AWS_SKIP_UPLOAD=true — skipping AWS S3 upload');
   }
+  if (!problems.length) return true;
+  logSection('Upload FAILED');
+  for (const [label, failed] of problems) {
+    logError(`${label}: ${failed.length} file(s) not uploaded / not verified:`);
+    for (const f of failed.slice(0, 50)) logError(`  ${f}`);
+    if (failed.length > 50) logError(`  … and ${failed.length - 50} more`);
+  }
+  logError(`${MANIFEST_NAME} was not uploaded where files failed — that remote copy is INCOMPLETE`);
+  return false;
 }
 // ==== UPLOADS END ============================================================
 
 // =============================================================================
 // MAIN
 // =============================================================================
+// Completion manifest: written last into the backup folder (listing every file
+// in it), and uploaded last to each destination prefix (listing exactly the
+// files uploaded there) once those are verified. Restore treats a backup
+// without it (or with a file that does not match it) as incomplete — keep the
+// name and shape stable.
+//   { version: 1, createdAt, files: [{ path, bytes, sha256 }] }   (paths '/'-separated, relative to the backup folder)
+const MANIFEST_NAME = '_backup-complete.json';
+
+function writeCompletionManifest(root) {
+  const files = walk(root)
+    .map((p) => path.relative(root, p).split(path.sep).join('/'))
+    .filter((rel) => rel !== MANIFEST_NAME)
+    .sort()
+    .map((rel) => {
+      const data = fs.readFileSync(path.join(root, ...rel.split('/')));
+      return { path: rel, bytes: data.length, sha256: sha256Hex(data) };
+    });
+  const manifest = { version: 1, createdAt: new Date().toISOString(), files };
+  fs.writeFileSync(path.join(root, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
+  logOk(`Completion manifest: ${MANIFEST_NAME} (${files.length} file(s))`);
+  return manifest;
+}
+
 // Everything that did NOT make it into the backup, in one place:
 // <backup_root>/_backup_summary.txt. A backup with a non-empty summary is still
 // usable, but these are the gaps a restore would hit.
@@ -3617,7 +3880,15 @@ async function main() {
 
   writeIntegritySummary(BACKUP_ROOT);
 
-  await runUploads(BACKUP_ROOT);
+  // Nothing may change in the backup folder after the manifest is hashed: API
+  // errors from here on (e.g. the R2 lock calls) are logged, not recorded.
+  API_ERROR_LOG = null;
+  const manifest = writeCompletionManifest(BACKUP_ROOT);
+
+  if (!(await runUploads(BACKUP_ROOT, manifest))) {
+    logError(`Backup written locally to ${BACKUP_ROOT}, but the upload FAILED — see above`);
+    exitNow(1);
+  }
 
   logSection('Backup complete');
   out(GREEN);
@@ -3665,14 +3936,21 @@ process.on('exit', () => {
 });
 
 if (require.main === module) {
-  main().then(() => process.exit(0), (err) => {
-    if (err instanceof ExitRequest) process.exit(err.exitCode);
+  // Whatever the outcome, an unlocked R2 bucket gets its rules back before the
+  // process exits (a no-op when nothing was unlocked or it already happened);
+  // a failed restore turns any exit code into a failure.
+  const exitAfterRelock = (code) => r2RestoreLock().then((ok) => {
+    if (!ok && code === 0) logError('R2 bucket lock rules could not be restored — failing the run');
+    process.exit(ok ? code : code || 1);
+  }, () => process.exit(code || 1));
+  main().then(() => exitAfterRelock(0), (err) => {
+    if (err instanceof ExitRequest) return exitAfterRelock(err.exitCode);
     // Any unexpected failure kills the run mid-way and leaves a partial backup
     // that looks superficially fine — make that loud instead.
     const where = (err && err.stack ? err.stack.split('\n')[1] || '' : '').trim();
     logError(`ABORTED: ${err && err.message ? err.message : err} ${where}`);
     logError(`Backup is INCOMPLETE — do not treat ${BACKUP_ROOT || 'the output directory'} as a full backup`);
-    process.exit(1);
+    return exitAfterRelock(1);
   });
 } else {
   // Exposed for tests only.
@@ -3680,5 +3958,9 @@ if (require.main === module) {
     schemaFilter, toHcl, hclString, hclKey, resourceBlocks, stripNonConfigAttrs, findAttrSpan, splitListItems,
     parseMultipart, sigV4Authorization, patchSchemaGaps, quarantineBlocks, parseEnvValue, globToRegex,
     _setSchemaFile: (f) => { PROVIDER_SCHEMA_JSON = f; PROVIDER_SCHEMA = null; },
+    _uploads: {
+      r2Unlock, r2RestoreLock, r2Upload, awsUpload, runUploads, uploadFile, parseListObjects, writeCompletionManifest,
+      MANIFEST_NAME, r2Lock,
+    },
   };
 }

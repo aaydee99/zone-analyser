@@ -20,8 +20,8 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const log = (m) => console.log(`[worker] ${m}`);
 
 const [major, minor] = process.versions.node.split('.').map(Number);
-if (major < 18 || (major === 18 && minor < 18)) {
-  console.error(`[worker] Node.js 18.18 or newer is needed (this is ${process.versions.node}). Install it from https://nodejs.org or use the Docker image (see the README, Worker).`);
+if (major < 20 || (major === 20 && minor < 9)) {
+  console.error(`[worker] Node.js 20.9 or newer is needed (this is ${process.versions.node}). Install it from https://nodejs.org or use the Docker image (see the README, Worker).`);
   process.exit(1);
 }
 
@@ -47,19 +47,28 @@ const stale = !fs.existsSync(buildId) || process.argv.includes('--build')
   || Math.max(newest(path.join(ROOT, 'src')), fs.statSync(path.join(ROOT, 'package.json')).mtimeMs) > fs.statSync(buildId).mtimeMs;
 if (stale) run(['run', 'build'], 'Building the console');
 
-const env = { ...process.env, CONSOLE_ROLE: 'worker', PORT };
+const env = {
+  ...process.env, CONSOLE_ROLE: 'worker', PORT,
+  // The worker's time limits count from its first start (worker.yml sets it at the start of the run), not from a restart.
+  CONSOLE_WORKER_JOB_STARTED_AT: process.env.CONSOLE_WORKER_JOB_STARTED_AT || String(Date.now()),
+  // SIGTERM / SIGINT are handled by the worker loop (src/lib/worker-loop.ts): it hands back its queued
+  // calls and waits for its database writes before it exits, instead of Next.js exiting at once.
+  NEXT_MANUAL_SIG_HANDLE: 'true',
+};
 let restarts = 0;
 const start = () => {
   log(`starting on http://${HOST}:${PORT} (worker role)`);
   const startedAt = Date.now();
   const child = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-H', HOST, '-p', PORT], { cwd: ROOT, env, stdio: 'inherit' });
-  const stop = () => child.kill('SIGTERM');
+  // Asked to stop: the worker gets SIGTERM, hands back its calls, waits for its writes and exits; then so does this.
+  let stopping = false;
+  const stop = () => { stopping = true; child.kill('SIGTERM'); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   child.on('exit', (code, signal) => {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
-    if (signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
+    if (stopping || signal === 'SIGTERM' || signal === 'SIGINT') process.exit(0);
     // Exit code 0: the worker stopped itself (idle, or its time limit on GitHub Actions).
     if (code === 0) { log('stopped by itself'); process.exit(0); }
     // Ran for a while: start again at once; crashing on start: back off up to a minute.

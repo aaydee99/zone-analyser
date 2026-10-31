@@ -6,6 +6,9 @@ most of them delete tables and their data.
 
 | Migration | Rollback | Loses data |
 | --- | --- | --- |
+| 0014_rate_limits | 0014_rate_limits.down.sql | no (only the shared rate-limit counters and the list of relayed calls already run; each instance counts in memory again) |
+| 0013_worker_locks | 0013_worker_locks.down.sql | no (only the shared job locks and which approvals were carried out; each worker's own lock and approval records stay) |
+| 0012_monitor_claims | 0012_monitor_claims.down.sql | no (only which worker holds a monitoring unit, and which channel each finding was sent to) |
 | 0011_monitor_queue | 0011_monitor_queue.down.sql | the monitoring queue, per-zone results and drift baselines (findings are kept; drift takes new baselines on its next check) |
 | 0010_monitoring | 0010_monitoring.down.sql | check results, findings, received Cloudflare alerts, the notification log |
 | 0008_indexes_and_guards | 0008_indexes_and_guards.down.sql | no |

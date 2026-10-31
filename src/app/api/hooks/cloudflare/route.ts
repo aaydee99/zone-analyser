@@ -23,7 +23,7 @@ const same = (a: string, b: string) => {
 export async function POST(req: Request) {
   try {
     if (!isAllowedHost(req.headers.get('host'))) throw new HttpError(403, 'Host not allowed');
-    rateLimit(`hook:${clientKey(req)}`, 120);
+    await rateLimit(`hook:${clientKey(req)}`, 120);
     const secret = await inboxSecret(false);
     const given = req.headers.get('cf-webhook-auth') ?? '';
     if (!secret || !given || !same(given, secret)) throw new HttpError(401, 'Not authorised');

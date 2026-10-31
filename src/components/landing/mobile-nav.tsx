@@ -12,12 +12,14 @@ export function MobileNav({ links }: { links: { href: string; label: string }[] 
 
   useEffect(() => {
     if (!open) return;
+    // Opened from the keyboard or a tap: move to the first link, so Tab continues inside the menu.
+    wrap.current?.querySelector<HTMLAnchorElement>(`[id="${id}"] a`)?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); button.current?.focus(); } };
     const onDown = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown);
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown); };
-  }, [open]);
+  }, [open, id]);
 
   return (
     <div ref={wrap} className="lg:hidden">

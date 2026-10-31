@@ -37,15 +37,16 @@ export interface LiveState {
  * The running job and the approvals waiting for `me`. On Vercel these live on the worker, so it
  * is asked (briefly: the page must not hang when the worker is offline).
  */
-export async function liveState(me: Me): Promise<LiveState> {
+/** `wake`: start the worker when none is online (false for the background status poll). */
+export async function liveState(me: Me, wake = true): Promise<LiveState> {
   if (!isWebRole()) return { activeRunId: activeRunId(), activeRestore: activeRestore(), pendingApprovals: pendingFor(me) };
   const w = await latestWorker().catch(() => null);
   const s = w?.online ? await relayJson<LiveState>(me, '/api/auth/me?peek=1', 4_000) : null;
   const updating = w?.online ? await retireIfOutdated(w).catch(() => false) : false;
   // Someone opened the console and no worker runs: start one now, so it is ready by the time it is needed.
-  // Only when no worker's heartbeat is current: a new run cancels the running one (worker.yml), so a
-  // worker that is merely slow to answer (busy with a backup) must not be replaced.
-  if (!w?.online && wakeConfigured()) await wakeWorker(me.email).catch(() => null);
+  // Only when no worker's heartbeat is current, and not for the background poll: after an idle stop
+  // the worker starts again when someone uses the console, not because a tab is open.
+  if (wake && !w?.online && wakeConfigured()) await wakeWorker(me.email).catch(() => null);
   const starting = !s && wakeConfigured() ? await startingSince().catch(() => null) : null;
   const start = starting ? await startProgress(starting).catch(() => null) : null;
   return {

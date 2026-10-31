@@ -512,11 +512,11 @@ function BackupBuilder() {
                   ]}
                 />
               </Field>
-              <Field label="Audit log window" hint="Hours of account audit logs to export · AUDIT_LOG_HOURS">
+              <Field label="Audit log window" htmlFor="audit-hours" hint="Hours of account audit logs to export · AUDIT_LOG_HOURS">
                 <div className="flex items-center gap-3">
-                  <input type="range" min={1} max={720} step={1} value={Math.min(cfg.auditLogHours, 720)} onChange={(e) => set('auditLogHours', Number(e.target.value))} className="flex-1 accent-[var(--color-signal)]" />
+                  <input type="range" aria-label="Audit log window (hours)" min={1} max={720} step={1} value={Math.min(cfg.auditLogHours, 720)} onChange={(e) => set('auditLogHours', Number(e.target.value))} className="flex-1 accent-[var(--color-signal)]" />
                   <div className="flex items-center gap-1.5">
-                    <input type="number" min={1} max={2160} className="input !w-24 text-right font-mono" value={cfg.auditLogHours} onChange={(e) => set('auditLogHours', Math.round(Number(e.target.value)) || 1)} />
+                    <input id="audit-hours" type="number" min={1} max={2160} className="input !w-24 text-right font-mono" value={cfg.auditLogHours} onChange={(e) => set('auditLogHours', Math.round(Number(e.target.value)) || 1)} />
                     <span className="text-[13px] text-muted">h</span>
                   </div>
                 </div>
@@ -528,10 +528,10 @@ function BackupBuilder() {
           <Card>
             <SectionHeader step="05" title="Output & offsite copies" description="Where the backup lands, and optional uploads of its .tf files to R2 / S3." />
             <div className="space-y-5 p-5">
-              <Field label="Output directory" optional hint={`Blank uses the console default: ${defaultOut}`}>
+              <Field label="Output directory" htmlFor="output-dir" optional hint={`Blank uses the console default: ${defaultOut}`}>
                 <div className="relative">
                   <FolderOutput className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" />
-                  <input className="input !pl-9 font-mono !text-[13px]" value={cfg.outputDir} onChange={(e) => set('outputDir', e.target.value)} placeholder={defaultOut} />
+                  <input id="output-dir" className="input !pl-9 font-mono !text-[13px]" value={cfg.outputDir} onChange={(e) => set('outputDir', e.target.value)} placeholder={defaultOut} />
                 </div>
               </Field>
 
@@ -547,7 +547,7 @@ function BackupBuilder() {
                 {!storageOf('r2') && <p className="border-t border-line px-4 py-2.5 text-xs text-muted">This account set has no R2 storage — a super admin can add it to the set in the vault.</p>}
                 {cfg.r2.enabled && storageOf('r2') && (
                   <div className="grid gap-4 border-t border-line px-4 py-4 md:grid-cols-2">
-                    <Field label="R2 bucket">
+                    <Field label="R2 bucket" htmlFor={storageOf('r2')?.length ? 'r2-bucket' : undefined}>
                       <BucketSelect id="r2-bucket" buckets={storageOf('r2') ?? []} value={cfg.r2.bucket} onChange={(v) => setR2({ bucket: v })} />
                     </Field>
                     <p className="self-center text-xs text-muted">Keys, endpoint, prefix and lock rules come from the account set; only the buckets approved there are offered.</p>
@@ -567,7 +567,7 @@ function BackupBuilder() {
                 {!storageOf('aws') && <p className="border-t border-line px-4 py-2.5 text-xs text-muted">This account set has no AWS S3 storage — a super admin can add it to the set in the vault.</p>}
                 {cfg.aws.enabled && storageOf('aws') && (
                   <div className="grid gap-4 border-t border-line px-4 py-4 md:grid-cols-2">
-                    <Field label="S3 bucket">
+                    <Field label="S3 bucket" htmlFor={storageOf('aws')?.length ? 'aws-bucket' : undefined}>
                       <BucketSelect id="aws-bucket" buckets={storageOf('aws') ?? []} value={cfg.aws.bucket} onChange={(v) => setAws({ bucket: v })} />
                     </Field>
                     <p className="self-center text-xs text-muted">Keys come from the account set; only the buckets approved there are offered. The default bucket uses the set&apos;s region; others are detected.</p>

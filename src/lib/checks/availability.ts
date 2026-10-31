@@ -2,7 +2,7 @@ import 'server-only';
 import { cfList, cfOne } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
-import { Problems, TONE_SORT, notAvailable, readStat, type CheckDef } from './common';
+import { Problems, TONE_SORT, readStat, type CheckDef } from './common';
 
 // Is everything up: health checks and waiting rooms (per zone), tunnels and load-balancer pools (per
 // account). A product the plan or token does not include is skipped quietly, and a zone without any
@@ -15,7 +15,7 @@ interface Tunnel { id: string; name?: string; status?: string; conns_active_at?:
 interface Pool { id: string; name?: string; enabled?: boolean; healthy?: boolean; origins?: { name?: string; address?: string; enabled?: boolean }[] }
 
 const quiet = async <T,>(p: Problems, what: string, fn: () => Promise<T[]>): Promise<T[]> => {
-  try { return await fn(); } catch (err) { if (!notAvailable(err)) p.add(what, err); return []; }
+  try { return await fn(); } catch (err) { p.skip(what, err); return []; }
 };
 
 const tally = (rows: Row[]) => ({ monitored: rows.length, down: rows.filter((r) => r._tone === 'bad').length, degraded: rows.filter((r) => r._tone === 'warn').length, healthy: rows.filter((r) => r._tone === 'ok').length });
@@ -38,7 +38,7 @@ export const availability: CheckDef = {
       const rooms = await quiet<Room>(p, 'waiting rooms', () => cfList(z.token, `/zones/${z.id}/waiting_rooms`, { signal: ctx.signal }));
       for (const r of rooms) {
         let st: RoomStatus = {};
-        try { st = await cfOne<RoomStatus>(z.token, `/zones/${z.id}/waiting_rooms/${r.id}/status`, ctx.signal); } catch { /* shown as unknown */ }
+        try { st = await cfOne<RoomStatus>(z.token, `/zones/${z.id}/waiting_rooms/${r.id}/status`, ctx.signal); } catch (err) { p.skip('waiting room status', err); /* shown as unknown */ }
         const status = r.suspended ? 'suspended' : st.status ?? 'unknown';
         rows.push({ kind: 'Waiting room', name: r.name ?? r.id, where: z.zoneName, target: `${r.host ?? ''}${r.path ?? ''}`, status, detail: st.estimated_queued_users ? `${st.estimated_queued_users} queued · about ${st.max_estimated_time_minutes ?? '?'} min wait` : '', _tone: status === 'queueing' ? 'warn' : 'ok' });
         if (status === 'queueing') findings.push({ key: `wr:${z.id}:${r.id}`, severity: 'medium', title: `Visitors are queueing in “${r.name ?? r.id}” on ${z.zoneName}`, detail: `${st.estimated_queued_users ?? 0} visitors waiting, about ${st.max_estimated_time_minutes ?? '?'} minutes.`, ...scope });

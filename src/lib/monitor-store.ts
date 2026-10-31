@@ -5,7 +5,7 @@ import { HttpError } from './http';
 import type { CheckId, Coverage, Finding, ReportProblem, Row, Severity } from './monitor-types';
 
 // Stored results of the monitoring checks (supabase/migrations/0010_monitoring.sql and
-// 0011_monitor_queue.sql): one result and its table rows per check and zone or account, and the
+// 0011_monitor_queue.sql, claims in 0012_monitor_claims.sql): one result and its table rows per check and zone or account, and the
 // findings, each kept across runs under a stable id.
 
 export type ScopeKind = 'zone' | 'account' | 'global';
@@ -24,7 +24,7 @@ export interface NewFinding {
 }
 
 /** The monitoring tables are missing: say which migration to run instead of a bare 500. */
-export const NOT_SET_UP = 'Monitoring is not set up in the database yet: run supabase/migrations/0010_monitoring.sql and 0011_monitor_queue.sql in the Supabase SQL editor, then reload this page';
+export const NOT_SET_UP = 'Monitoring is not set up in the database yet: run supabase/migrations/0010_monitoring.sql, 0011_monitor_queue.sql and 0012_monitor_claims.sql in the Supabase SQL editor, then reload this page';
 
 /** Like supabase.must(), but a missing table or function (a migration not applied) is a clear 503. */
 export function must<T>(res: { data: T; error: { message: string; code?: string } | null }, what = 'Database request'): T {
@@ -141,22 +141,27 @@ export async function syncFindings(k: UnitKey, found: NewFinding[], complete: bo
   const known: FindingRow[] = [];
   for (const ids of chunks([...byId.keys()])) known.push(...must(await db().from('monitor_findings').select(COLUMNS).in('id', ids), 'Reading findings') as FindingRow[]);
   const prev = new Map(known.map((r) => [r.id, r]));
-  const rows: FindingRow[] = [];
+  // Findings still open are saved without their notification columns: a worker may be sending them
+  // right now (notify.ts claims them by setting notified_at), and this must not undo that.
+  const still: Omit<FindingRow, 'notified_at'>[] = [];
+  const news: (FindingRow & { notified_channels: string[] })[] = [];
   const fresh: Finding[] = [];
   for (const [id, f] of byId) {
     const p = prev.get(id);
-    const row: FindingRow = {
+    const open = !!p && !p.resolved_at;
+    const row: Omit<FindingRow, 'notified_at'> = {
       id, check_id: k.check, severity: f.severity, title: f.title.slice(0, 300), detail: (f.detail ?? '').slice(0, 2000),
       account_id: f.accountId ?? null, account_name: f.accountName ?? null, zone_id: f.zoneId ?? null, zone_name: f.zoneName ?? null,
-      first_seen: p && !p.resolved_at ? p.first_seen : now, last_seen: now, resolved_at: null,
+      first_seen: open ? p.first_seen : now, last_seen: now, resolved_at: null,
       dismissed_at: p?.dismissed_at ?? null, dismissed_by: p?.dismissed_by ?? null,
-      // A problem that comes back after it was resolved is news again.
-      notified_at: p && !p.resolved_at ? p.notified_at : null,
     };
-    rows.push(row);
-    if (!p || p.resolved_at) fresh.push(toFinding(row));
+    if (open) { still.push(row); continue; }
+    // New, or a problem that comes back after it was resolved: news again.
+    news.push({ ...row, notified_at: null, notified_channels: [] });
+    fresh.push(toFinding({ ...row, notified_at: null }));
   }
-  for (const part of chunks(rows)) must(await db().from('monitor_findings').upsert(part), 'Saving findings');
+  for (const part of chunks(still)) must(await db().from('monitor_findings').upsert(part), 'Saving findings');
+  for (const part of chunks(news)) must(await db().from('monitor_findings').upsert(part), 'Saving findings');
   if (complete) {
     const open = must(await openInScope(k.check, k.kind, k.id), 'Reading findings') as FindingRow[];
     const gone = open.filter((r) => !byId.has(r.id)).map((r) => r.id);
@@ -219,9 +224,36 @@ export async function setDismissed(id: string, by: string | null): Promise<Findi
   return rows[0] ? toFinding(rows[0]) : null;
 }
 
-export async function markNotified(ids: string[]) {
+/**
+ * Claims findings for sending: sets notified_at, but only on findings no one claimed or sent yet,
+ * so two workers never send the same one. Returns the claim's time and the findings won, each with
+ * the channels it already went to (from an earlier, partly failed send).
+ */
+export async function claimForSending(ids: string[]): Promise<{ at: string; won: Map<string, string[]> }> {
   const at = new Date().toISOString();
-  for (const part of chunks(ids)) must(await db().from('monitor_findings').update({ notified_at: at }).in('id', part), 'Saving notified findings');
+  const won = new Map<string, string[]>();
+  for (const part of chunks(ids)) {
+    const rows = must(await db().from('monitor_findings').update({ notified_at: at }).in('id', part).is('notified_at', null).select('id, notified_channels'), 'Claiming findings to send') as { id: string; notified_channels: string[] | null }[];
+    for (const r of rows) won.set(r.id, r.notified_channels ?? []);
+  }
+  return { at, won };
+}
+
+/** Records the channels each finding was delivered to (findings with the same channels in one update). */
+export async function saveDelivered(channels: Map<string, string[]>) {
+  const groups = new Map<string, string[]>();
+  for (const [id, list] of channels) {
+    const key = [...new Set(list)].sort().join(',');
+    groups.set(key, [...(groups.get(key) ?? []), id]);
+  }
+  for (const [key, ids] of groups) {
+    for (const part of chunks(ids)) must(await db().from('monitor_findings').update({ notified_channels: key ? key.split(',') : [] }).in('id', part), 'Saving notified findings');
+  }
+}
+
+/** Gives back findings claimed at `at` that did not reach every channel: the next round sends them again (to the channels they missed). */
+export async function releaseClaim(ids: string[], at: string) {
+  for (const part of chunks(ids)) must(await db().from('monitor_findings').update({ notified_at: null }).in('id', part).eq('notified_at', at), 'Saving notified findings');
 }
 
 // ── Alerts Cloudflare sent ──────────────────────────────────────────────────

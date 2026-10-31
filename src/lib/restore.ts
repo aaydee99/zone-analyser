@@ -1,4 +1,5 @@
 import 'server-only';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -19,8 +20,8 @@ import {
   type PlanError, type RestoreCandidate, type TfBlock,
 } from './restore-hcl';
 import { ensureTools, resolveTools } from './tools';
-import { activeRunId, augmentedEnvPath } from './runner';
-import { activeRestore, setActiveRestore, type ActiveRestore } from './job-lock';
+import { accountLockKey, activeRunId, augmentedEnvPath } from './runner';
+import { LockBusy, acquireShared, activeRestore, jobsPaused, setActiveRestore, type ActiveRestore, type SharedLock } from './job-lock';
 import { getSettings } from './settings';
 import { LIVE_ZONE_TYPES } from './tf-zone-types';
 import { SKIP_IMPORT } from './tf-import-ids';
@@ -43,7 +44,7 @@ const SESSION_TTL = 2 * 3600_000;
 export const PLAN_MAX_AGE_MS = 30 * 60_000;
 const JOB_TIMEOUT_MS = 20 * 60_000;
 const RESTORES_DIR = path.join(DATA_DIR, 'restores');
-const CONSOLE_ENV_RE = /^(SUPABASE_|NEXT_PUBLIC_SUPABASE_|VAULT_|CONSOLE_|REDIS_)/i;
+const CONSOLE_ENV_RE = /^(SUPABASE_|NEXT_PUBLIC_SUPABASE_|VAULT_|CONSOLE_|REDIS_|RELAY_|TURNSTILE_|WORKER_GITHUB_)/i;
 const STRIP_ENV = ['CF_API_TOKEN', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
 
 export type RestoreState = 'prepared' | 'scanning' | 'scanned' | 'planning' | 'planned' | 'plan-failed' | 'applying' | 'applied' | 'apply-failed' | 'matched';
@@ -71,7 +72,15 @@ export interface RestoreView {
   createdAt: string;
   zone: { id: string; name: string };
   account: { id: string; credentialId: string; credentialName: string };
-  source: { kind: 'r2' | 'aws'; credentialName: string; bucket: string; folder: string; backupTime: string; newestFolder: string; skippedNewer: string[]; warnings: string[] };
+  source: {
+    kind: 'r2' | 'aws'; credentialName: string; bucket: string; folder: string; backupTime: string; newestFolder: string; skippedNewer: string[]; warnings: string[];
+    /** Checked against its completion manifest (_backup-complete.json), or unverified (a backup made before those). */
+    verified: boolean;
+    /** "verified: …" or "unverified (made before completion manifests)". */
+    verification: string;
+    /** The newer folders that were not used, and why ("no files for <zone>", or "not usable: …"). */
+    skipped: { folder: string; reason: string }[];
+  };
   /** Configuration changes (create/update/delete) to this zone since the backup, newest first. */
   changes: CfChange[];
   /** Audit entries left out: reads (backup runs, lookups), failed requests, cache purges… */
@@ -114,6 +123,12 @@ interface Session extends Omit<RestoreView, 'blockCount'> {
   /** The tool running for the current job (terraform / cf-terraforming), so a cancel can stop it. */
   child: ChildProcess | null;
   cancelRequested: boolean;
+  /**
+   * terraform.tfstate after an apply that failed or was cancelled: what that apply already created
+   * or imported. The next plan starts from it, and the next comparison compares those objects
+   * (so nothing is created twice). Cleared by an apply that succeeds and by a finished comparison.
+   */
+  keptState: string | null;
 }
 
 /** Email Routing on/off: Terraform cannot set it (cloudflare_email_routing_dns reads back empty). */
@@ -121,7 +136,7 @@ const EMAIL_ROUTING_KEY = 'api:email_routing';
 const EMAIL_ROUTING_LABEL = 'Email Routing (enabled)';
 interface ApiChange { key: typeof EMAIL_ROUTING_KEY; enabled: boolean }
 
-interface Store { sessions: Map<string, Session>; busy: string | null }
+interface Store { sessions: Map<string, Session>; busy: string | null; lock?: SharedLock | null }
 const g = globalThis as unknown as { __cfRestore?: Store };
 const store: Store = (g.__cfRestore ??= { sessions: new Map<string, Session>(), busy: null });
 
@@ -141,7 +156,7 @@ function sweep() {
 }
 
 const view = (s: Session): RestoreView => {
-  const { token: _t, provider: _p, blocks, extras, dir: _d, expires: _e, emailRouting: _er, apiChanges: _ac, tfPlanned: _tp, appliedBy: _ab, steps: _st, child: _ch, cancelRequested: _cr, ...rest } = s;
+  const { token: _t, provider: _p, blocks, extras, dir: _d, expires: _e, emailRouting: _er, apiChanges: _ac, tfPlanned: _tp, appliedBy: _ab, steps: _st, child: _ch, cancelRequested: _cr, keptState: _ks, ...rest } = s;
   const byAddr = new Map([...blocks, ...extras].map((b) => [b.address, b.text]));
   return { ...rest, blockCount: blocks.length, candidates: s.candidates.map((c) => ({ ...c, blockText: c.address ? redactText(byAddr.get(c.address) ?? '') : undefined })), log: [...s.log] };
 };
@@ -187,20 +202,95 @@ export interface PrepareInput {
   storage: { kind: 'r2' | 'aws'; bucket?: string };
 }
 
+/**
+ * Written by backup.js LAST, at the root of each backup folder: a folder with it finished, and its
+ * files can be checked against it. Folders from before completion manifests have none.
+ */
+export const COMPLETE_MANIFEST = '_backup-complete.json';
+interface CompleteManifest { version: 1; createdAt: string; files: { path: string; bytes: number; sha256: string }[] }
+const UNVERIFIED_NOTE = 'unverified (made before completion manifests)';
+/** How many older folders are looked at for a manifest before a folder without one counts as made before them. */
+const MANIFEST_LOOKBACK = 5;
+
+const sha256 = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
+/** Text read from the bucket matches a manifest entry (a UTF-8 BOM is dropped when the text is read, so it is tried both ways). */
+const matchesEntry = (text: string, e: { bytes: number; sha256: string }) => [Buffer.from(text, 'utf8'), Buffer.from(`﻿${text}`, 'utf8')]
+  .some((b) => b.length === e.bytes && sha256(b) === e.sha256.toLowerCase());
+
+/** The folder's completion manifest; null when it has none; an Error when it cannot be used. */
+async function readCompleteManifest(t: BucketTarget, folder: string): Promise<CompleteManifest | null | Error> {
+  let text: string;
+  try {
+    text = await getObject(t, `${t.prefix}${folder}/${COMPLETE_MANIFEST}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  }
+  try {
+    const m = JSON.parse(text) as CompleteManifest;
+    if (m?.version !== 1 || !Array.isArray(m.files)) return new Error(`${COMPLETE_MANIFEST} has an unknown format`);
+    const files = m.files.filter((f) => f && typeof f.path === 'string' && Number.isFinite(f.bytes) && /^[0-9a-fA-F]{64}$/.test(String(f.sha256)))
+      .map((f) => ({ path: f.path.replace(/\\/g, '/').replace(/^\.?\//, ''), bytes: Number(f.bytes), sha256: String(f.sha256) }));
+    if (files.length !== m.files.length) return new Error(`${COMPLETE_MANIFEST} has entries without a path, size or sha256`);
+    return { version: 1, createdAt: String(m.createdAt ?? ''), files };
+  } catch {
+    return new Error(`${COMPLETE_MANIFEST} is not valid JSON`);
+  }
+}
+
+/**
+ * The newest backup folder with a usable copy of the zone, and its files. A folder with a completion
+ * manifest is used only when every file it lists for the zone is there and matches (size, sha256).
+ * A folder without one is used, flagged unverified, only when it was made before manifests (no
+ * older folder has one); otherwise it is a backup that did not finish.
+ */
 async function latestFolderForZone(t: BucketTarget, zoneName: string) {
   const { folders } = await listObjects(t, t.prefix, '/');
   const parsed = folders.map((f) => parseBackupFolder(f.slice(t.prefix.length).replace(/\/$/, '')))
     .filter((f): f is { name: string; time: string; partial: boolean } => !!f.time)
     .sort((a, b) => (a.time < b.time ? 1 : -1));
   if (!parsed.length) throw new HttpError(404, `No backup folders found in "${t.bucket}${t.prefix ? `/${t.prefix.replace(/\/$/, '')}` : ''}"`);
-  const skipped: string[] = [];
-  for (const f of parsed) {
+  const manifests = new Map<string, Promise<CompleteManifest | null | Error>>();
+  const manifestOf = (name: string) => { if (!manifests.has(name)) manifests.set(name, readCompleteManifest(t, name)); return manifests.get(name)!; };
+  const skipped: { folder: string; reason: string }[] = [];
+  const skip = (folder: string, reason: string) => skipped.push({ folder, reason });
+  for (const [i, f] of parsed.entries()) {
     const { keys } = await listObjects(t, `${t.prefix}${f.name}/${zoneName}/`);
-    const tf = keys.filter((k) => k.key.endsWith('.tf'));
-    if (tf.length) return { folder: f, newest: parsed[0].name, skipped, keys: tf.map((k) => k.key) };
-    skipped.push(f.name);
+    const tf = keys.filter((k) => k.key.endsWith('.tf')).map((k) => k.key);
+    if (!tf.length) { skip(f.name, `no files for ${zoneName}`); continue; }
+    const m = await manifestOf(f.name);
+    if (m instanceof Error) { skip(f.name, `not usable: ${m.message}`); continue; }
+    const base = `${t.prefix}${f.name}/`;
+    if (!m) {
+      // Made before completion manifests, or a backup that stopped before writing its manifest?
+      let newer: string | null = null;
+      for (const older of parsed.slice(i + 1, i + 1 + MANIFEST_LOOKBACK)) {
+        const om = await manifestOf(older.name).catch(() => null);
+        if (om) { newer = older.name; break; }
+      }
+      if (newer) { skip(f.name, `not usable: it has no ${COMPLETE_MANIFEST} although the older backup ${newer} has one, so this backup did not finish`); continue; }
+      const files = await Promise.all(tf.map(async (k) => ({ name: k.split('/').pop()!, text: await getObject(t, k) })));
+      return { folder: f, newest: parsed[0].name, skipped, files, manifest: null, verification: UNVERIFIED_NOTE };
+    }
+    const listed = m.files.filter((e) => e.path.startsWith(`${zoneName}/`) && e.path.endsWith('.tf'));
+    if (!listed.length) { skip(f.name, `not usable: ${zoneName} has files but none is listed in its ${COMPLETE_MANIFEST}`); continue; }
+    const present = new Set(tf);
+    const missing = listed.filter((e) => !present.has(base + e.path));
+    if (missing.length) { skip(f.name, `not usable: ${missing.length} file(s) listed in its ${COMPLETE_MANIFEST} are missing (${missing.slice(0, 3).map((e) => e.path).join(', ')}${missing.length > 3 ? ', …' : ''})`); continue; }
+    // Only the files the manifest lists are used; anything else in the zone folder was not part of the finished backup.
+    const files = await Promise.all(listed.map(async (e) => ({ entry: e, name: e.path.split('/').pop()!, text: await getObject(t, base + e.path) })));
+    const changed = files.filter((x) => !matchesEntry(x.text, x.entry));
+    if (changed.length) { skip(f.name, `not usable: ${changed.length} file(s) differ from its ${COMPLETE_MANIFEST} (${changed.slice(0, 3).map((x) => x.entry.path).join(', ')}${changed.length > 3 ? ', …' : ''})`); continue; }
+    const extra = tf.length - listed.length;
+    return {
+      folder: f, newest: parsed[0].name, skipped, files: files.map(({ name, text }) => ({ name, text })), manifest: m,
+      verification: `verified: ${listed.length} file(s) match its ${COMPLETE_MANIFEST}${extra > 0 ? ` (${extra} file(s) not listed in it were left out)` : ''}`,
+    };
   }
-  throw new HttpError(404, `None of the ${parsed.length} backup folders contains Terraform files for ${zoneName}`);
+  const unusable = skipped.filter((s) => s.reason.startsWith('not usable'));
+  throw new HttpError(404, unusable.length
+    ? `No usable backup of ${zoneName}: ${unusable.slice(0, 3).map((s) => `${s.folder} — ${s.reason.replace(/^not usable: /, '')}`).join('; ')}${unusable.length > 3 ? ` (and ${unusable.length - 3} more)` : ''}`
+    : `None of the ${parsed.length} backup folders contains Terraform files for ${zoneName}`);
 }
 
 /** Zone-level configuration: not Zero Trust or Spectrum, and not set on the account (account_id without zone_id). */
@@ -219,7 +309,7 @@ export async function prepareRestore(me: Me, input: PrepareInput): Promise<Resto
   const target = await bucketTarget(storeCred, input.storage.bucket ?? '');
 
   const found = await latestFolderForZone(target, zone.name);
-  const files = await Promise.all(found.keys.map(async (k) => ({ name: k.split('/').pop()!, text: await getObject(target, k) })));
+  const files = found.files;
   // The backup's own provider.tf is never used: it is code from the bucket (a provider override
   // or a data "external" block would run with the console's keys). Restores write DEFAULT_PROVIDER.
   const provider = '';
@@ -238,9 +328,14 @@ export async function prepareRestore(me: Me, input: PrepareInput): Promise<Resto
     await audit(me, 'security.restore_blocks_refused', zone.name, { folder: found.folder.name, blocks: unsafe.slice(0, 50) });
   }
   const blocks = parsed.filter((b) => !unsafeBlock(b) && b.type !== 'cloudflare_email_routing_dns' && isZoneLevel(b));
-  const erKey = `${target.prefix}${found.folder.name}/account/api_backup/zone_${zone.name.replace(/[^a-zA-Z0-9._-]/g, '_')}/email_routing_settings.json`;
-  const emailRouting = await getObject(target, erKey)
-    .then((t) => { const j = JSON.parse(t) as { result?: { enabled?: unknown } }; return typeof j.result?.enabled === 'boolean' ? { enabled: j.result.enabled } : null; })
+  const erPath = `account/api_backup/zone_${zone.name.replace(/[^a-zA-Z0-9._-]/g, '_')}/email_routing_settings.json`;
+  const erEntry = found.manifest?.files.find((e) => e.path === erPath);
+  const emailRouting = await getObject(target, `${target.prefix}${found.folder.name}/${erPath}`)
+    .then((t) => {
+      // Listed in the completion manifest but different: not trusted (Email Routing is left as it is).
+      if (erEntry && !matchesEntry(t, erEntry)) { warnings.push(`${erPath} differs from the backup's ${COMPLETE_MANIFEST} — Email Routing is not restored from it`); return null; }
+      const j = JSON.parse(t) as { result?: { enabled?: unknown } }; return typeof j.result?.enabled === 'boolean' ? { enabled: j.result.enabled } : null;
+    })
     .catch(() => null);
 
   // No account ID on the credential: the zone's own account.
@@ -279,17 +374,19 @@ export async function prepareRestore(me: Me, input: PrepareInput): Promise<Resto
     zone: { id: zone.id, name: zone.name }, account: { id: accountId, credentialId: cf.id, credentialName: cf.name },
     source: {
       kind: input.storage.kind, credentialName: storeCred.name, bucket: target.bucket, folder: found.folder.name, backupTime: found.folder.time,
-      newestFolder: found.newest, skippedNewer: found.skipped, warnings,
+      newestFolder: found.newest, skippedNewer: found.skipped.map((x) => x.folder), warnings,
+      verified: !!found.manifest, verification: found.verification, skipped: found.skipped,
     },
     changes, ignored, ignoredEntries, auditTruncated: truncated, candidates,
     selected: candidates.filter((c) => c.mode === 'recreate' || (c.mode === 'revert' && c.importId)).map((c) => c.key),
-    scan: null, plan: null, appliedAt: null, verified: null, log: [],
+    scan: null, plan: null, appliedAt: null, verified: null,
+    log: [`Backup ${found.folder.name}: ${found.verification}`, ...found.skipped.filter((x) => x.reason.startsWith('not usable')).map((x) => `[WARN] Skipped the newer backup ${x.folder}: ${x.reason.replace(/^not usable: /, '')}`)],
     token: cf.fields.apiToken, provider, blocks, extras: [], dir: path.join(RESTORES_DIR, id), expires: Date.now() + SESSION_TTL,
-    emailRouting, apiChanges: [], tfPlanned: false, appliedBy: null, steps: [], cancelled: null, approval: null, child: null, cancelRequested: false,
+    emailRouting, apiChanges: [], tfPlanned: false, appliedBy: null, steps: [], cancelled: null, approval: null, child: null, cancelRequested: false, keptState: null,
   };
   store.sessions.set(id, s);
-  track(s, `Prepared from ${found.folder.name} (${changes.length} change${changes.length === 1 ? '' : 's'} in the audit log since)`, me.email);
-  await audit(me, 'restore.prepared', zone.name, { restoreId: id, folder: found.folder.name, bucket: target.bucket, changes: changes.length, ignored, restorable: s.selected.length });
+  track(s, `Prepared from ${found.folder.name}, ${found.manifest ? 'verified against its completion manifest' : UNVERIFIED_NOTE} (${changes.length} change${changes.length === 1 ? '' : 's'} in the audit log since)`, me.email);
+  await audit(me, 'restore.prepared', zone.name, { restoreId: id, folder: found.folder.name, bucket: target.bucket, changes: changes.length, ignored, restorable: s.selected.length, verified: !!found.manifest, skippedUnusable: found.skipped.filter((x) => x.reason.startsWith('not usable')).length });
   return view(s);
 }
 
@@ -345,6 +442,32 @@ async function terraformEnv(auth: CfAuth, guard?: ReadOnlyProxy) {
   });
   fs.mkdirSync(env.TF_PLUGIN_CACHE_DIR!, { recursive: true });
   return env;
+}
+
+/** Managed resources in a terraform.tfstate, by address, with their id (only plain `type.name` addresses: restores use no modules or counts). */
+function stateIds(state: string): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const j = JSON.parse(state) as { resources?: { mode?: string; type: string; name: string; module?: string; instances?: { index_key?: unknown; attributes?: { id?: unknown } }[] }[] };
+    for (const r of j.resources ?? []) {
+      if (r.mode !== 'managed' || r.module) continue;
+      const inst = r.instances?.find((i) => i.index_key === undefined);
+      if (inst) out.set(`${r.type}.${r.name}`, typeof inst.attributes?.id === 'string' ? inst.attributes.id : '');
+    }
+  } catch { /* unreadable: treated as empty */ }
+  return out;
+}
+const stateAddresses = (state: string) => new Set(stateIds(state).keys());
+
+/** Keeps the session's Terraform state after a failed or cancelled apply (see Session.keptState). */
+function keepState(s: Session) {
+  try {
+    const state = fs.readFileSync(path.join(s.dir, 'terraform.tfstate'), 'utf8');
+    if (stateIds(state).size) {
+      s.keptState = state;
+      s.log.push(`Terraform's state from this apply is kept (${stateIds(state).size} resource(s)): plan again — or compare again — and it is used, so nothing the apply already created is created twice.`);
+    }
+  } catch { /* no state written: nothing reached Cloudflare through Terraform */ }
 }
 
 /** Thrown inside a job once it is cancelled: the job's catch puts the restore back in a usable state. */
@@ -447,17 +570,35 @@ function assertNoJob() {
   if (activeRunId()) throw new HttpError(409, 'A backup is running — wait for it to finish before restoring');
 }
 
-function claim(id: string, job: ActiveRestore['job'], by: string) {
+/** Close to the worker's time limit no apply starts (src/lib/job-lock.ts jobsPaused). */
+function assertTakingJobs() {
+  const paused = jobsPaused();
+  if (paused) throw new HttpError(503, paused, { 'retry-after': '90' });
+}
+
+/**
+ * Takes the job slot (this worker), then the account's lock row (every worker: src/lib/job-lock.ts),
+ * the same one a backup of that account takes. Refused (409) while either is held.
+ */
+async function claim(id: string, job: ActiveRestore['job'], by: string) {
   assertNoJob();
   store.busy = id;
   const s = store.sessions.get(id);
   if (s) { s.cancelRequested = false; s.cancelled = null; }
   setActiveRestore({ id, zone: s?.zone.name ?? '', job, by, since: new Date().toISOString(), credentialId: s?.account.credentialId });
+  try {
+    store.lock = s ? await acquireShared([accountLockKey(s.account.id)], `restore of ${s.zone.name} (${job}, by ${by})`) : null;
+  } catch (err) {
+    release();
+    throw err instanceof LockBusy ? new HttpError(409, err.message) : err;
+  }
 }
 
 function release() {
   store.busy = null;
   setActiveRestore(null);
+  void store.lock?.release();
+  store.lock = null;
 }
 
 export async function planRestore(me: Me, id: string, addresses: string[]): Promise<RestoreView> {
@@ -489,16 +630,16 @@ export async function planRestore(me: Me, id: string, addresses: string[]): Prom
   const blocksByAddr = new Map(s.blocks.map((b) => [b.address, b]));
   const all = withDependencies(keep, s.blocks);
   const deps = new Set(all.filter((x) => x.dependency).map((x) => x.address));
-  const imports: string[] = [];
+  const imports: { address: string; text: string }[] = [];
   for (const { address, dependency } of all) {
     const c = byKey.get(address);
     if (c?.mode === 'recreate') continue;
     const importId = c?.importId ?? (dependency ? importIdForDependency(s, address) : undefined);
     if (!importId) throw new HttpError(400, `${address} is referenced by a chosen block but cannot be imported`);
-    imports.push(importBlock(address, importId));
+    imports.push({ address, text: importBlock(address, importId) });
   }
 
-  claim(id, 'planning', me.email);
+  await claim(id, 'planning', me.email);
   s.state = 'planning';
   s.selected = chosen;
   s.plan = null;
@@ -513,11 +654,20 @@ export async function planRestore(me: Me, id: string, addresses: string[]): Prom
   for (const c of apiPlanned) s.log.push(`Through the API (Terraform cannot set it): ${c.address} → ${c.fields[0].new}`);
   fs.rmSync(s.dir, { recursive: true, force: true });
   fs.mkdirSync(s.dir, { recursive: true });
+  // After a failed apply, Terraform's state from it is kept: what that apply already created or
+  // imported is planned from there (updated, not created a second time).
+  const kept = s.keptState ? stateAddresses(s.keptState) : null;
+  if (kept) {
+    fs.writeFileSync(path.join(s.dir, 'terraform.tfstate'), s.keptState!, { mode: 0o600 });
+    s.log.push(`Planning from the Terraform state kept from the failed apply (${kept.size} resource(s) in it), so nothing it already created is created again.`);
+  }
+  // Already in the kept state: not imported again.
+  const importsText = () => imports.filter((x) => !kept?.has(x.address)).map((x) => x.text).join('\n');
   fs.writeFileSync(path.join(s.dir, 'provider.tf'), DEFAULT_PROVIDER);
   fs.writeFileSync(path.join(s.dir, 'restore.tf'), `${all.map((x) => blocksByAddr.get(x.address)!.text).join('\n\n')}\n`);
   // With deletes, imports.tf is written after those are imported into the state (below).
   if (deletes.length) fs.writeFileSync(path.join(s.dir, 'extras.tf'), `${deletes.map((x) => x.text).join('\n\n')}\n`);
-  else fs.writeFileSync(path.join(s.dir, 'imports.tf'), imports.join('\n'));
+  else fs.writeFileSync(path.join(s.dir, 'imports.tf'), importsText());
   track(s, `Plan started (${all.length} resource${all.length === 1 ? '' : 's'})`, me.email);
   await audit(me, 'restore.planned', s.zone.name, { restoreId: s.id, folder: s.source.folder, resources: all.map((x) => x.address), deletes: deletes.map((x) => x.address) });
 
@@ -533,15 +683,25 @@ export async function planRestore(me: Me, id: string, addresses: string[]): Prom
       const bin = await terraformBin(s);
       const env = await terraformEnv({ token: s.token }, guard);
       if ((await tf(s, bin, ['init', '-input=false', '-no-color'], env)).code !== 0) throw new Error('terraform init failed');
+      if (kept) {
+        // In the kept state but not chosen now: forgotten (state rm), never deleted from Cloudflare.
+        const planned = new Set([...all.map((x) => x.address), ...deletes.map((x) => x.address)]);
+        for (const addr of [...kept].filter((a) => !planned.has(a))) {
+          const r = await tf(s, bin, ['state', 'rm', '-no-color', addr], env, true);
+          if (r.code !== 0) throw new Error(`terraform state rm ${addr} failed — compare again to start from the live zone`);
+          s.log.push(`${addr} (from the failed apply) is not chosen now: left as it is in Cloudflare.`);
+        }
+      }
       // Into the state only (read-only); with their blocks then removed, the plan deletes them.
       const scope = { accountId: s.account.id, zoneId: s.zone.id };
       for (const x of deletes) {
+        if (kept?.has(x.address)) { s.log.push(`Will delete ${x.address} (not in the backup)`); continue; }
         const r = await tf(s, bin, ['import', '-input=false', '-no-color', x.address, importIdFor(x, scope).id!], env, true);
         s.log.push(r.code === 0 ? `Will delete ${x.address} (not in the backup)` : `[WARN] ${x.address} could not be imported — it may be gone already; not deleted`);
       }
       if (deletes.length) {
         fs.rmSync(path.join(s.dir, 'extras.tf'), { force: true });
-        fs.writeFileSync(path.join(s.dir, 'imports.tf'), imports.join('\n'));
+        fs.writeFileSync(path.join(s.dir, 'imports.tf'), importsText());
       }
       if ((await tf(s, bin, ['plan', '-input=false', '-no-color', '-out=tfplan'], env)).code !== 0) throw new Error('terraform plan failed');
       const shown = await tf(s, bin, ['show', '-json', 'tfplan'], env, true);
@@ -671,7 +831,7 @@ export async function compareRestore(me: Me, id: string): Promise<RestoreView> {
   if (s.state === 'planning' || s.state === 'applying' || s.state === 'scanning') throw new HttpError(409, 'This restore is busy');
   if (DONE(s)) throw doneError(s);
   if (!s.blocks.length) throw new HttpError(400, 'The backup has no resource blocks for this zone');
-  claim(id, 'comparing', me.email);
+  await claim(id, 'comparing', me.email);
   s.state = 'scanning';
   s.plan = null;
   s.scan = null;
@@ -690,8 +850,16 @@ export async function compareRestore(me: Me, id: string): Promise<RestoreView> {
       const excluded = new Map<string, string>(); // address → why it cannot be checked
       const missing = new Set<string>();
       const importIds = new Map<string, string>();
+      // A failed apply's kept state: objects it created again under a new ID are compared as they are now.
+      const kept = s.keptState ? stateIds(s.keptState) : new Map<string, string>();
+      const keptAs = new Map<string, string>();
       for (const b of s.blocks) {
         const known = audited.get(b.address);
+        const keptId = kept.get(b.address);
+        if (keptId && keptId !== b.labelId && !SKIP_IMPORT[b.type]) {
+          const imp = importIdFor({ type: b.type, labelId: keptId, attrs: { ...b.attrs, id: '' } }, scope);
+          if (imp.id) { importIds.set(b.address, imp.id); keptAs.set(b.address, keptId); continue; }
+        }
         // Deleted per the audit log, or written back by create (SKIP_IMPORT: snippets): planned without import.
         if (known?.mode === 'recreate' || SKIP_IMPORT[b.type]) { missing.add(b.address); continue; }
         const imp = known?.importId ? { id: known.importId } : importIdFor(b, scope);
@@ -713,12 +881,13 @@ export async function compareRestore(me: Me, id: string): Promise<RestoreView> {
       live.failed = live.failed.filter((t) => backupTypes.has(t));
       if (live.failed.length) s.log.push(`  [WARN] could not list ${live.failed.length} type(s): ${live.failed.join(', ')}`);
       // A backup object the audit log saw deleted and created again is compared under its new ID: not extra.
-      const remade = new Set(s.blocks.flatMap((b) => { const r = audited.get(b.address)?.recreatedAs; return r ? [`${b.type}|${r}`] : []; }));
+      const remade = new Set(s.blocks.flatMap((b) => { const r = keptAs.get(b.address) ?? audited.get(b.address)?.recreatedAs; return r ? [`${b.type}|${r}`] : []; }));
+      if (keptAs.size) s.log.push(`  ${keptAs.size} resource(s) the failed apply created again are compared under their new ID (from its kept Terraform state).`);
       let extras = liveExtras(s.blocks, live.blocks, scope).filter((l) => backupTypes.has(l.type) && !remade.has(`${l.type}|${l.labelId}`));
       s.log.push(`  ${live.blocks.length} live resource(s) listed, ${extras.length} not in the backup.`);
 
       // 2. Import + plan every backup block; imports of deleted objects fail → re-create.
-      const reusedAs = new Map<string, string>();
+      const reusedAs = new Map<string, string>(keptAs);
       const reusedLive = new Set<string>();
       /** Plans only `set` (imported) plus what it references (created): the errors of those imports alone. */
       const trial = async (set: TfBlock[]) => {
@@ -885,6 +1054,8 @@ export async function compareRestore(me: Me, id: string): Promise<RestoreView> {
       const unchecked = next.filter((c) => c.mode === 'unchecked').length;
       s.scan = { at: new Date().toISOString(), total: s.blocks.length, differs, missing: gone, matches: same, unchecked, extra: s.extras.length, listFailed: live.failed };
       s.log.push(`Compared: ${differs} differ from the backup, ${gone} deleted, ${s.extras.length} not in the backup (to delete), ${same} match, ${unchecked} could not be checked.`);
+      // The comparison now knows those objects by their live IDs: the next plan imports them from there.
+      s.keptState = null;
     } catch (err) {
       if (s.cancelRequested) {
         s.scan = null;
@@ -1038,7 +1209,7 @@ export async function applyRestore(me: Me, id: string, input: { confirm?: string
   if (!EMAIL_RE.test(email) || !GLOBAL_KEY_RE.test(apiKey)) throw new HttpError(400, 'Enter the Cloudflare account email and its Global API Key to apply');
   if (s.approval) throw new HttpError(409, 'This restore is already waiting for a super admin to approve the apply');
   const direct = can(me.role, 'restore:approve');
-  if (direct) assertNoJob();
+  if (direct) { assertNoJob(); assertTakingJobs(); }
   await checkGlobalKey(s, email, apiKey);
   if (s.state !== 'planned' || s.approval) throw new HttpError(409, 'This restore changed while the key was being checked — reload');
   if (!direct) return requestApply(me, s, email, apiKey);
@@ -1061,8 +1232,9 @@ async function requestApply(me: Me, s: Session, email: string, apiKey: string): 
     expiresAt, restore: { restoreId: s.id, zone: s.zone.name, folder: s.source.folder, keyEmail: email, planAt: plan.at, changes },
   });
   heldKeys.set(a.id, { email, apiKey, restoreId: s.id });
-  s.approval = { id: a.id, requestedBy: me.email, requestedAt: a.requestedAt, expiresAt };
-  s.log.push(`Apply requested by ${me.email} — waiting for a super admin to approve it (the plan stays valid until ${expiresAt}).`);
+  // The request's own limit: the plan's age, or APPROVAL_TTL_MINUTES if that is sooner.
+  s.approval = { id: a.id, requestedBy: me.email, requestedAt: a.requestedAt, expiresAt: a.expiresAt ?? expiresAt };
+  s.log.push(`Apply requested by ${me.email} — waiting for a super admin to approve it (until ${s.approval.expiresAt}).`);
   track(s, 'Apply requested — waiting for a super admin', me.email);
   await audit(me, 'approval.requested', s.zone.name, { approvalId: a.id, kind: 'restore', restoreId: s.id, folder: s.source.folder, changes: changes.length, keyEmail: email });
   return view(s);
@@ -1084,10 +1256,19 @@ export async function approveRestoreApply(approver: Me, a: Approval): Promise<Re
     throw new ApprovalGone('The plan is older than 30 minutes — the admin needs to plan again and request approval again');
   }
   assertNoJob();
+  // Close to the worker's time limit: refused, the request stays pending (approvals.ts).
+  assertTakingJobs();
   heldKeys.delete(a.id);
+  const waiting = s.approval;
   s.approval = null;
   const requester: Me = { id: a.requestedBy.id, email: a.requestedBy.email, name: '', role: a.requestedBy.role, sessionHash: '', expiresAt: 0 };
-  return startApply(s, requester, key.email, key.apiKey, approver.email);
+  try {
+    return await startApply(s, requester, key.email, key.apiKey, approver.email);
+  } catch (err) {
+    // Busy (another worker holds the account's lock): still waiting, with its key, to be approved again.
+    if (err instanceof HttpError && (err.status === 409 || err.status === 503)) { heldKeys.set(a.id, key); s.approval = waiting; }
+    throw err;
+  }
 }
 
 /** A request rejected, withdrawn or expired: the key is dropped and the restore can be planned again. */
@@ -1104,7 +1285,8 @@ export function dropRestoreApproval(a: Approval, step: string, by: string) {
 /** Applies the reviewed plan with the Global API Key. approvedBy: the super admin who approved an admin's request. */
 async function startApply(s: Session, me: Me, email: string, apiKey: string, approvedBy?: string): Promise<RestoreView> {
   const id = s.id;
-  claim(id, 'applying', me.email);
+  assertTakingJobs();
+  await claim(id, 'applying', me.email);
   s.state = 'applying';
   s.log.push(`Applying the reviewed plan (${s.plan!.at}) — ${approvedBy ? `requested by ${me.email}, approved by ${approvedBy}` : `approved by ${me.email}`}, with the Global API Key of ${email}`);
   s.appliedBy = me.email;
@@ -1166,11 +1348,14 @@ async function startApply(s: Session, me: Me, email: string, apiKey: string, app
       } else if (s.cancelRequested) {
         s.state = 'apply-failed';
         s.log.push(`[CANCELLED] Applying was cancelled by ${s.cancelled?.by ?? 'someone'}. Changes Terraform had already sent to Cloudflare stay; plan again to see what is left.`);
+        if (s.tfPlanned) keepState(s);
       } else {
         s.state = 'apply-failed';
         s.log.push(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+        if (s.tfPlanned) keepState(s);
       }
     } finally {
+      if (s.state === 'applied') s.keptState = null;
       release();
       s.expires = Date.now() + SESSION_TTL;
       await uncache(`path:/api/zone-explorer/${s.zone.id}/`);

@@ -8,7 +8,7 @@ import type { CredentialOption } from '@/lib/kinds';
 import { useMe } from '@/components/me';
 import type { RunMeta } from '@/lib/run-types';
 import type { BackupConfig } from '@/lib/config';
-import { Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonTable, Stat, StatusBadge, cx } from '@/components/ui';
+import { ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonTable, Stat, StatusBadge, cx } from '@/components/ui';
 import { RunTable } from '@/components/run-table';
 
 interface Preset { id: string; name: string; config: BackupConfig; updatedAt: string }
@@ -67,7 +67,7 @@ export default function Overview() {
         eyebrow="Overview"
         title="Backup control"
         description="Cloudflare configuration exported to Terraform and JSON, with offsite copies to R2 or S3."
-        actions={canRun && <Link href="/console/backup"><Button variant="primary" size="lg" icon={<Play className="size-4" />}>New backup</Button></Link>}
+        actions={canRun && <ButtonLink href="/console/backup" variant="primary" size="lg" icon={<Play className="size-4" />}>New backup</ButtonLink>}
       />
 
       {!loaded ? (
@@ -98,7 +98,7 @@ export default function Overview() {
                     <div className="mt-0.5 text-xs text-muted">{relTime(latest.startedAt)}{latest.summary.zonesTotal ? ` · ${latest.summary.zonesDone ?? 0}/${latest.summary.zonesTotal} zones` : ''}</div>
                   </div>
                 </div>
-                <Link href={`/console/runs/${latest.id}`}><Button icon={<ArrowRight className="size-4" />}>{latest.status === 'running' ? 'Watch live' : 'Open'}</Button></Link>
+                <ButtonLink href={`/console/runs/${latest.id}`} icon={<ArrowRight className="size-4" />}>{latest.status === 'running' ? 'Watch live' : 'Open'}</ButtonLink>
               </div>
             </Card>
           )}
@@ -111,7 +111,7 @@ export default function Overview() {
             {!loaded ? (
               <Loading label="Loading recent runs"><SkeletonTable rows={6} cols={6} className="!rounded-none !border-0" /></Loading>
             ) : runs.length === 0 ? (
-              <EmptyState icon={<DatabaseBackup className="size-5" />} title="No backups yet" description={canRun ? 'Configure a run — every flag of backup.js is a switch.' : 'Runs appear here once an operator starts a backup.'} action={canRun ? <Link href="/console/backup"><Button variant="primary">Configure a backup</Button></Link> : undefined} />
+              <EmptyState icon={<DatabaseBackup className="size-5" />} title="No backups yet" description={canRun ? 'Configure a run — every flag of backup.js is a switch.' : 'Runs appear here once an operator starts a backup.'} action={canRun ? <ButtonLink href="/console/backup" variant="primary">Configure a backup</ButtonLink> : undefined} />
             ) : (
               <RunTable runs={runs.slice(0, 6)} />
             )}
@@ -176,7 +176,7 @@ export default function Overview() {
                         {p.config.importMode ? ' · import' : ''}{p.config.r2.enabled ? ' · R2' : ''}{p.config.aws.enabled ? ' · S3' : ''}
                       </div>
                     </div>
-                    {canRun && <Link href={`/console/backup?preset=${p.id}`}><Button size="sm" icon={<Play className="size-3" />}>Open</Button></Link>}
+                    {canRun && <ButtonLink href={`/console/backup?preset=${p.id}`} size="sm" icon={<Play className="size-3" />}>Open</ButtonLink>}
                   </li>
                 ))}
               </ul>

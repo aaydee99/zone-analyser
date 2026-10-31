@@ -2,6 +2,7 @@ import 'server-only';
 import crypto from 'node:crypto';
 import { db, must } from './supabase';
 import { HttpError } from './http';
+import { assertPublicUrl, UnsafeUrlError } from './safe-url';
 import { openRelay, sealRelay } from './vault';
 import { CHECKS, SEVERITIES, isCheckId, type CheckId, type Severity } from './monitor-types';
 
@@ -87,12 +88,26 @@ export function checkHookUrl(raw: string, label: string, slackOnly = false): str
   try { u = new URL(v); } catch { throw new HttpError(400, `${label} must be a full https:// address`); }
   if (u.protocol !== 'https:') throw new HttpError(400, `${label} must start with https://`);
   if (u.username || u.password) throw new HttpError(400, `${label} must not contain a user name or password`);
-  const h = u.hostname.toLowerCase();
+  const h = u.hostname.toLowerCase().replace(/\.+$/, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || /^[\d.]+$/.test(h) || h.includes(':')) {
     throw new HttpError(400, `${label} must use a public host name, not an IP address or a local name`);
   }
   if (slackOnly && h !== 'hooks.slack.com') throw new HttpError(400, 'A Slack address starts with https://hooks.slack.com/');
   if (v.length > 2000) throw new HttpError(400, `${label} is too long`);
+  return v;
+}
+
+/**
+ * checkHookUrl, then where the name points: every address it resolves to must be public (a name
+ * like 10.0.0.5.nip.io passes the name checks). Checked again at every send (src/lib/notify.ts).
+ */
+export async function checkHookAddress(raw: string, label: string, slackOnly = false): Promise<string> {
+  const v = checkHookUrl(raw, label, slackOnly);
+  try {
+    await assertPublicUrl(v);
+  } catch (err) {
+    throw new HttpError(400, `${label} ${err instanceof UnsafeUrlError ? err.message : 'is not allowed'}`);
+  }
   return v;
 }
 
@@ -120,8 +135,8 @@ export async function saveMonitorConfig(p: MonitorConfigPatch): Promise<MonitorC
       if (!SEVERITIES.includes(p.minSeverity)) throw new HttpError(400, 'Unknown severity');
       m.minSeverity = p.minSeverity;
     }
-    if (p.slack !== undefined) m.slack = p.slack ? await sealRelay(Buffer.from(checkHookUrl(p.slack, 'The Slack address', true)), AAD('slack')) : null;
-    if (p.webhook !== undefined) m.webhook = p.webhook ? await sealRelay(Buffer.from(checkHookUrl(p.webhook, 'The webhook address')), AAD('webhook')) : null;
+    if (p.slack !== undefined) m.slack = p.slack ? await sealRelay(Buffer.from(await checkHookAddress(p.slack, 'The Slack address', true)), AAD('slack')) : null;
+    if (p.webhook !== undefined) m.webhook = p.webhook ? await sealRelay(Buffer.from(await checkHookAddress(p.webhook, 'The webhook address')), AAD('webhook')) : null;
   });
   return monitorConfigView();
 }

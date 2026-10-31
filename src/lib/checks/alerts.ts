@@ -1,9 +1,9 @@
 import 'server-only';
-import { cfList, cfOne } from '../cf-read';
+import { BudgetError, cfList, cfOne } from '../cf-read';
 import { listAlerts } from '../monitor-store';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
-import { daysSince, readStat, type CheckDef } from './common';
+import { Problems, daysSince, readStat, type CheckDef } from './common';
 
 // Cloudflare's own notifications, per account: the policies that are on, the alert types the account
 // could turn on but has not (from Cloudflare's catalog, so the list fits each account's plan), webhook
@@ -27,14 +27,16 @@ export const alerts: CheckDef = {
       const scope = { accountId: a.accountId, accountName: a.accountName || a.accountId };
       const policyRows: Row[] = [], missingRows: Row[] = [], hookRows: Row[] = [];
       const findings: NewFinding[] = [];
+      const p = new Problems();
       let policies: Policy[], catalog: Record<string, Available[]>, hooks: Webhook[];
       try {
         [policies, catalog, hooks] = await Promise.all([
           cfList<Policy>(a.token, `/accounts/${a.accountId}/alerting/v3/policies`, { perPage: 0, signal: ctx.signal }),
           cfOne<Record<string, Available[]>>(a.token, `/accounts/${a.accountId}/alerting/v3/available_alerts`, ctx.signal),
-          cfList<Webhook>(a.token, `/accounts/${a.accountId}/alerting/v3/destinations/webhooks`, { perPage: 0, signal: ctx.signal }).catch(() => [] as Webhook[]),
+          cfList<Webhook>(a.token, `/accounts/${a.accountId}/alerting/v3/destinations/webhooks`, { perPage: 0, signal: ctx.signal }).catch((err) => { p.skip('webhook destinations', err); return [] as Webhook[]; }),
         ]);
       } catch (err) {
+        if (err instanceof BudgetError || (err instanceof Error && err.name === 'AbortError')) throw err;
         throw new Error(`Notifications: ${err instanceof Error ? err.message : String(err)}`);
       }
       const on = new Set(policies.filter((x) => x.enabled).map((x) => x.alert_type ?? ''));
@@ -64,7 +66,7 @@ export const alerts: CheckDef = {
         }
       }
       return {
-        rows: { policies: policyRows, missing: missingRows, webhooks: hookRows }, findings, complete: true,
+        rows: { policies: policyRows, missing: missingRows, webhooks: hookRows }, findings, complete: p.complete, problems: p.list,
         counts: { policies: policyRows.length, recommendedOff: missing.length, failingHooks: failing },
       };
     },

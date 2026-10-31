@@ -7,6 +7,10 @@ import { tag } from './cache';
 // at most MONITOR_BUDGET of it (800 by default) and none at all while a backup or restore uses the
 // token, which then has it to itself; actions and analytics may use up to 1,150. Calls wait for room
 // instead of going over, and a 429 pauses the token until Cloudflare's Retry-After has passed.
+// Cloudflare counts a user's API tokens together: tokens the queue found to belong to the same user
+// (GET /user, see setLaneGroup) share one budget. A token whose user cannot be told (an
+// account-owned token, or one without "User Details Read") keeps a budget of its own — two such
+// tokens of one user can then together go over Cloudflare's limit, and its 429s pause them.
 // Tokens never leave this module except in the Authorization header.
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -26,12 +30,23 @@ const gp = globalThis as unknown as { __cfLanePaused?: { fn: (lane: string) => s
 const pause = (gp.__cfLanePaused ??= { fn: () => null });
 /** Says why monitoring must not use a lane right now (a backup or restore uses that token), or null. */
 export function setLanePause(fn: (lane: string) => string | null) { pause.fn = fn; }
-/** The lane (budget) a token spends from. */
+/** The lane a token is (one per token). */
 export const laneOf = (token: string) => tag(token);
 
 interface Bucket { calls: number[]; pausedUntil: number }
-const gb = globalThis as unknown as { __cfBudget?: Map<string, Bucket> };
+const gb = globalThis as unknown as { __cfBudget?: Map<string, Bucket>; __cfLaneGroups?: Map<string, string> };
 const buckets = (gb.__cfBudget ??= new Map<string, Bucket>());
+/** Lane → the budget it spends from (its user's, when known); a lane not listed has its own. */
+const groups = (gb.__cfLaneGroups ??= new Map<string, string>());
+/** The budget a lane spends from: its Cloudflare user's when known, else its own. */
+export const laneGroup = (lane: string) => groups.get(lane) ?? lane;
+/** Says which Cloudflare user a lane's token belongs to (an opaque id), or null when not known. */
+export function setLaneGroup(lane: string, user: string | null) {
+  if (user) groups.set(lane, `user:${tag(user)}`); else groups.delete(lane);
+}
+/** The lanes that spend from the same budget as `lane` (itself included). */
+const siblings = (key: string) => [key, ...[...groups].filter(([l, g]) => g === key && l !== key).map(([l]) => l)];
+const bucketOf = (key: string) => { const b = buckets.get(key) ?? { calls: [], pausedUntil: 0 }; buckets.set(key, b); return b; };
 
 export class BudgetError extends Error {
   constructor(why?: string) { super(why ? `${why} — checked again later` : 'Waited too long for Cloudflare’s rate limit — the rest is read on the next run'); }
@@ -44,16 +59,16 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
 
 /** Takes one call from the token's budget, waiting while it is spent or paused by a 429 (or, for monitoring, by a backup). */
 async function take(token: string, signal?: AbortSignal) {
-  const key = tag(token);
-  const b = buckets.get(key) ?? { calls: [], pausedUntil: 0 };
-  buckets.set(key, b);
+  const key = laneGroup(tag(token));
+  const b = bucketOf(key);
   const m = monitorScope.getStore();
   const limit = m ? MONITOR_BUDGET : TOTAL_BUDGET;
   const started = Date.now();
   for (;;) {
     const now = Date.now();
     b.calls = b.calls.filter((t) => t > now - WINDOW_MS);
-    const held = m ? pause.fn(key) : null;
+    // A backup using any token of the same user holds monitoring back on all of them.
+    const held = m ? siblings(key).map((l) => pause.fn(l)).find(Boolean) ?? null : null;
     const wait = held ? 5_000 : Math.max(b.pausedUntil - now, b.calls.length >= limit ? b.calls[b.calls.length - limit] + WINDOW_MS - now : 0);
     if (wait <= 0) { b.calls.push(now); if (m) m.calls++; return; }
     if (now - started + wait > MAX_WAIT_MS) throw new BudgetError(held ?? undefined);
@@ -61,9 +76,9 @@ async function take(token: string, signal?: AbortSignal) {
   }
 }
 
-/** A lane's use of the current 5-minute window. */
+/** A lane's use of the current 5-minute window (of its user's budget, shared with that user's other tokens). */
 export function laneUse(lane: string): { used: number; pausedUntil: number } {
-  const b = buckets.get(lane);
+  const b = buckets.get(laneGroup(lane));
   if (!b) return { used: 0, pausedUntil: 0 };
   const now = Date.now();
   return { used: b.calls.filter((t) => t > now - WINDOW_MS).length, pausedUntil: b.pausedUntil > now ? b.pausedUntil : 0 };
@@ -86,8 +101,7 @@ export async function cfCall<T = unknown>(token: string, method: 'GET' | 'POST' 
     });
     if (res.status === 429) {
       const after = Number(res.headers.get('retry-after')) || 60;
-      const b = buckets.get(tag(token));
-      if (b) b.pausedUntil = Date.now() + Math.min(after, 300) * 1000;
+      bucketOf(laneGroup(tag(token))).pausedUntil = Date.now() + Math.min(after, 300) * 1000;
     }
     const text = await res.text();
     try { return { status: res.status, body: JSON.parse(text) as CfEnvelope<T> }; } catch { return { status: res.status, body: null, text }; }
@@ -98,6 +112,13 @@ export async function cfCall<T = unknown>(token: string, method: 'GET' | 'POST' 
 }
 
 export const cfGet = <T = unknown>(token: string, path: string, signal?: AbortSignal) => cfCall<T>(token, 'GET', path, undefined, signal);
+
+/** The Cloudflare user a token belongs to (GET /user), or null: an account-owned token, one that may not read its user, or no answer. */
+export async function tokenUser(token: string): Promise<string | null> {
+  const r = await cfGet<{ id?: unknown }>(token, '/user');
+  const id = ok(r) ? r.body!.result?.id : null;
+  return typeof id === 'string' && id ? id : null;
+}
 
 /** Cloudflare's reason, in one line. */
 export function cfReason(r: { status: number; body: CfEnvelope | null }) {
@@ -136,7 +157,9 @@ export async function cfList<T>(token: string, path: string, opts: { perPage?: n
     if (cursor) q.set('cursor', cursor); else if (page > 1) q.set('page', String(page));
     const r = await cfGet<T[]>(token, `${path}${sep}${q}`, signal);
     if (!ok(r)) {
-      if (out.length) break; // a later page failed: keep what was read
+      // A later page failed: keep what was read — except for a monitoring check, which must not
+      // take part of a list for all of it (it would close the findings of what it did not read).
+      if (out.length && !monitorScope.getStore()) break;
       throw new ReadError(r.status, refused(r) ? `The token cannot read this (${cfReason(r)})` : cfReason(r));
     }
     const rows = Array.isArray(r.body!.result) ? r.body!.result : [];

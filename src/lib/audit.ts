@@ -21,7 +21,8 @@ export type { AuditEntry } from './audit-changes';
 export async function listAudit(opts: { limit?: number; before?: number; action?: string } = {}): Promise<AuditEntry[]> {
   let q = db().from('audit_log').select('id, at, actor_email, action, target, details').order('id', { ascending: false }).limit(Math.min(opts.limit ?? 100, 500));
   if (opts.before) q = q.lt('id', opts.before);
-  if (opts.action) q = q.like('action', `${opts.action}%`);
+  // A prefix match. Action names use _, a LIKE wildcard: escape it (and \ and %) so it is literal.
+  if (opts.action) q = q.like('action', `${opts.action.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
   const { data, error } = await q;
   if (error) throw new Error(`Audit query failed: ${error.message}`);
   return (data ?? []).map(toEntry);

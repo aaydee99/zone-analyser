@@ -2,7 +2,7 @@ import 'server-only';
 import { cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
-import { Problems, daysSince, notAvailable, readStat, type CheckDef } from './common';
+import { Problems, daysSince, readStat, type CheckDef } from './common';
 
 // What runs in your visitors' browsers and which APIs you expose: Page Shield's script and connection
 // inventory (all plans; scores need Cloudflare's client-side security add-on) and API Shield's saved
@@ -26,7 +26,7 @@ export const appsec: CheckDef = {
       const findings: NewFinding[] = [];
       const list = async <T,>(path: string, what: string): Promise<T[]> => {
         try { return await cfList<T>(z.token, `/zones/${z.id}${path}`, { perPage: 100, max: 2_000, signal: ctx.signal }); } catch (err) {
-          if (!notAvailable(err)) p.add(what, err);
+          p.skip(what, err);
           return [];
         }
       };

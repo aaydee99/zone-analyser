@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { clientKey, HttpError, publicRoute, readBody, setSessionCookie } from '@/lib/http';
-import { captchaSiteKey, requireCaptcha } from '@/lib/captcha';
+import { captchaSiteKey, captchaWarning, requireCaptcha } from '@/lib/captcha';
 import { createFirstSuperAdmin, login, needsSetup, SchemaError } from '@/lib/auth';
 import { isConfigured, missingEnv, publicSignupEnabled } from '@/lib/supabase';
 import { checkSetupToken, clearSetupToken, setupToken } from '@/lib/setup-token';
@@ -13,18 +13,21 @@ export const dynamic = 'force-dynamic';
  */
 export const GET = publicRoute(async () => {
   const captcha = captchaSiteKey();
-  if (!isConfigured()) return { configured: false, missing: missingEnv(), needsSetup: true, schemaError: null, captchaSiteKey: captcha };
+  /** Hosting settings worth fixing (shown on the setup page; e.g. CAPTCHA off on Vercel). */
+  const warnings = [captchaWarning()].filter((w): w is string => !!w);
+  if (!isConfigured()) return { configured: false, missing: missingEnv(), needsSetup: true, schemaError: null, captchaSiteKey: captcha, warnings };
   let pending: boolean;
   try {
     pending = await needsSetup();
   } catch (err) {
     const msg = err instanceof SchemaError ? err.message : 'Cannot reach Supabase — check SUPABASE_URL and the keys';
     if (!(err instanceof SchemaError)) console.error('[setup] Supabase check failed:', err);
-    return { configured: true, missing: [], needsSetup: true, schemaError: msg, captchaSiteKey: captcha };
+    return { configured: true, missing: [], needsSetup: true, schemaError: msg, captchaSiteKey: captcha, warnings };
   }
+  // Set up: nothing more for anonymous visitors (warnings go to the server log).
   if (!pending) return { configured: true, missing: [], needsSetup: false, schemaError: null, captchaSiteKey: captcha };
   setupToken(); // printed to the server console the first time
-  return { configured: true, missing: [], needsSetup: true, schemaError: null, signupEnabled: await publicSignupEnabled(), captchaSiteKey: captcha };
+  return { configured: true, missing: [], needsSetup: true, schemaError: null, signupEnabled: await publicSignupEnabled(), captchaSiteKey: captcha, warnings };
 });
 
 /** Creates the first super admin and signs them in. Needs the one-time setup token; refused once any user exists. */

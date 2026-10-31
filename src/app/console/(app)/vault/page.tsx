@@ -102,7 +102,7 @@ function BucketFinder({ kind, id, fields, defaultBucket, value, onChange }: {
             );
           })}
         </div>
-      ) : <p className="text-xs text-muted">These keys can't see any buckets.</p>)}
+      ) : <p className="text-xs text-muted">These keys can’t see any buckets.</p>)}
     </div>
   );
 }

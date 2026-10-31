@@ -70,6 +70,7 @@ export function saveRecord(r: Omit<RestoreRecord, 'updatedAt'>) {
     const rec = { ...r, log: r.log.slice(-LOG_LINES), updatedAt: new Date().toISOString() };
     fs.writeFileSync(tmp, JSON.stringify(rec), { mode: 0o600 });
     fs.renameSync(tmp, file(r.id));
+    remember(rec, fs.statSync(file(r.id)));
     mirrorFile(`restore-history/${r.id}.json`, rec);
   } catch (err) {
     console.error('[restore-history] could not save the record:', err instanceof Error ? err.message : err);
@@ -92,15 +93,63 @@ export function outcomeOf(r: Pick<RestoreRecord, 'state' | 'verified' | 'cancell
   return live ? 'open' : 'not-applied';
 }
 
-const summarize = (r: RestoreRecord, live: boolean): RestoreSummary => {
-  const { log: _l, steps: _s, plan, ...rest } = r;
-  return { ...rest, outcome: outcomeOf(r, live), planned: plan ? plan.changes.filter((c) => !c.actions.includes('no-op')).length : 0 };
+/** What the list needs from a record: everything but its log, steps and plan. */
+interface Brief { base: Omit<RestoreRecord, 'log' | 'steps' | 'plan'>; planned: number; hasPlan: boolean }
+
+const brief = (r: RestoreRecord): Brief => {
+  const { log: _l, steps: _s, plan, ...base } = r;
+  return { base, planned: plan ? plan.changes.filter((c) => !c.actions.includes('no-op')).length : 0, hasPlan: !!plan };
 };
+const fromBrief = (b: Brief, live: boolean): RestoreSummary => ({ ...b.base, outcome: outcomeOf(b.base, live), planned: b.planned });
+const summarize = (r: RestoreRecord, live: boolean): RestoreSummary => fromBrief(brief(r), live);
+
+// The history page polls the list. Each record (with a log of up to 5,000 lines) is parsed again
+// only when its file changed (size or mtime); otherwise its brief comes from memory. Legacy rows
+// (audit log, before records existed) never change, so they are read once every few minutes.
+interface Cached { mtimeMs: number; size: number; brief: Brief }
+const LEGACY_TTL_MS = 5 * 60_000;
+interface HistoryCache { files: Map<string, Cached>; legacy?: { at: number; rows: RestoreRecord[] } }
+const gc = globalThis as unknown as { __restoreHistory?: HistoryCache };
+const cache: HistoryCache = (gc.__restoreHistory ??= { files: new Map<string, Cached>() });
+
+function remember(r: RestoreRecord, st: fs.Stats) {
+  cache.files.set(r.id, { mtimeMs: st.mtimeMs, size: st.size, brief: brief(r) });
+}
+
+/** Briefs of every record on disk, reading only new or changed files. */
+function recordBriefs(): Brief[] {
+  let names: string[] = [];
+  try { names = fs.readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.json')); } catch { /* none yet */ }
+  const seen = new Set<string>();
+  const out: Brief[] = [];
+  for (const n of names) {
+    const id = n.slice(0, -5);
+    if (!RESTORE_ID.test(id)) continue;
+    seen.add(id);
+    let st: fs.Stats;
+    try { st = fs.statSync(file(id)); } catch { continue; }
+    const hit = cache.files.get(id);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) { out.push(hit.brief); continue; }
+    const r = readRecord(id);
+    if (!r) { cache.files.delete(id); continue; }
+    remember(r, st);
+    out.push(cache.files.get(id)!.brief);
+  }
+  for (const id of cache.files.keys()) if (!seen.has(id)) cache.files.delete(id);
+  return out;
+}
 
 interface AuditRow { id: number; at: string; actor_email: string | null; action: string; target: string | null; details: Record<string, unknown> | null }
 
-/** Applied or failed restores from before restore records existed. */
+/** Applied or failed restores from before restore records existed (cached: they never change). */
 async function legacyRestores(): Promise<RestoreRecord[]> {
+  if (cache.legacy && Date.now() - cache.legacy.at < LEGACY_TTL_MS) return cache.legacy.rows;
+  const rows = await readLegacy();
+  cache.legacy = { at: Date.now(), rows };
+  return rows;
+}
+
+async function readLegacy(): Promise<RestoreRecord[]> {
   const rows = must(await db().from('audit_log').select('id, at, actor_email, action, target, details').in('action', ['restore.applied', 'restore.apply_failed']).order('at', { ascending: false }).limit(200), 'Reading restore history') as AuditRow[];
   return rows.filter((r) => !r.details?.restoreId).map((r) => {
     const resources = Array.isArray(r.details?.resources) ? (r.details.resources as unknown[]).map(String) : [];
@@ -117,14 +166,12 @@ async function legacyRestores(): Promise<RestoreRecord[]> {
 
 /** Every restore, newest first. `live`: ids of restore sessions that still exist. */
 export async function restoreHistory(live: Set<string>): Promise<RestoreHistory> {
-  let names: string[] = [];
-  try { names = fs.readdirSync(HISTORY_DIR).filter((n) => n.endsWith('.json')); } catch { /* none yet */ }
-  const records = names.map((n) => readRecord(n.slice(0, -5))).filter((r): r is RestoreRecord => !!r);
-  const all = [...records.map((r) => summarize(r, live.has(r.id))), ...(await legacyRestores()).map((r) => summarize(r, false))]
+  const briefs = recordBriefs();
+  const all = [...briefs.map((b) => fromBrief(b, live.has(b.base.id))), ...(await legacyRestores()).map((r) => summarize(r, false))]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const since = Date.now() - 30 * 86_400_000;
-  const recent = records.filter((r) => Date.parse(r.createdAt) >= since);
-  return { restores: all, prepared30: recent.length, planned30: recent.filter((r) => r.plan).length };
+  const recent = briefs.filter((b) => Date.parse(b.base.createdAt) >= since);
+  return { restores: all, prepared30: recent.length, planned30: recent.filter((b) => b.hasPlan).length };
 }
 
 /** One restore with its steps, plan and log. */

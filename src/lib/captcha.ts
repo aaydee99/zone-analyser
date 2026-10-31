@@ -12,6 +12,15 @@ export function captchaSiteKey(): string | null {
   return process.env.TURNSTILE_SITE_KEY && process.env.TURNSTILE_SECRET_KEY ? process.env.TURNSTILE_SITE_KEY : null;
 }
 
+/**
+ * A setup warning when the sign-in form is on the open internet (Vercel) without CAPTCHA, else null.
+ * Not enforced: turning Turnstile on is a hosting decision (README, CAPTCHA).
+ */
+export function captchaWarning(): string | null {
+  if (!process.env.VERCEL || captchaSiteKey()) return null;
+  return 'CAPTCHA is off on a public deployment: set TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY (Cloudflare Turnstile) so sign-in and setup cannot be guessed at automatically';
+}
+
 /** Refuses the request unless Cloudflare confirms the Turnstile token (no-op while CAPTCHA is off). */
 export async function requireCaptcha(token: unknown, remoteIp?: string) {
   const secret = process.env.TURNSTILE_SECRET_KEY;

@@ -12,6 +12,7 @@ import { ROLE_META, type Permission } from '@/lib/rbac';
 import { cx } from './ui';
 import { MeProvider, type MeState } from './me';
 import { WorkerStarting } from './worker-starting';
+import { useFocusTrap } from './use-focus-trap';
 
 interface NavItem { href: string; label: string; icon: typeof LayoutGrid; perm?: Permission }
 
@@ -106,20 +107,36 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   // Faster while a job runs, so its banner (and the pages' start buttons) follow it closely.
   // Refresh often while something changes: a job runs, or the worker is starting.
   const jobRunning = !!(me.activeRunId || me.activeRestore || (me.worker && !me.worker.online && me.worker.startingSince));
+  // The poll pauses while the tab is hidden (nobody sees the banner) and refreshes once when it is shown again.
   useEffect(() => {
-    const poll = setInterval(() => refresh(false), jobRunning ? 4_000 : 20_000);
+    let poll: ReturnType<typeof setInterval> | undefined;
+    const start = () => { if (!poll) poll = setInterval(() => refresh(false), jobRunning ? 4_000 : 20_000); };
+    const stop = () => { if (poll) { clearInterval(poll); poll = undefined; } };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') stop();
+      else { void refresh(false); setNow(Date.now()); start(); }
+    };
+    if (document.visibilityState !== 'hidden') start();
     const tick = setInterval(() => setNow(Date.now()), 1000);
     const onActivity = () => {
       if (Date.now() - lastTouch.current > 45_000) { lastTouch.current = Date.now(); refresh(true); }
     };
+    document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pointerdown', onActivity);
     window.addEventListener('keydown', onActivity);
-    return () => { clearInterval(poll); clearInterval(tick); window.removeEventListener('pointerdown', onActivity); window.removeEventListener('keydown', onActivity); };
+    return () => {
+      stop(); clearInterval(tick);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pointerdown', onActivity); window.removeEventListener('keydown', onActivity);
+    };
   }, [refresh, jobRunning]);
 
   // Rendered without the live state (it was slow): ask for it now.
   useEffect(() => { if (initial.stale) void refresh(false); }, [initial.stale, refresh]);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
+  const mobileMenu = useRef<HTMLElement>(null);
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
+  useFocusTrap(mobileMenu, mobileOpen, closeMobile);
 
   const signOut = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -222,14 +239,14 @@ export function Shell({ initial, children }: { initial: MeState; children: React
 
         {mobileOpen && (
           <div className="fixed inset-0 z-40 bg-canvas/70 backdrop-blur-sm lg:hidden" onClick={() => setMobileOpen(false)}>
-            <aside className="h-full w-[260px] border-r border-line bg-surface" onClick={(e) => e.stopPropagation()}>{sidebar}</aside>
+            <aside ref={mobileMenu} id="mobile-menu" tabIndex={-1} role="dialog" aria-modal aria-label="Menu" className="h-full w-[260px] border-r border-line bg-surface outline-none" onClick={(e) => e.stopPropagation()}>{sidebar}</aside>
           </div>
         )}
 
         <div className="min-w-0 flex-1">
           <header className="glass sticky top-0 z-30 flex items-center justify-between border-b border-line px-4 py-3 lg:hidden">
             <Logo />
-            <button onClick={() => setMobileOpen((v) => !v)} className="rounded-md p-2.5 text-ink-2 transition-colors hover:bg-raised" aria-label="Menu" aria-expanded={mobileOpen}>
+            <button onClick={() => setMobileOpen((v) => !v)} className="rounded-md p-2.5 text-ink-2 transition-colors hover:bg-raised" aria-label="Menu" aria-expanded={mobileOpen} aria-controls="mobile-menu">
               {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
             </button>
           </header>

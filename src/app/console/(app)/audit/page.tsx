@@ -1,10 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { FileClock, Lock, ScrollText } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
-import { Badge, Button, Card, EmptyState, Loading, PageHeader, SkeletonTable, cx } from '@/components/ui';
+import { Badge, Button, ButtonLink, Card, EmptyState, Loading, PageHeader, SkeletonTable, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
@@ -19,6 +18,13 @@ const FILTERS = [
   { value: 'user.', label: 'Users' },
   { value: 'preset.', label: 'Presets' },
   { value: 'settings.', label: 'Settings' },
+  { value: 'approval.', label: 'Approvals' },
+  { value: 'restore.', label: 'Restore' },
+  // Prefixes: 'cloudflare' also takes cloudflare_audit.* and cloudflare_zone.* (reads, exports, reverts);
+  // 'cloudflare.action' is a cache purge or a Worker / Pages rollback, done or refused.
+  { value: 'cloudflare', label: 'Cloudflare' },
+  { value: 'cloudflare.action', label: 'Cache purge & rollbacks' },
+  { value: 'monitoring.', label: 'Monitoring' },
 ];
 
 const tone = (action: string): 'bad' | 'warn' | 'signal' | 'neutral' =>
@@ -52,8 +58,8 @@ export default function AuditPage() {
   return (
     <div className="rise">
       <PageHeader eyebrow="Access" title="Audit log" description="Every sign-in, vault access, credential change, run and permission change — stored in Supabase."
-        actions={<Link href="/console/changes"><Button icon={<FileClock className="size-4" />}>Recent changes</Button></Link>} />
-      <div className="mb-4 flex flex-wrap gap-1.5">
+        actions={<ButtonLink href="/console/changes" icon={<FileClock className="size-4" />}>Recent changes</ButtonLink>} />
+      <div className="mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Show actions">
         {FILTERS.map((f) => (
           <button key={f.value} onClick={() => setFilter(f.value)} aria-pressed={filter === f.value}
             className={cx('rounded-lg border px-3 py-1.5 text-[13px] transition-colors', filter === f.value ? 'border-line-strong bg-raised text-ink' : 'border-transparent text-muted hover:text-ink-2')}>

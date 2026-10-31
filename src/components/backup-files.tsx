@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, Download, FileCode2, FileJson, FileText, Search } from 'lucide-react';
 import { api, copyText } from '@/lib/client';
-import { Badge, Button, Card, Loading, Modal, Skeleton, cx } from './ui';
+import { Badge, Button, ButtonLink, Card, Loading, Modal, Skeleton, cx } from './ui';
 import { useToast } from './toast';
 
 interface BackupFile { path: string; size: number }
@@ -42,7 +42,7 @@ export function BackupFiles({ runId }: { runId: string }) {
           <h2 className="text-[15px] font-semibold">Backup files</h2>
           {files ? <p className="mt-0.5 text-xs text-muted">{`${files.length} files · ${fmtSize(total)}`}</p> : <Skeleton className="mt-1.5 h-3 w-28" />}
         </div>
-        <a href={`/api/runs/${runId}/download`}><Button variant="primary" icon={<Download className="size-4" />} disabled={!files?.length}>Download .zip</Button></a>
+        <ButtonLink href={`/api/runs/${runId}/download`} download variant="primary" icon={<Download className="size-4" />} disabled={!files?.length}>Download .zip</ButtonLink>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-3">
         <div className="relative min-w-[200px] flex-1">

@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql) and [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql) and [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), in that order.
+2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql) and [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql). When you update the console, run any new ones the same way.
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -25,7 +25,92 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
    ```
 6. **First super admin**: open the console. The setup page asks for a **setup token**, which the server prints in its terminal and saves to `data/setup-token.txt`. That proves you're at the server, not a web page. Everyone else is added under **Users & roles**.
 
-`terraform` and `cf-terraforming` are downloaded automatically the first time a backup needs them. terraform's checksums must carry a valid signature from HashiCorp's release key, pinned by fingerprint in [`src/lib/tools.ts`](src/lib/tools.ts). cf-terraforming publishes no signature, so it is checked against its checksums only. Only Node.js ≥ 18 is required.
+`terraform` and `cf-terraforming` are downloaded automatically the first time a backup needs them. terraform's checksums must carry a valid signature from HashiCorp's release key, pinned by fingerprint in [`src/lib/tools.ts`](src/lib/tools.ts). cf-terraforming publishes no signature, so it is checked against its checksums only. Node.js **20.9 or newer** is required (Next.js 16 needs it; CI uses Node 22). The full list of environment variables is under [All environment variables](#all-environment-variables).
+
+### All environment variables
+
+Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` read. Only names, defaults and meanings are listed here; never commit real values. Server variables are never sent to the browser, except those starting with `NEXT_PUBLIC_`, which are built into the pages.
+
+<!-- BEGIN env-table: one row per variable. Append new console variables above the END marker. -->
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUPABASE_URL` | — (required) | Supabase project URL. |
+| `SUPABASE_ANON_KEY` | — (required) | Supabase anon / publishable key; used only to check sign-in passwords. |
+| `SUPABASE_SERVICE_ROLE_KEY` | — (required) | Supabase service-role key. Server only. |
+| `REDIS_URL` | unset (in-memory cache) | Redis for the shared cache of Cloudflare reads. See [Cache](#cache). |
+| `REDIS_PREFIX` | `backup-console` | Prefix of every Redis key. |
+| `CONSOLE_ROLE` | `all` (`web` on Vercel) | `all`: this server does everything. `web`: UI and sign-in only; jobs go to the worker. `worker`: set by `npm run worker`. |
+| `CONSOLE_ALLOWED_HOSTS` | any host | Comma-separated host names the console answers to (loopback always works); `*` allows any. |
+| `CONSOLE_ORIGIN_SECRET` | unset (off) | Shared secret a Cloudflare Transform Rule sends; requests without it get 403. `new,old` while rotating. See CLOUDFLARE.md. |
+| `CONSOLE_ORIGIN_HEADER` | `x-console-origin-auth` | Header that carries `CONSOLE_ORIGIN_SECRET`. |
+| `CONSOLE_CLIENT_IP_HEADER` | last `X-Forwarded-For` hop | Header with the visitor's real address, for rate limits (`cf-connecting-ip` behind Cloudflare). |
+| `CONSOLE_PUBLIC_URL` | unset | The console's public address: links in monitoring notifications, the Cloudflare alerts webhook, robots.txt and the sitemap (without it, the request's host), and absolute link-preview image URLs (read at build time). |
+| `CONSOLE_DATA_DIR` | `./data` (a temporary folder on Vercel) | Where managed tools, the plugin cache, run folders and file records live. |
+| `CONSOLE_STATE_MIRROR` | on (workers only) | `0` stops a worker copying file records (approvals, restore history) to Supabase `state_files`. |
+| `CONSOLE_RELAY_TIMEOUT_MS` | `280000` | How long an API call on the web side waits for the worker. Behind Cloudflare keep it under 100 s (`90000`). |
+| `CONSOLE_RELAY_CHUNK` | `524288` (512 KB) | Worker answers larger than this come back in chunks of this size. |
+| `CONSOLE_WAKE_WAIT_MS` | `45000` | How long a request waits for a worker that is being started before it answers "starting". |
+| `CONSOLE_VERSION` | unset | Version label for this deployment, used when `VERCEL_GIT_COMMIT_SHA` / `GITHUB_SHA` are not set. |
+| `CONSOLE_WORKER_ID` | generated, kept in the data folder | Fixed worker id, for containers whose disk is fresh on every start. |
+| `CONSOLE_WORKER_IDLE_MINUTES` | `0` (never) | The worker stops after this many idle minutes (the GitHub Actions workflow sets it). |
+| `CONSOLE_WORKER_MAX_MINUTES` | `0` (never) | The worker stops after running this long, unless a job is running. |
+| `CONSOLE_LISTEN_HOST` | `127.0.0.1` | Address `npm run worker` binds the server to (`0.0.0.0` for container platforms that probe the port). |
+| `PORT` | `4400` | Port of the server `npm run worker` starts. |
+| `VAULT_SERVER_KEY` | unset (key kept in Supabase) | Override for the vault server key. Set it on both sides or on neither. |
+| `VAULT_SERVER_KEY_FILE` | — | No longer used; Settings › Environment warns while it is set. |
+| `WORKER_GITHUB_TOKEN` | unset | Fine-grained GitHub token (Actions: Read and write) the web side uses to start the worker workflow. |
+| `WORKER_GITHUB_REPO` | unset | `owner/name` of the repository with the worker workflow. |
+| `WORKER_GITHUB_REF` | `main` | Branch the worker workflow runs on. |
+| `WORKER_GITHUB_WORKFLOW` | `worker.yml` | Worker workflow file name. |
+| `WORKER_GITHUB_API` | `https://api.github.com` | GitHub API base address (GitHub Enterprise). |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | unset (off) | Cloudflare Turnstile CAPTCHA on sign-in and setup; on only when both are set. |
+| `RATE_LIMIT_SCALE` | `1` | Multiplies the general per-user rate limits (automated tests raise it). |
+| `TRAFFIC_GQL_BUDGET` | `240` | Traffic analytics: GraphQL queries per window per Cloudflare token. |
+| `TRAFFIC_GQL_WINDOW_MS` | `300000` | Length of that window. |
+| `TRAFFIC_GQL_COOL_MS` | `300000` | How long a token waits once Cloudflare says its GraphQL budget is spent. |
+| `TRAFFIC_DETAIL_ABANDON_MS` | `90000` | A traffic read nobody has polled for this long is stopped. |
+| `MONITOR_BUDGET` | `800` (at least 20) | Monitoring calls per token per 5 minutes. |
+| `MONITOR_PARALLEL` | `24` | Monitoring units running at once, over all tokens. |
+| `MONITOR_TICK_MS` | `5000` | How often the monitoring queue looks for due units. |
+| `MONITOR_NOTIFY_SECONDS` | `300` | Longest gap between notification batches while units run. |
+| `CLOUDFLARE_BASE_URL` | `https://api.cloudflare.com/client/v4/` | Upstream of the read-only Cloudflare proxy that restore plans use (tests point it elsewhere). |
+| `NEXT_PUBLIC_SALES_EMAIL` | `sales@example.com` (placeholder) | Where the landing page's "Contact sales" links go. Built into the page: rebuild after changing it. |
+| `VERCEL`, `VERCEL_GIT_COMMIT_SHA` | set by Vercel | Detects Vercel (role `web`, temporary data folder) and the deployed commit. |
+| `GITHUB_SHA` | set by GitHub Actions | The worker's version label. |
+| `NODE_ENV`, `NEXT_RUNTIME` | set by Next.js | Standard Next.js variables. |
+
+| `APPROVAL_TTL_MINUTES` | `30` | Minutes a pending approval stays valid before it expires. It is checked again when someone approves it and when it runs. |
+| `CONSOLE_WORKER_ACCEPT_MINUTES` | none (`295` in worker.yml) | Minutes after the worker job started during which new backups and applies are accepted. After that the worker finishes what runs and hands over, well before GitHub's 6-hour limit. |
+| `CONSOLE_WORKER_JOB_STARTED_AT` | process start | When the worker job started (ms). worker.yml and `scripts/worker.mjs` set it; you don't. |
+| `RELAY_SIGNING_KEY` | derived from the vault server key | Optional key (at least 32 characters) that signs relayed calls. Set the same value on Vercel and the worker (GitHub secret of that name). |
+| `RATE_LIMIT_STORE` | Redis when `REDIS_URL` is set; Supabase on Vercel/web role; else memory | Forces where rate-limit and sign-in counters are kept: `redis`, `supabase` or `memory`. Shared stores need migration 0014. |
+
+<!-- END env-table -->
+
+`backup.js` reads these (the console sets the credential ones from the vault for each run; run by hand, it also loads a `.env` next to itself):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CF_API_TOKEN`, `CF_ACCOUNT_ID` | empty | Cloudflare API token and account id. |
+| `ZONE_STATUS_FILTER` | `all` | Only zones with this status. |
+| `BACKUP_REQUIRE_UPLOAD` | on under GitHub Actions, else off | `1` refuses to start without an R2 or S3 destination (on the worker the local copy disappears when the job ends); `0` never requires one. |
+| `ZONE_STATUS_EXCLUDE` | `moved` | Space-separated statuses to skip. |
+| `ZONE_NAME_FILTER` | `*` | Shell glob on the zone name. |
+| `ZONE_IDS` | empty (every zone) | Space- or comma-separated zone ids. |
+| `BACKUP_ACCOUNT` | `auto` | Account-level resources: `auto`, `true` or `false`. |
+| `BACKUP_MODE` | `generate` | `generate`, or `import` to also write `imports.tf`. |
+| `OUTPUT_DIR` | `$HOME/cf_backups` | Where backups are written. |
+| `AUDIT_LOG_HOURS` | `72` | Hours of Cloudflare audit log saved with a backup. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_PREFIX` | empty | R2 upload credentials, endpoint and key prefix. |
+| `R2_BUCKET_NAME` | `terraform-backup` | R2 bucket. |
+| `R2_SKIP_UPLOAD` | `true` | `false` uploads to R2. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | empty | S3 upload credentials. |
+| `AWS_S3_BUCKET` | a name built into `backup.js` | S3 bucket. |
+| `AWS_REGION` | empty (looked up) | S3 region. |
+| `AWS_SKIP_UPLOAD` | `true` | `false` uploads to S3. |
+| `TF_PLUGIN_CACHE_DIR` | the console's plugin cache | Terraform provider cache. |
+| `HOME`, `PATH` | from the system | Used to find tools and the default output folder. |
 
 ## Vercel + worker
 
@@ -51,7 +136,7 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
 
 ### Deploy to Vercel
 
-1. Apply the migrations above, including `0004_worker.sql`.
+1. Apply all the migrations above (`0001` to `0014`).
 2. In the Vercel project, set `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. `CONSOLE_ROLE=web` is the default on Vercel.
 3. Deploy. [`vercel.json`](vercel.json) gives API routes up to 300 s, so a slow call such as a full zone read can wait for the worker.
 
@@ -63,14 +148,16 @@ How it runs:
 
 - **Starts when needed**: when someone opens the console and no worker is running, Vercel asks GitHub to start it. It does the same when a page needs the worker.
 - **Startup**: a runner takes about 2–3 minutes to come up. It installs and builds the console, then downloads Terraform and cf-terraforming (cached between runs). Meanwhile, every page shows **Starting the worker…**.
-- **Stops when idle**: it stops itself after **20 idle minutes**. An open console page counts as activity, and it never stops during a backup, a restore or an open restore session. It also stops before GitHub's 6-hour job limit, unless a job is still running.
+- **Stops when idle**: it stops itself after **20 idle minutes**. Using the console counts as activity; an open tab's background status polls don't, and they don't start a stopped worker again either (the next click or page load does). It never stops during a backup, a restore or an open restore session, or while monitoring units run.
+- **Hands over before GitHub's 6-hour limit**: after `CONSOLE_WORKER_ACCEPT_MINUTES` (295) it refuses new backups and applies with "try again in a minute", finishes what runs, saves pending writes and exits. A new run never cancels a running one (`cancel-in-progress: false`), and the console doesn't start a second run while one is queued or running. A worker that stops without retiring counts as offline after 3 minutes without a heartbeat.
+- **Several consoles, one Cloudflare account**: backups and restores take a lock row in Supabase (`job_locks`, migration 0013) per Cloudflare account, so a laptop console and the worker can't work on the same account at once. Approvals are carried out once (`approval_states`) and expire after `APPROVAL_TTL_MINUTES`.
 - **One at a time**: one worker runs at a time.
 - **What lasts between runs**: approval requests and restore history are kept in Supabase. The vault unlock and run folders behind **Download** last for one worker session; backups uploaded to R2 or S3 stay there.
 - **Token IP restrictions**: GitHub's runners have a different IP on every run, so the console's Cloudflare API tokens must not be restricted to client IPs.
 
 Set up:
 
-1. **Apply the migrations.** Include `0004_worker.sql`, `0005_worker_state.sql` and `0006_worker_wakeups.sql`.
+1. **Apply the migrations.** All of them, `0001` to `0014` (see [Set up](#set-up)).
 2. **Add repository secrets.** In GitHub › the repository › **Settings › Secrets and variables › Actions**, add `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, with the same values as on Vercel. Optionally add `REDIS_URL`.
 3. **Create a token Vercel can use to start the workflow.** In GitHub › your avatar › **Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token**:
    - **Repository access:** only this repository.
@@ -87,7 +174,7 @@ Set up:
 
 Use this to restrict Cloudflare tokens to one fixed IP. Put the same three Supabase variables in `.env.local` there.
 
-- **With Node.js 18.18 or newer** (Windows, macOS or Linux): copy the project, then run `npm run worker`. It installs the dependencies, builds the console if the source changed, starts it on `127.0.0.1:4400`, and restarts it if it stops. On first start it downloads Terraform and cf-terraforming, checksum-verified.
+- **With Node.js 20.9 or newer** (Windows, macOS or Linux): copy the project, then run `npm run worker`. It installs the dependencies, builds the console if the source changed, starts it on `127.0.0.1:4400`, and restarts it if it stops. On first start it downloads Terraform and cf-terraforming, checksum-verified.
 - **With Docker** (any machine): `docker compose up -d --build`. The tools and backups are kept in the `worker-data` volume.
 - **To keep it running after a reboot**: Docker's `restart: unless-stopped` does this. Without Docker, start `npm run worker` as a service (Task Scheduler or NSSM on Windows, systemd on Linux, launchd on macOS).
 
@@ -111,6 +198,11 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | **Approve or reject** admin restore applies | | | | ✓ |
 | Manage operators and viewers | | | ✓ | ✓ |
 | Manage admins and super admins | | | | ✓ |
+| **Monitoring**: see findings and results (Tokens & members: admins and super admins only) | ✓ | ✓ | ✓ | ✓ |
+| **Monitoring**: run checks now, dismiss findings, accept drift, set up notifications | | | ✓ | ✓ |
+| Connect Cloudflare's own alerts (Monitoring › Cloudflare alerts) | | | | ✓ |
+| **Cache purge**, **roll back** a Worker or Pages deployment | | | ✓ (needs a super admin's approval) | ✓ |
+| **Approve or reject** admins' cache purges and rollbacks | | | | ✓ |
 | **Revert a change** from Cloudflare activity | | | | ✓ + Global API Key |
 | Choose upload on/off and the bucket for a run, from the buckets approved on the credential | | ✓ | ✓ | ✓ |
 | **Credential vault** (view, add, edit, reveal, test, import): also decides **which buckets** uploads may go to, and the prefix, region and R2 lock rules | | | | ✓ + vault password |
@@ -401,7 +493,7 @@ Super admins see **Revert** on each change in Cloudflare activity. Reverting goe
 - **Cloudflare's own alerts:** a super admin connects an account on **Monitoring › Cloudflare alerts**. That creates a webhook destination in Cloudflare (the stored token needs **Notifications Edit** for this one step) pointing at `/api/hooks/cloudflare`, with a secret only the console knows. Then choose in Cloudflare › Notifications which alerts go to it. The console must be reachable from the internet at a host in `CONSOLE_ALLOWED_HOSTS`.
 - **Drift:** after reviewing changes, accept them as the new baseline (one zone or all). To undo a change instead, restore the zone from a backup. 0011 moves baselines taken before it into one row per zone (`monitor_snapshots`).
 
-**Run the worker on a schedule** (GitHub Actions): scheduled checks run only while the worker is up, so add a schedule to `.github/workflows/worker.yml` that starts it. The worker stays up while units are running or due, and stops by itself when it has been idle for `CONSOLE_WORKER_IDLE_MINUTES` (and before `CONSOLE_WORKER_MAX_MINUTES`). How often to start it is a trade-off between freshness and GitHub Actions minutes (free on public repositories; private ones have a monthly allowance that depends on the plan):
+**Run the worker on a schedule** (GitHub Actions): scheduled checks run only while the worker is up, so add a schedule to `.github/workflows/worker.yml` that starts it. The worker stays up while units are running (not merely due), and stops by itself when it has been idle for `CONSOLE_WORKER_IDLE_MINUTES` (and before `CONSOLE_WORKER_MAX_MINUTES`). How often to start it is a trade-off between freshness and GitHub Actions minutes (free on public repositories; private ones have a monthly allowance that depends on the plan):
 
 ```yaml
 on:
@@ -490,9 +582,9 @@ Request protections:
 - **Response headers**: pages are served with a Content-Security-Policy, `frame-ancestors 'none'` and `nosniff`.
 - **Error responses**: unexpected server errors return a generic message with a reference number. The details go to the server log only.
 
-Failed sign-ins back off per account (2 s up to 30 s, so nobody can be locked out for long) and are also counted across all accounts. When too many fail at once, every attempt is slowed down, which defeats password spraying without locking anyone out. Vault unlocks back off per user.
+Failed sign-ins back off per account (2 s up to 30 s, so nobody can be locked out for long) and are also counted across all accounts. These counters and the API rate limits are shared by every server instance (Redis, or Supabase with migration 0014; see `RATE_LIMIT_STORE`), so they don't multiply on Vercel. On Vercel without Turnstile keys the console logs a warning: set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` there. When too many fail at once, every attempt is slowed down, which defeats password spraying without locking anyone out. Vault unlocks back off per user.
 
-`SUPABASE_*`, `VAULT_*`, `CONSOLE_*` and `REDIS_*` variables are removed from the environment before `backup.js` starts.
+`SUPABASE_*`, `VAULT_*`, `CONSOLE_*`, `REDIS_*`, `RELAY_*`, `TURNSTILE_*` and `WORKER_GITHUB_*` variables are removed from the environment before `backup.js` and Terraform start.
 
 > **Upgrading from the single-password version:** the old `data/vault.json` isn't migrated. Re-add credentials in **Credentials**, or use **Import .env**.
 
@@ -504,7 +596,22 @@ supabase/migrations/         database schema
 src/lib/                     auth, rbac, vault crypto, run manager, Cloudflare/S3 checks
 src/app/                     pages + API routes
 design-system/               UI source of truth (ui-ux-pro-max skill); tokens in src/app/globals.css
+tests/                       unit tests of pure helpers (node --test)
+eslint.config.mjs            lint rules (eslint-config-next)
 ```
+
+### Checks
+
+```bash
+npm run typecheck   # tsc (TypeScript 7)
+npm run lint        # ESLint with eslint-config-next; errors fail, warnings are listed
+npm test            # unit tests in tests/*.test.ts
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all three before the build.
+
+- **Tests** use Node's own test runner and its TypeScript support (type stripping), so they need **Node 22.18 or newer** (the console itself runs on 20.9+). [`tests/setup.mjs`](tests/setup.mjs) resolves `@/…` imports and `server-only` the way the bundler does. Test only pure helpers there: nothing starts Next.js or talks to Supabase.
+- **Lint**: typescript-eslint needs the TypeScript compiler API, which TypeScript 7 does not ship. `@typescript/typescript6` (dev dependency) provides it, and `eslint.config.mjs` points the lint plugins at it; `tsc` and `next build` keep using TypeScript 7.
 
 **Don't put a `.env` in `runner/`.** `backup.js` lets a `.env` next to it override the environment, which would bypass the vault. The console refuses to start a run while one exists.
 
@@ -525,3 +632,6 @@ design-system/               UI source of truth (ui-ux-pro-max skill); tokens in
 11. Each zone folder gets `_backup_manifest.tf` (comments only, so it uploads with the `.tf` files): every type that failed to export and every quarantined block. Restore shows it as "This backup is incomplete", so a missing resource is never mistaken for one that didn't exist.
 12. Import ID formats added for 18 zone types the backup exports (from the provider v5.28.1 docs), and three more listed as not importable — the same table is in `src/lib/tf-import-ids.ts` for Restore.
 13. Still not restorable from Terraform, and listed in every manifest: uploaded custom SSL and Origin CA certificates (private keys can't be read back), Workers script code, and account-level objects zone config can reference (lists, load-balancer pools, reusable Access policies).
+14. The R2 lock is put back on every way out: a cancel (on Windows the console asks over IPC first, since its forced kill can't be caught), SIGINT/SIGTERM/SIGHUP and crashes. Putting it back is retried and read back; if it fails, the run fails with a CRITICAL line listing the rules to re-apply. If the bucket's rules can't be read first, the bucket isn't unlocked. A hard SIGKILL still can't be caught.
+15. Uploads are retried (network errors, 408, 429, 5xx), checked afterwards by listing the prefix (key and size), and any failed or missing file fails the run. Error lines carry only the S3 error code and message.
+16. Each backup ends with `_backup-complete.json` (file list, sizes, SHA-256): locally for the whole folder, and in each bucket prefix for exactly the files uploaded there, uploaded last. Restore uses it to skip half-uploaded backups; older backups without one still restore, marked "unverified".

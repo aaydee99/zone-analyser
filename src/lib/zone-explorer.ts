@@ -46,7 +46,8 @@ export function listZones(fresh = false): Promise<ZoneList> {
   return cached('path:/api/zone-explorer', LIST_TTL, readZoneList, fresh);
 }
 
-async function readZoneList(): Promise<ZoneList> {
+/** The zone list read now, without the shared cache (monitoring lists zones on its own schedule). */
+export async function readZoneList(): Promise<ZoneList> {
   const zones = new Map<string, ZoneListItem>();
   const tokenOf = new Map<string, { token: string; id: string; name: string }>();
   const problems: ZoneList['problems'] = [];

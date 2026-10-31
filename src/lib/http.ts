@@ -8,6 +8,7 @@ import { NotConfiguredError } from './supabase';
 import { can, type Permission } from './rbac';
 import { isAllowedHost } from './hosts';
 import { audit } from './audit';
+import { hitLimit } from './rate-limit';
 import { RelayError, relay, relayed, relayedMe } from './worker-link';
 
 export const SESSION_COOKIE = 'cfbc_session';
@@ -18,26 +19,18 @@ export class HttpError extends Error {
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-// Sliding windows per key (a user, or a client address for public routes), in memory.
-
-const g = globalThis as unknown as { __rateLimit?: Map<string, number[]> };
-const hits = (g.__rateLimit ??= new Map<string, number[]>());
+// A window per key (a user, or a client address for public routes), shared by every instance
+// (Redis or Supabase; memory on a single server): src/lib/rate-limit.ts.
 
 /** RATE_LIMIT_SCALE multiplies the general limits (automated tests raise it; 1 by default). */
 const SCALE = Math.max(1, Number(process.env.RATE_LIMIT_SCALE) || 1);
 
 /** Throws 429 (with Retry-After) once `key` has made `max` requests within `windowMs`. */
-export function rateLimit(key: string, max: number, windowMs = 60_000) {
-  const now = Date.now();
-  const list = (hits.get(key) ?? []).filter((t) => t > now - windowMs);
-  if (list.length >= max) {
-    const retry = Math.max(1, Math.ceil((list[0] + windowMs - now) / 1000));
-    hits.set(key, list);
-    throw new HttpError(429, `Too many requests — try again in ${retry}s`, { 'Retry-After': String(retry) });
-  }
-  list.push(now);
-  hits.set(key, list);
-  if (hits.size > 10_000) for (const [k, v] of hits) if (!v.some((t) => t > now - 3_600_000)) hits.delete(k);
+export async function rateLimit(key: string, max: number, windowMs = 60_000) {
+  const hit = await hitLimit(`rl:${key}`, windowMs, max);
+  if (hit.allowed) return;
+  const retry = Math.max(1, Math.ceil(hit.resetMs / 1000));
+  throw new HttpError(429, `Too many requests — try again in ${retry}s`, { 'Retry-After': String(retry) });
 }
 
 /** Per signed-in user: all requests, and requests that change something. */
@@ -69,12 +62,12 @@ export async function sessionToken() {
  */
 function checkRequest(req: Request) {
   const host = req.headers.get('host');
-  if (!isAllowedHost(host)) throw new HttpError(403, 'Host not allowed');
+  if (!isAllowedHost(host, req.headers)) throw new HttpError(403, 'Host not allowed');
   if (req.method === 'GET' || req.method === 'HEAD') return;
   const origin = req.headers.get('origin');
   let originHost: string | null = null;
   try { originHost = origin ? new URL(origin).host : null; } catch { /* "null" or malformed */ }
-  if (!originHost || originHost !== host || !isAllowedHost(originHost)) throw new HttpError(403, 'Cross-origin request refused');
+  if (!originHost || originHost !== host || !isAllowedHost(originHost, req.headers)) throw new HttpError(403, 'Cross-origin request refused');
 }
 
 /** Largest JSON body any route accepts. */
@@ -148,11 +141,16 @@ export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; li
       if (!me) throw new HttpError(401, 'Your session has ended — sign in again');
       who = me;
       if (!fromWeb) {
-        rateLimit(`user:${me.id}`, LIMIT_ALL * SCALE);
-        if (req.method !== 'GET' && req.method !== 'HEAD') rateLimit(`user:${me.id}:write`, LIMIT_WRITE * SCALE);
+        const write = req.method !== 'GET' && req.method !== 'HEAD';
+        // Both counted at once (one round trip to the shared store, not two in a row).
+        const [all, w] = await Promise.allSettled([
+          rateLimit(`user:${me.id}`, LIMIT_ALL * SCALE),
+          write ? rateLimit(`user:${me.id}:write`, LIMIT_WRITE * SCALE) : Promise.resolve(),
+        ]);
+        for (const r of [all, w]) if (r.status === 'rejected') throw r.reason;
       }
       if (opts.perm) requirePerm(me, opts.perm);
-      if (opts.limit && !fromWeb) rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
+      if (opts.limit && !fromWeb) await rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
       // On Vercel (web role): the worker runs it, from its own server and IP.
       if (!fromWeb && relayed(req)) return await relay(req, me);
       return toResponse(await fn(req, ctx, me));
@@ -168,7 +166,7 @@ export function publicRoute<C = unknown>(fn: (req: Request, ctx: C) => Promise<R
   return async (req: Request, ctx: C) => {
     try {
       checkRequest(req);
-      rateLimit(`ip:${clientKey(req)}`, LIMIT_PUBLIC * SCALE);
+      await rateLimit(`ip:${clientKey(req)}`, LIMIT_PUBLIC * SCALE);
       return toResponse(await fn(req, ctx));
     } catch (err) {
       return errorResponse(err);

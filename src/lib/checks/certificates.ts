@@ -1,5 +1,5 @@
 import 'server-only';
-import { cfList } from '../cf-read';
+import { BudgetError, cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row, Severity } from '../monitor-types';
 import { Problems, daysUntil, notAvailable, readStat, type CheckDef } from './common';
@@ -61,7 +61,7 @@ export const certificates: CheckDef = {
       const list = async <T,>(path: string, what: string): Promise<T[]> => {
         try { return await cfList<T>(z.token, path, { perPage: 50, signal: ctx.signal }); } catch (err) {
           // A product the zone does not have (custom hostnames, client certificates) is simply empty.
-          if (!notAvailable(err)) p.add(what, err);
+          p.skip(what, err);
           return [];
         }
       };
@@ -119,6 +119,7 @@ export const certificates: CheckDef = {
           if (severity) findings.push({ key: `mtls:${a.accountId}:${c.id}`, severity, title: days !== null && days < 0 ? `mTLS certificate expired: ${c.name ?? c.id}` : `mTLS certificate expires in ${days} days: ${c.name ?? c.id}`, detail: 'Used by Workers, Access or API Shield to check clients.', accountId: a.accountId, accountName: a.accountName });
         }
       } catch (err) {
+        if (err instanceof BudgetError || (err instanceof Error && err.name === 'AbortError')) throw err;
         if (!notAvailable(err)) throw new Error(`mTLS certificates: ${err instanceof Error ? err.message : String(err)}`);
       }
       return { rows: { certificates: rows }, findings, complete: true, ...tally(rows) };

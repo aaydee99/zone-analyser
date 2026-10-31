@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { History, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/client';
 import type { RestoreHistory, RestoreOutcome } from '@/lib/restore-history';
 import { RestoreTable } from '@/components/restore-table';
-import { Alert, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonTable, cx } from '@/components/ui';
+import { Alert, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonTable, cx } from '@/components/ui';
 
 const FILTERS: { key: string; label: string; outcomes?: RestoreOutcome[] }[] = [
   { key: 'all', label: 'All' },
@@ -40,7 +39,7 @@ export default function RestoreHistoryPage() {
         eyebrow="Audit trail"
         title="Restore history"
         description="Every restore started from this console: the backup it used, the plan it applied, each step and its full log."
-        actions={<Link href="/console/restore/new"><Button variant="primary" icon={<RotateCcw className="size-4" />}>New restore</Button></Link>}
+        actions={<ButtonLink href="/console/restore/new" variant="primary" icon={<RotateCcw className="size-4" />}>New restore</ButtonLink>}
       />
       <div className="mb-4 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
@@ -56,7 +55,7 @@ export default function RestoreHistoryPage() {
         ) : !history ? (
           <Loading label="Loading restore history"><SkeletonTable rows={8} cols={5} className="!rounded-none !border-0" /></Loading>
         ) : shown.length === 0 ? (
-          <EmptyState icon={<History className="size-5" />} title="No restores here" description="Restores you start appear here with their plan, steps and log." action={<Link href="/console/restore/new"><Button variant="primary">Start a restore</Button></Link>} />
+          <EmptyState icon={<History className="size-5" />} title="No restores here" description="Restores you start appear here with their plan, steps and log." action={<ButtonLink href="/console/restore/new" variant="primary">Start a restore</ButtonLink>} />
         ) : (
           <RestoreTable restores={shown} />
         )}

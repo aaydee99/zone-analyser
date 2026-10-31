@@ -306,7 +306,7 @@ export default function RestorePage() {
               ))}
             </div>
           </Field>
-          <Field label="Bucket" hint={buckets.length ? 'Only this account set’s approved buckets.' : undefined}>
+          <Field label="Bucket" htmlFor={credsLoaded && buckets.length ? 'restore-bucket' : undefined} hint={buckets.length ? 'Only this account set’s approved buckets.' : undefined}>
             {!credsLoaded ? (
               <Loading label="Loading buckets"><Skeleton className="h-10 w-full rounded-[9px]" /></Loading>
             ) : buckets.length ? (
@@ -340,8 +340,16 @@ export default function RestorePage() {
                   </details>
                 )}</div>
               </div>
-              {r.source.skippedNewer.length > 0 && (
-                <Alert tone="warn" title="Newer backups skipped">{r.source.skippedNewer.length} newer folder(s), newest {r.source.newestFolder}, do not contain {r.zone.name}, so the newest backup that does was used.</Alert>
+              {r.source.skipped.length > 0 && (
+                <Alert tone="warn" title="Newer backups skipped">
+                  {r.source.skipped.length} newer folder(s), newest {r.source.newestFolder}, could not be used for {r.zone.name}, so the newest usable backup was used.
+                  <ul className="mt-1 space-y-0.5 text-xs">
+                    {r.source.skipped.map((s) => <li key={s.folder}><span className="font-mono break-all">{s.folder}</span>: {s.reason}</li>)}
+                  </ul>
+                </Alert>
+              )}
+              {!r.source.verified && (
+                <Alert tone="warn" title="Backup not verified">This backup is {r.source.verification}: its files could not be checked against a completion manifest, so check the compare below before applying.</Alert>
               )}
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-signal/30 bg-signal/[0.04] px-4 py-3">
                 <div className="min-w-0 flex-1 text-[13px]">

@@ -2,7 +2,7 @@ import 'server-only';
 import { cfList, cfOne } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
-import { Problems, daysSince, notAvailable, readStat, type CheckDef } from './common';
+import { Problems, daysSince, readStat, type CheckDef } from './common';
 
 // The developer platform in each account: Workers, Pages projects, R2 buckets, KV namespaces, D1
 // databases and queues. Read-only here; rolling a Worker or a Pages project back is an action with
@@ -26,7 +26,7 @@ export const platform: CheckDef = {
       const findings: NewFinding[] = [];
       const list = async <T,>(path: string, what: string, opts: { perPage?: number } = {}): Promise<T[]> => {
         try { return await cfList<T>(a.token, `/accounts/${a.accountId}${path}`, { perPage: opts.perPage ?? 0, signal: ctx.signal }); } catch (err) {
-          if (!notAvailable(err)) p.add(what, err);
+          p.skip(what, err);
           return [];
         }
       };
@@ -35,7 +35,7 @@ export const platform: CheckDef = {
         list<PagesProject>('/pages/projects', 'Pages', { perPage: 10 }),
         // R2 answers { buckets: [...] } inside `result`.
         cfOne<{ buckets?: Bucket[] }>(a.token, `/accounts/${a.accountId}/r2/buckets?per_page=1000`, ctx.signal).then((r) => r?.buckets ?? []).catch((err) => {
-          if (!notAvailable(err)) p.add('R2', err);
+          p.skip('R2', err);
           return [] as Bucket[];
         }),
         list<Kv>('/storage/kv/namespaces', 'KV', { perPage: 100 }),

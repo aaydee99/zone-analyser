@@ -1,6 +1,6 @@
 # Checks every pull request and every push to main: dependencies install from the lock file,
-# no known-vulnerable production dependency (high or critical), types check, and the console
-# builds. Needs no secrets. To make Vercel deploy only what passed, see "Shipping" in OPERATIONS.md.
+# no known-vulnerable production dependency (high or critical), types check, lint passes (errors
+# only; warnings are listed), the unit tests pass, and the console builds. Needs no secrets. To make Vercel deploy only what passed, see "Shipping" in OPERATIONS.md.
 name: CI
 
 on:
@@ -37,6 +37,12 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
 
       - name: Build
         run: npm run build

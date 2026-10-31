@@ -9,7 +9,7 @@ import type { RunMeta } from '@/lib/run-types';
 import type { RestoreHistory, RestoreSummary } from '@/lib/restore-history';
 import { useMe } from '@/components/me';
 import { OutcomeBadge, RestoreTable } from '@/components/restore-table';
-import { Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonChart, SkeletonStats, SkeletonTable, Stat, cx } from '@/components/ui';
+import { Badge, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonChart, SkeletonStats, SkeletonTable, Stat, cx } from '@/components/ui';
 
 interface Check { ok: boolean; detail: string }
 interface SystemCheck { terraform: Check }
@@ -129,7 +129,7 @@ export default function RestoreOverview() {
         eyebrow="Overview"
         title="Restore control"
         description="Put a zone back the way a backup has it: compare, review the plan, then apply with a Global API Key."
-        actions={<Link href="/console/restore/new"><Button variant="primary" size="lg" icon={<RotateCcw className="size-4" />}>New restore</Button></Link>}
+        actions={<ButtonLink href="/console/restore/new" variant="primary" size="lg" icon={<RotateCcw className="size-4" />}>New restore</ButtonLink>}
       />
 
       {!loaded ? (
@@ -166,8 +166,8 @@ export default function RestoreOverview() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    {(live || latest?.outcome === 'open') && <Link href="/console/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{live ? 'Watch live' : 'Continue'}</Button></Link>}
-                    <Link href={`/console/restore/history/${id}`}><Button icon={<ArrowRight className="size-4" />}>Open</Button></Link>
+                    {(live || latest?.outcome === 'open') && <ButtonLink href="/console/restore/new" variant="primary" icon={<ArrowRight className="size-4" />}>{live ? 'Watch live' : 'Continue'}</ButtonLink>}
+                    <ButtonLink href={`/console/restore/history/${id}`} icon={<ArrowRight className="size-4" />}>Open</ButtonLink>
                   </div>
                 </div>
               </Card>
@@ -192,7 +192,7 @@ export default function RestoreOverview() {
               <Loading label="Loading recent restores"><SkeletonTable rows={6} cols={5} className="!rounded-none !border-0" /></Loading>
             ) : !restores.length ? (
               <EmptyState icon={<RotateCcw className="size-5" />} title="No restores yet" description="Every restore appears here: the backup it used, what it changed and how it ended."
-                action={<Link href="/console/restore/new"><Button variant="primary">Start a restore</Button></Link>} />
+                action={<ButtonLink href="/console/restore/new" variant="primary">Start a restore</ButtonLink>} />
             ) : (
               <RestoreTable restores={restores.slice(0, 6)} />
             )}

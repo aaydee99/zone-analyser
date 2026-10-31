@@ -7,10 +7,11 @@ import { db, missingEnv } from './supabase';
 import { DATA_DIR, ensureDir } from './store';
 import { ensureTools, toolStatus } from './tools';
 import { activeRunId } from './runner';
-import { activeRestore } from './job-lock';
+import { activeRestore, jobsPaused, settleWrites, stopTakingJobs, workerStartedAt } from './job-lock';
 import { liveRestoreIds } from './restore';
 import { openRelay, sealRelay } from './vault';
-import { RELAY_CHUNK, RELAY_HEADER, type RelayRequest, type RelayResponse } from './worker-link';
+import { RELAY_CHUNK, RELAY_HEADER, passiveCall, type RelayRequest, type RelayResponse } from './worker-link';
+import { localRequestHeaders } from './hosts';
 
 // The worker: started inside `npm run worker` (src/instrumentation.ts). It announces itself in
 // public.workers, keeps Terraform and cf-terraforming installed, and takes the calls the web side
@@ -20,17 +21,28 @@ import { RELAY_CHUNK, RELAY_HEADER, type RelayRequest, type RelayResponse } from
 const HEARTBEAT_MS = 5_000;
 const IP_REFRESH_MS = 10 * 60_000;
 const MAX_PARALLEL = 8;
-/** On GitHub Actions: stop after this long with nothing to do, and before the 6-hour job limit. 0: never. */
+/**
+ * On GitHub Actions: stop after this long with nothing to do, and before the 6-hour job limit
+ * (counted from the start of the run: CONSOLE_WORKER_JOB_STARTED_AT). 0: never. From
+ * CONSOLE_WORKER_ACCEPT_MINUTES on it starts no new backups or applies (job-lock.ts jobsPaused) and
+ * stops as soon as nothing runs, so the next worker takes over.
+ */
 const IDLE_MS = (Number(process.env.CONSOLE_WORKER_IDLE_MINUTES) || 0) * 60_000;
 const MAX_MS = (Number(process.env.CONSOLE_WORKER_MAX_MINUTES) || 0) * 60_000;
-const PROCESS_START = Date.now();
 /** A backup or restore is running, a restore session is open (its plan and held key live in memory), or monitoring checks are running or due. */
-const busy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0 || monitoringBusy();
+const jobBusy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0;
+const busy = () => jobBusy() || monitoringBusy();
 /** The monitoring queue's state on globalThis (src/lib/monitor-queue.ts), read without importing it. */
 const monitoringBusy = () => { const m = (globalThis as unknown as { __monitorQueue?: { running: Map<string, unknown>; due: number } }).__monitorQueue; return !!m && (m.running.size > 0 || m.due > 0); };
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
-const g = globalThis as unknown as { __workerLoop?: boolean; __outdated?: string; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
+const g = globalThis as unknown as {
+  __workerLoop?: boolean; __outdated?: string; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> };
+  /** The calls this process holds (taken, waiting for a slot, or running): handed back or failed when it is stopped. */
+  __workerCalls?: { id: string | null; waiting: { id: string }[]; running: Set<string> };
+  __workerStopping?: boolean;
+};
+const held = (g.__workerCalls ??= { id: null, waiting: [], running: new Set<string>() });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const port = () => Number(process.env.PORT) || 4400;
 const base = () => `http://127.0.0.1:${port()}`;
@@ -61,6 +73,9 @@ async function publicIp(): Promise<string | null> {
 export function startWorkerLoop() {
   if (g.__workerLoop) return;
   g.__workerLoop = true;
+  // GitHub Actions cancels or times out a run with SIGINT / SIGTERM (scripts/worker.mjs sets
+  // NEXT_MANUAL_SIG_HANDLE, so these are handled here): hand back the calls, then stop.
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => { void shutdown(sig); });
   void keepRunning();
   // Monitoring: the queue runs what is due whenever this worker is up (src/lib/monitor-queue.ts).
   void import('./monitor-queue').then((m) => m.startQueue()).catch((err) => log(`monitoring: the queue could not start (${err instanceof Error ? err.message : String(err)})`));
@@ -132,15 +147,26 @@ async function run() {
     await beat().catch(() => {});
   })();
 
+  held.id = id;
   let inflight = 0;
+  /** Calls running now that count as work (not status polls: passiveCall). */
+  let working = 0;
   let lastWork = Date.now();
-  // Claimed calls waiting for one of the MAX_PARALLEL slots.
-  const waiting: { id: string; request: never }[] = [];
+  // Claimed calls waiting for one of the MAX_PARALLEL slots (kept if run() starts again).
+  const waiting = held.waiting as { id: string; request: never }[];
   const next = () => {
-    while (inflight < MAX_PARALLEL && waiting.length) {
+    while (inflight < MAX_PARALLEL && waiting.length && !g.__workerStopping) {
       const row = waiting.shift()!;
       inflight++;
-      void handle(row.id, row.request).finally(() => { inflight--; lastWork = Date.now(); next(); });
+      held.running.add(row.id);
+      let counted = false;
+      const onWork = () => { counted = true; working++; lastWork = Date.now(); };
+      void handle(row.id, row.request, onWork).finally(() => {
+        inflight--;
+        held.running.delete(row.id);
+        if (counted) { working--; lastWork = Date.now(); }
+        next();
+      });
     }
   };
   // Woken at once when the web side queues a call (Supabase Realtime), instead of at the next poll.
@@ -160,6 +186,8 @@ async function run() {
     await sleep(Math.min(2_000 * 2 ** Math.min(failures - 1, 4), 30_000));
   };
   for (;;) {
+    // Stopping (SIGTERM): no new calls are taken.
+    if (g.__workerStopping) { await sleep(1_000); continue; }
     let took = 0;
     try {
       if (inflight + waiting.length < MAX_PARALLEL) {
@@ -180,11 +208,16 @@ async function run() {
       await queueFailed(err instanceof Error ? err.message : String(err));
       continue;
     }
-    if (took || inflight || waiting.length) lastWork = Date.now();
+    // Status polls and health checks are answered but are not work: only other calls, and a backup or
+    // restore (idle counts from when it ended), keep it up. Monitoring only delays the stop (busy()).
+    if (working || jobBusy()) lastWork = Date.now();
     const idle = IDLE_MS > 0 && Date.now() - lastWork > IDLE_MS;
-    const old = MAX_MS > 0 && Date.now() - PROCESS_START > MAX_MS;
-    if ((idle || old || g.__outdated) && !inflight && !waiting.length && !busy()) {
-      await retire(id, g.__outdated ? 'a newer version of the console is deployed' : old ? `running for ${Math.round(MAX_MS / 60_000)} minutes` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
+    const old = MAX_MS > 0 && Date.now() - workerStartedAt() > MAX_MS;
+    // Close to GitHub's 6-hour limit: no new backups or applies (jobsPaused), and stop once nothing runs.
+    const draining = !!jobsPaused();
+    if ((idle || old || draining || g.__outdated) && !inflight && !waiting.length && !busy()) {
+      await retire(id, g.__outdated ? 'a newer version of the console is deployed' : old || draining ? `close to the time limit of its run (${Math.round((Date.now() - workerStartedAt()) / 60_000)} minutes in)` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
+      await finishWrites();
       process.exit(0);
     }
     // Quick to pick up while busy, gentler on Supabase when idle; a new call (Realtime) ends the wait at once.
@@ -224,12 +257,14 @@ function brief(message: string) {
 
 const aadFor = (id: string, part = 'request') => `worker-call:${id}:${part}`;
 
-async function handle(callId: string, sealed: never) {
+/** Runs one call; `onWork` is called when it is one that counts as work (not a status poll). */
+async function handle(callId: string, sealed: never, onWork: () => void) {
   try {
     const r = JSON.parse((await openRelay(sealed, aadFor(callId))).toString('utf8')) as RelayRequest;
+    if (!passiveCall(r)) onWork();
     const res = await fetch(`${base()}${r.path}`, {
       method: r.method,
-      headers: { ...r.headers, [RELAY_HEADER]: r.identity, ...(r.method !== 'GET' && r.method !== 'HEAD' ? { origin: base() } : {}) },
+      headers: { ...r.headers, [RELAY_HEADER]: r.identity, ...localRequestHeaders(), ...(r.method !== 'GET' && r.method !== 'HEAD' ? { origin: base() } : {}) },
       body: r.body ? new Uint8Array(Buffer.from(r.body, 'base64')) : undefined,
       redirect: 'manual',
       cache: 'no-store',
@@ -267,9 +302,59 @@ async function handle(callId: string, sealed: never) {
 
 /** Stops announcing itself and marks itself offline, so the web side starts a new worker when needed. */
 async function retire(id: string, why: string) {
+  stopTakingJobs(why);
   if (g.__workerTimers) { clearInterval(g.__workerTimers.beat); clearInterval(g.__workerTimers.purge); }
   await db().from('workers').update({ last_seen: new Date(Date.now() - 3_600_000).toISOString() }).eq('id', id);
   log(`stopping: ${why}. The next visit to the console starts it again.`);
+}
+
+/**
+ * Before the process exits: the monitoring queue's running units, the writes jobs left in flight
+ * (run status and logs: job-lock.ts trackWrite, lock rows) and the records being copied to
+ * Supabase (state-mirror.ts) — each waited for, within a time limit.
+ */
+async function finishWrites(timeoutMs = 25_000) {
+  const until = Date.now() + timeoutMs;
+  const left = () => Math.max(1_000, until - Date.now());
+  const within = (p: Promise<unknown>) => Promise.race([p.catch(() => {}), sleep(left())]);
+  await within(import('./monitor-queue').then((m) => {
+    const q = m as { stopQueue?: () => Promise<void> };
+    return typeof q.stopQueue === 'function' ? q.stopQueue() : undefined;
+  }));
+  await settleWrites(left());
+  const mirror = (globalThis as unknown as { __stateMirror?: Map<string, Promise<void>> }).__stateMirror;
+  if (mirror?.size) await within(Promise.allSettled([...mirror.values()]));
+}
+
+/**
+ * SIGTERM / SIGINT (GitHub Actions cancelling or timing out the run, or Ctrl+C): takes no more calls,
+ * puts the calls not started yet back in the queue (the next worker takes them), answers the
+ * running ones with an error (their job is cut off), marks itself offline and waits for the
+ * pending writes. Then exits.
+ */
+async function shutdown(sig: string) {
+  if (g.__workerStopping) return;
+  g.__workerStopping = true;
+  stopTakingJobs(`stopped (${sig})`);
+  // GitHub Actions follows a cancel's SIGINT with SIGTERM after 7.5 s and SIGKILL 2.5 s later: be done by then.
+  const hardStop = setTimeout(() => process.exit(143), 9_000);
+  hardStop.unref?.();
+  try {
+    const id = held.id;
+    if (id && !missingEnv().length) {
+      const back = held.waiting.splice(0).map((w) => w.id);
+      if (back.length) await db().from('worker_calls').update({ status: 'queued', worker_id: null, claimed_at: null }).in('id', back).eq('status', 'running').then(() => {}, () => {});
+      const cut = [...held.running];
+      if (cut.length) {
+        await db().from('worker_calls').update({ status: 'failed', error: 'The worker stopped (it is being restarted) before it could answer — try again in a minute', done_at: new Date().toISOString() })
+          .in('id', cut).eq('status', 'running').then(() => {}, () => {});
+      }
+      await retire(id, `stopped (${sig})${back.length || cut.length ? `; ${back.length} call(s) handed back, ${cut.length} cut off` : ''}`).catch(() => {});
+    }
+    await finishWrites(6_000);
+  } finally {
+    process.exit(sig === 'SIGINT' ? 130 : 143);
+  }
 }
 
 /** Calls nobody collected (the web side gave up), and workers not seen for a week. */

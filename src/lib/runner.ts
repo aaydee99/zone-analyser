@@ -15,7 +15,7 @@ import { audit } from './audit';
 import type { Me } from './auth';
 import { TOOLS_BIN, ensureTools, resolveTools } from './tools';
 import { systemPath, systemPathSources } from './syspath';
-import { activeRestore } from './job-lock';
+import { LockBusy, acquireShared, activeRestore, jobsPaused, trackWrite, type SharedLock } from './job-lock';
 import { listZones, tokenAccounts } from './providers';
 
 // Every variable backup.js reads from its environment. Inherited values are
@@ -28,7 +28,7 @@ const SCRIPT_ENV_KEYS = [
 ];
 const SECRET_ENV_KEYS = new Set(['CF_API_TOKEN', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']);
 // The console's own secrets (Supabase keys, vault server key) must never reach backup.js or terraform.
-const CONSOLE_ENV_RE = /^(SUPABASE_|NEXT_PUBLIC_SUPABASE_|VAULT_|CONSOLE_|REDIS_)/i;
+const CONSOLE_ENV_RE = /^(SUPABASE_|NEXT_PUBLIC_SUPABASE_|VAULT_|CONSOLE_|REDIS_|RELAY_|TURNSTILE_|WORKER_GITHUB_)/i;
 const MAX_MEMORY_LINES = 20_000;
 const LOG_BATCH = 250;
 const LOG_FLUSH_MS = 1000;
@@ -65,6 +65,9 @@ const fromRow = (r: RunRow): RunMeta => ({
   credentialNames: r.credential_names ?? {}, command: r.command, summary: Object.assign({ warnings: 0, errors: 0 }, r.summary),
   startedBy: r.started_by_email ?? undefined,
 });
+
+/** The lock row other workers see while a backup of a Cloudflare account runs (src/lib/job-lock.ts). */
+export const accountLockKey = (accountId: string) => `cf-account:${accountId}`;
 
 async function saveStatus(meta: RunMeta) {
   const { error } = await db().from('runs').update({
@@ -188,6 +191,8 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
   const running = activeRunId();
   if (running) throw new HttpError(409, 'A backup is already running — wait for it or cancel it first');
   assertNoRestore();
+  const paused = jobsPaused();
+  if (paused) throw new HttpError(503, paused, { 'retry-after': '90' });
   const problems = validateConfig(config);
   if (problems.length) throw new HttpError(400, problems.join(' '));
   if (!fs.existsSync(RUNNER_SCRIPT)) throw new HttpError(500, 'The backup script is missing — see Settings › Environment');
@@ -298,11 +303,25 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
   };
   // Claim the slot before awaiting the insert.
   live.set(id, run);
+  // The same account on another worker (a handover, or a second console on this Supabase): its lock
+  // row is taken now when the account is known, else once the accounts are listed (below).
+  const locks: SharedLock[] = [];
+  const knownAccount = cf.fields.accountId?.trim() || config.accountId;
+  const lockWhat = `backup ${id} by ${me.email}`;
+  if (knownAccount) {
+    try {
+      locks.push(await acquireShared([accountLockKey(knownAccount)], lockWhat));
+    } catch (err) {
+      live.delete(id);
+      throw err instanceof LockBusy ? new HttpError(409, err.message) : err;
+    }
+  }
+  const releaseLocks = () => Promise.all(locks.map((l) => l.release())).then(() => {});
   const { error: insErr } = await db().from('runs').insert({
     id, status: 'running', started_at: now, preset_name: presetName ?? null, config, output_dir: outputDir,
     credential_names: meta.credentialNames, command, summary: meta.summary, started_by: me.id, started_by_email: me.email,
   });
-  if (insErr) { live.delete(id); throw new Error(`Could not record the run: ${insErr.message}`); }
+  if (insErr) { live.delete(id); await releaseLocks(); throw new Error(`Could not record the run: ${insErr.message}`); }
   await audit(me, 'run.started', id, {
     ...(approval ? { approvalId: approval.id, approvedBy: approval.by } : {}),
     preset: presetName ?? null, cloudflare: cf.name, r2: r2?.name ?? null, aws: aws?.name ?? null, r2Bucket: r2Bucket || null, awsBucket: awsBucket || null,
@@ -359,7 +378,9 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
     meta.exitCode = code;
     meta.endedAt = new Date().toISOString();
     meta.status = run.cancelled ? 'cancelled' : code === 0 ? 'succeeded' : 'failed';
-    void flushLog().then(() => saveStatus(meta));
+    // Tracked: a worker that stops right after the run waits for these (src/lib/worker-loop.ts).
+    void trackWrite(flushLog().then(() => saveStatus(meta)));
+    void releaseLocks();
     for (const l of run.listeners) l({ type: 'status', meta });
     run.listeners.clear();
     // Keep the finished run in memory briefly so late subscribers still get it from RAM.
@@ -389,6 +410,14 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
       return;
     }
     if (!accounts.length) { finish(null, 'None of the chosen zones is in an account this token can access'); return; }
+    if (!knownAccount) {
+      try {
+        locks.push(await acquireShared(accounts.map((a) => accountLockKey(a.id)), lockWhat));
+      } catch (err) {
+        finish(null, err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
 
     const env = augmentedEnvPath({ ...process.env });
     for (const k of Object.keys(env)) if (SCRIPT_ENV_KEYS.includes(k.toUpperCase()) || CONSOLE_ENV_RE.test(k)) delete env[k];
@@ -407,7 +436,8 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
       if (accounts.length > 1) push(`\x1b[0;36m\x1b[1m━━━  Account ${i + 1} of ${accounts.length}: ${acct.name || acct.id} (${acct.id})  ━━━\x1b[0m`);
       const accountArgs = buildArgs({ ...config, zoneIds: acct.zoneIds });
       const code = await new Promise<number | null>((resolve) => {
-        const child = spawn(process.execPath, [RUNNER_SCRIPT, ...accountArgs], { cwd: RUNNER_DIR, env: { ...env, CF_ACCOUNT_ID: acct.id }, windowsHide: true });
+        // The IPC channel lets a cancel on Windows ask the script to re-lock the R2 bucket first (cancelRun).
+        const child = spawn(process.execPath, [RUNNER_SCRIPT, ...accountArgs], { cwd: RUNNER_DIR, env: { ...env, CF_ACCOUNT_ID: acct.id }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
         run.child = child;
         child.stdout?.on('data', outS.data);
         child.stderr?.on('data', errS.data);
@@ -435,9 +465,20 @@ export async function cancelRun(me: Me, id: string) {
   if (!run.child) return;
   const pid = run.child.pid;
   // terraform / cf-terraforming are grandchildren: kill the whole tree.
-  if (process.platform === 'win32' && pid) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-  else run.child.kill('SIGTERM');
+  if (process.platform === 'win32' && pid) {
+    const child = run.child;
+    const kill = () => { if (child.exitCode === null && child.signalCode === null) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }); };
+    // taskkill /F cannot be caught: while the script has the R2 bucket unlocked, let it put the lock
+    // rules back and exit by itself (forced after WIN_RELOCK_WAIT_MS).
+    if (!child.connected) return kill();
+    const timer = setTimeout(kill, WIN_RELOCK_WAIT_MS);
+    child.once('exit', () => clearTimeout(timer));
+    child.once('message', (m: { type?: string; unlocked?: boolean }) => { if (m?.type !== 'cancel-ack' || !m.unlocked) { clearTimeout(timer); kill(); } });
+    try { child.send({ type: 'cancel' }); } catch { clearTimeout(timer); kill(); }
+  } else run.child.kill('SIGTERM');
 }
+
+const WIN_RELOCK_WAIT_MS = 90_000;
 
 /** A run marked running in the database but unknown to this process was cut off by a restart. */
 function settleOrphan(meta: RunMeta): RunMeta {

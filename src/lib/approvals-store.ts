@@ -31,7 +31,7 @@ export interface Approval {
   title: string;
   /** What the approver is asked to approve, one line each. */
   details: string[];
-  /** Pending until then (restores: the plan's age limit). */
+  /** Pending until then: APPROVAL_TTL_MINUTES after it was asked, or a restore plan's age limit if sooner. */
   expiresAt?: string;
   backup?: { config: BackupConfig; presetName?: string };
   /** The run an approved backup started. */
@@ -44,6 +44,19 @@ export interface Approval {
 
 const file = (id: string) => path.join(DIR, `${id}.json`);
 
+/** A request nobody decides within APPROVAL_TTL_MINUTES (default 30) expires. */
+export const approvalTtlMinutes = () => Math.max(1, Number(process.env.APPROVAL_TTL_MINUTES) || 30);
+
+/**
+ * When a pending request expires: its own limit (a restore's plan age) or APPROVAL_TTL_MINUTES after
+ * it was asked, whichever comes first. Also right for requests saved before the TTL existed.
+ */
+export function expiresAtOf(a: Pick<Approval, 'requestedAt' | 'expiresAt'>): number {
+  const ttl = Date.parse(a.requestedAt) + approvalTtlMinutes() * 60_000;
+  const own = a.expiresAt ? Date.parse(a.expiresAt) : NaN;
+  return Number.isNaN(own) ? ttl : Math.min(own, ttl);
+}
+
 export function saveApproval(a: Approval) {
   fs.mkdirSync(DIR, { recursive: true });
   const tmp = `${file(a.id)}.${process.pid}.tmp`;
@@ -53,7 +66,8 @@ export function saveApproval(a: Approval) {
 }
 
 export function newApproval(a: Omit<Approval, 'id' | 'status' | 'requestedAt'>): Approval {
-  const rec: Approval = { ...a, id: newId(9), status: 'pending', requestedAt: new Date().toISOString() };
+  const requestedAt = new Date().toISOString();
+  const rec: Approval = { ...a, id: newId(9), status: 'pending', requestedAt, expiresAt: new Date(expiresAtOf({ requestedAt, expiresAt: a.expiresAt })).toISOString() };
   saveApproval(rec);
   return rec;
 }

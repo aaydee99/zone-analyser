@@ -54,6 +54,35 @@ export interface StartProgress {
 
 const gp = globalThis as unknown as { __wakeProgress?: { at: number; since: string; value: StartProgress | null } };
 
+type Run = { id: number; status: string; conclusion: string | null; html_url: string; created_at: string; run_started_at?: string };
+/** GitHub ends a job after 6 hours: a run listed as still going that is older than that is not. */
+const RUN_LIMIT_MS = 6 * 3600_000 + 15 * 60_000;
+/** A worker run that is waiting for a runner or running (and young enough to be real). */
+const activeRun = (r: Run) => ['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(r.status) && Date.now() - Date.parse(r.created_at) < RUN_LIMIT_MS;
+
+/**
+ * A worker run already queued or in progress on GitHub (one whose worker is still starting, or is
+ * finishing its last job): starting another would only queue it behind that one (worker.yml lets
+ * the running one finish). null when there is none, or GitHub cannot be asked.
+ */
+async function runOnItsWay(): Promise<Run | null> {
+  try {
+    const repo = process.env.WORKER_GITHUB_REPO!.trim();
+    const [res, last] = await Promise.all([
+      fetch(`${ghApi()}/repos/${repo}/actions/workflows/${encodeURIComponent(ghWorkflow())}/runs?per_page=10`, { headers: ghHeaders(), signal: AbortSignal.timeout(8_000), cache: 'no-store' }),
+      db().from('workers').select('started_at').order('last_seen', { ascending: false }).limit(1),
+    ]);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { workflow_runs?: Run[] };
+    // A run created before the last worker started is that worker's own run, which is ending (the
+    // worker stopped, and GitHub finishes the run a few seconds later): not one on its way.
+    const lastStart = Date.parse((last.data as { started_at: string }[] | null)?.[0]?.started_at ?? '') || 0;
+    return body.workflow_runs?.find((r) => activeRun(r) && Date.parse(r.created_at) > lastStart) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** The GitHub Actions run started at or after `since`, with its steps (cached for 4 s). */
 export async function startProgress(since: string): Promise<StartProgress | null> {
   if (!wakeConfigured()) return null;
@@ -66,10 +95,10 @@ export async function startProgress(since: string): Promise<StartProgress | null
   };
   let value: StartProgress | null = null;
   try {
-    type Run = { id: number; status: string; conclusion: string | null; html_url: string; created_at: string; run_started_at?: string };
     const runs = await get<{ workflow_runs: Run[] }>(`/actions/workflows/${encodeURIComponent(ghWorkflow())}/runs?event=workflow_dispatch&per_page=5`);
-    // The run this request started: created after it (allowing for clock differences).
-    const run = runs?.workflow_runs?.find((r) => Date.parse(r.created_at) >= Date.parse(since) - 60_000);
+    // The run this request started: created after it (allowing for clock differences); else a run
+    // that was already on its way when it was asked (then no new one was started: wakeWorker).
+    const run = runs?.workflow_runs?.find((r) => Date.parse(r.created_at) >= Date.parse(since) - 60_000) ?? runs?.workflow_runs?.find(activeRun);
     if (!run) value = { status: 'requested', conclusion: null, url: null, startedAt: null, steps: [] };
     else {
       type Step = { name: string; status: StartStep['status']; conclusion: string | null; started_at: string | null; completed_at: string | null };
@@ -109,6 +138,14 @@ export async function wakeWorker(by: string): Promise<{ result: 'started' | 'alr
     ? await db().from('worker_wakeups').update({ requested_at: at, requested_by: by, result: 'started' }).eq('id', 1).eq('requested_at', prev.requested_at).select('requested_at')
     : await db().from('worker_wakeups').insert({ id: 1, requested_at: at, requested_by: by, result: 'started' }).select('requested_at');
   if (claim.error || !(claim.data as unknown[] | null)?.length) return { result: 'already' };
+
+  // A run is already queued or running (still building, or its worker finishing a job before it
+  // stops): no second one. The start request stays recorded, so callers wait for that run.
+  const onItsWay = await runOnItsWay();
+  if (onItsWay) {
+    console.log(`[worker] not starting another worker: run ${onItsWay.id} is ${onItsWay.status.replace('_', ' ')} on GitHub Actions`);
+    return { result: 'already' };
+  }
 
   const repo = process.env.WORKER_GITHUB_REPO!.trim();
   let message = '';

@@ -14,10 +14,12 @@ name: Console worker
 on:
   workflow_dispatch:
 
-# One worker at a time: a new run cancels the one before it (e.g. a worker still on old code).
+# One worker at a time: a new run waits until the one before it has finished (it is never cancelled:
+# that would cut off a running backup or restore). A worker on old code, or close to the time limit,
+# stops by itself once nothing runs, and the waiting run takes over.
 concurrency:
   group: console-worker
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -25,17 +27,22 @@ permissions:
 jobs:
   worker:
     runs-on: ubuntu-latest
-    # GitHub stops a job after 6 hours; the worker stops itself (when not busy) before that.
+    # GitHub stops a job after 6 hours; the worker stops itself (when not busy) before that. From
+    # CONSOLE_WORKER_ACCEPT_MINUTES on it starts no new backups or restore applies (an hour before
+    # this limit, so one that is running can finish) and stops as soon as nothing runs.
     timeout-minutes: 355
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
+      # Optional: the same value as on Vercel (see README, environment variables). Empty = derived from the vault key.
+      RELAY_SIGNING_KEY: ${{ secrets.RELAY_SIGNING_KEY }}
       CONSOLE_ROLE: worker
       CONSOLE_WORKER_ID: github-actions
       CONSOLE_WORKER_IDLE_MINUTES: '20'
       CONSOLE_WORKER_MAX_MINUTES: '330'
+      CONSOLE_WORKER_ACCEPT_MINUTES: '295'
       CONSOLE_DATA_DIR: ${{ github.workspace }}/.worker-data
       NEXT_TELEMETRY_DISABLED: '1'
       # Optional repository variable: traffic-analytics GraphQL queries per 5 minutes per token (default 240).
@@ -46,6 +53,8 @@ jobs:
 
       - name: Check the secrets
         run: |
+          # When this run started (ms): the worker's time limits count from here, not from when it is built.
+          echo "CONSOLE_WORKER_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
           for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
             if [ -z "${!name}" ]; then echo "::error::Repository secret $name is not set (Settings › Secrets and variables › Actions)"; exit 1; fi
           done

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { CheckCircle2, RefreshCw, Save, ShieldAlert, XCircle } from 'lucide-react';
 import { api } from '@/lib/client';
 import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
@@ -84,10 +84,11 @@ function CheckRow({ label, check, hint }: { label: string; check: Check; hint?: 
 function MinutesField({ label, hint, value, onChange, max, disabled }: {
   label: string; hint: string; value: number; onChange: (v: number) => void; max: number; disabled: boolean;
 }) {
+  const id = useId();
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} htmlFor={id}>
       <div className="flex items-center gap-2">
-        <input type="number" min={1} max={max} className="input !w-28 font-mono" value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))} />
+        <input id={id} type="number" min={1} max={max} className="input !w-28 font-mono" value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))} />
         <span className="text-[13px] text-muted">minutes</span>
       </div>
     </Field>
