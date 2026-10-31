@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { BRAND } from '@/lib/brand';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { BrandMark } from './brand-mark';
 import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
@@ -16,46 +18,46 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Backups',
     items: [
-      { href: '/', label: 'Overview', icon: LayoutGrid },
-      { href: '/backup', label: 'New backup', icon: DatabaseBackup, perm: 'runs:start' },
-      { href: '/runs', label: 'Run history', icon: History },
+      { href: '/console', label: 'Overview', icon: LayoutGrid },
+      { href: '/console/backup', label: 'New backup', icon: DatabaseBackup, perm: 'runs:start' },
+      { href: '/console/runs', label: 'Run history', icon: History },
     ],
   },
   {
     section: 'Restore',
     items: [
-      { href: '/restore', label: 'Overview', icon: LayoutGrid, perm: 'restore:run' },
-      { href: '/restore/new', label: 'New restore', icon: RotateCcw, perm: 'restore:run' },
-      { href: '/restore/history', label: 'Restore history', icon: History, perm: 'restore:run' },
+      { href: '/console/restore', label: 'Overview', icon: LayoutGrid, perm: 'restore:run' },
+      { href: '/console/restore/new', label: 'New restore', icon: RotateCcw, perm: 'restore:run' },
+      { href: '/console/restore/history', label: 'Restore history', icon: History, perm: 'restore:run' },
     ],
   },
   {
     section: 'Approvals',
     items: [
-      { href: '/approvals', label: 'Approvals', icon: ShieldCheck, perm: 'runs:start' },
+      { href: '/console/approvals', label: 'Approvals', icon: ShieldCheck, perm: 'runs:start' },
     ],
   },
   {
     section: 'Cloudflare',
     items: [
-      { href: '/zone-explorer', label: 'Zone explorer', icon: Globe },
-      { href: '/traffic', label: 'Traffic analytics', icon: BarChart3 },
-      { href: '/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
+      { href: '/console/zone-explorer', label: 'Zone explorer', icon: Globe },
+      { href: '/console/traffic', label: 'Traffic analytics', icon: BarChart3 },
+      { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
     ],
   },
   {
     section: 'Configuration',
     items: [
-      { href: '/vault', label: 'Credentials', icon: KeyRound, perm: 'vault:access' },
-      { href: '/settings', label: 'Settings', icon: Settings2, perm: 'settings:read' },
+      { href: '/console/vault', label: 'Credentials', icon: KeyRound, perm: 'vault:access' },
+      { href: '/console/settings', label: 'Settings', icon: Settings2, perm: 'settings:read' },
     ],
   },
   {
     section: 'Access',
     items: [
-      { href: '/users', label: 'Users & roles', icon: Users, perm: 'users:manage' },
-      { href: '/changes', label: 'Recent changes', icon: FileClock, perm: 'audit:read' },
-      { href: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit:read' },
+      { href: '/console/users', label: 'Users & roles', icon: Users, perm: 'users:manage' },
+      { href: '/console/changes', label: 'Recent changes', icon: FileClock, perm: 'audit:read' },
+      { href: '/console/audit', label: 'Audit log', icon: ScrollText, perm: 'audit:read' },
     ],
   },
 ];
@@ -66,12 +68,12 @@ const initials = (name: string, email: string) => (name || email)
 function Logo() {
   return (
     <div className="flex items-center gap-2.5">
-      <div className="relative grid size-8 place-items-center rounded-[9px] bg-gradient-to-br from-signal-soft to-signal text-signal-ink shadow-[0_6px_20px_-8px_var(--color-signal)]">
-        <DatabaseBackup className="size-[17px]" strokeWidth={2.2} />
+      <div className="grid size-8 place-items-center rounded-[9px] border border-line-strong/70 bg-terminal">
+        <BrandMark className="h-[17px]" />
       </div>
       <div className="leading-tight">
-        <div className="text-[14px] font-semibold tracking-tight">Backup Console</div>
-        <div className="font-mono text-[10.5px] text-muted">cloudflare · terraform</div>
+        <div className="text-[14px] font-semibold tracking-tight">{BRAND.name}</div>
+        <div className="font-mono text-[10.5px] text-muted">console</div>
       </div>
     </div>
   );
@@ -106,11 +108,13 @@ export function Shell({ initial, children }: { initial: MeState; children: React
     return () => { clearInterval(poll); clearInterval(tick); window.removeEventListener('pointerdown', onActivity); window.removeEventListener('keydown', onActivity); };
   }, [refresh, jobRunning]);
 
+  // Rendered without the live state (it was slow): ask for it now.
+  useEffect(() => { if (initial.stale) void refresh(false); }, [initial.stale, refresh]);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
   const signOut = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-    router.replace('/login');
+    router.replace('/console/login');
   };
 
   const perms = new Set(me.permissions);
@@ -119,7 +123,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   const ss = remaining !== null ? Math.floor((remaining % 60000) / 1000) : 0;
   // The most specific nav item wins: /restore/new lights "New restore", not also the Restore overview.
   const hrefs = NAV.flatMap((s) => s.items.map((i) => i.href));
-  const matches = (href: string) => (href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`));
+  const matches = (href: string) => (href === '/console' ? pathname === '/console' : pathname === href || pathname.startsWith(`${href}/`));
   const isActive = (href: string) => matches(href) && !hrefs.some((h) => h !== href && h.startsWith(`${href}/`) && matches(h));
   const nav = NAV.map(({ section, items }) => ({ section, items: items.filter((i) => !i.perm || perms.has(i.perm)) })).filter((s) => s.items.length);
 
@@ -144,7 +148,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
                   {isActive(href) && <span className="absolute top-1/2 left-0 h-4 w-[3px] -translate-y-1/2 rounded-r bg-signal" />}
                   <Icon className={cx('size-[17px]', isActive(href) ? 'text-signal' : 'text-faint group-hover:text-muted')} />
                   {label}
-                  {href === '/approvals' && !!me.pendingApprovals && (
+                  {href === '/console/approvals' && !!me.pendingApprovals && (
                     <span className="ml-auto rounded-full bg-signal px-1.5 py-px text-[11px] font-semibold tabular-nums text-canvas" aria-label={`${me.pendingApprovals} waiting for you`}>{me.pendingApprovals}</span>
                   )}
                 </Link>
@@ -155,7 +159,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
       </nav>
 
       {me.activeRunId && (
-        <Link href={`/runs/${me.activeRunId}`} className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-live/30 bg-live/[0.07] px-3 py-2.5 text-[13px] transition-colors hover:bg-live/[0.12]">
+        <Link href={`/console/runs/${me.activeRunId}`} className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-live/30 bg-live/[0.07] px-3 py-2.5 text-[13px] transition-colors hover:bg-live/[0.12]">
           <span className="live-dot size-2 rounded-full bg-live" />
           <span className="flex-1">
             <span className="block font-medium text-ink">Backup running</span>
@@ -165,7 +169,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
         </Link>
       )}
       {me.activeRestore && (
-        <Link href="/restore/new" className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-live/30 bg-live/[0.07] px-3 py-2.5 text-[13px] transition-colors hover:bg-live/[0.12]">
+        <Link href="/console/restore/new" className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-live/30 bg-live/[0.07] px-3 py-2.5 text-[13px] transition-colors hover:bg-live/[0.12]">
           <span className="live-dot size-2 rounded-full bg-live" />
           <span className="flex-1">
             <span className="block font-medium text-ink">Restore running</span>
@@ -186,7 +190,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
           </div>
         </div>
         <div className="mt-2.5 flex gap-1.5">
-          <Link href="/account" className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border border-line-strong px-2 py-1.5 text-xs text-ink-2 transition-colors hover:border-faint hover:text-ink">
+          <Link href="/console/account" className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border border-line-strong px-2 py-1.5 text-xs text-ink-2 transition-colors hover:border-faint hover:text-ink">
             <UserCog className="size-3.5" aria-hidden /> Account
           </Link>
           <button onClick={signOut} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border border-line-strong px-2 py-1.5 text-xs text-ink-2 transition-colors hover:border-faint hover:text-ink">

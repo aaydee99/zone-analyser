@@ -2,36 +2,44 @@
 
 /* ── Design tokens ─────────────────────────────────────────────────────────
    Layout/type/motion rules: design-system/backup-console/MASTER.md (ui-ux-pro-max).
-   Palette override: Cloudflare brand colours — Cloudflare Orange accent, the
-   logo's tangerine as its partner, neutrals built on Cloudflare Gray (#404041).
+   Palette: the Edgekeep brand (public/brand/). Obsidian grounds, chrome silver
+   for structure and text, gold for the one primary action, crimson for brand
+   energy and for threats. Status colours never double as the gold accent.
    Three layers: primitives (raw values) → semantic (purpose) → components. */
 
 /* Primitives — never referenced by components directly. */
 :root {
-  /* Cloudflare brand */
-  --cf-orange: #f6821f;
-  --cf-orange-deep: #e06d10;
-  --cf-tangerine: #fbad41;
-  --cf-gray: #404041;
+  /* Edgekeep brand */
+  --brand-obsidian: #0b0b0e;
+  --brand-chrome-hi: #f5f6f8;
+  --brand-chrome: #c4c8cf;
+  --brand-chrome-lo: #7e848d;
+  --brand-gunmetal: #3a3b42;
+  --brand-gold: #d9b04c;
+  --brand-gold-hi: #f3d98e;
+  --brand-gold-deep: #b88a2c;
+  --brand-crimson: #c8102e;
+  --brand-crimson-lit: #e3243f;
+  --brand-crimson-deep: #6e0a1a;
 
-  /* Neutrals derived from Cloudflare Gray */
-  --gray-975: #0b0b0c;
-  --gray-950: #111112;
-  --gray-925: #161617;
-  --gray-900: #1d1d1f;
-  --gray-850: #262628;
-  --gray-800: #303032;
-  --gray-750: #2b2b2d;
-  --gray-450: #8c8c91;
-  --gray-400: #a6a6ab;
-  --gray-300: #d6d6d9;
-  --gray-50: #f7f7f8;
+  /* Obsidian neutrals (no hue cast: chrome reads as chrome) */
+  --gray-975: #050506;
+  --gray-950: #08080a;
+  --gray-925: #0b0b0e;           /* Obsidian */
+  --gray-900: #111114;
+  --gray-850: #18181c;
+  --gray-800: #202025;
+  --gray-750: #24242a;
+  --gray-450: #868a93;
+  --gray-400: #aeb2ba;
+  --gray-300: #d9dce1;
+  --gray-50: #f4f5f7;
 
-  --green-400: #3dd68c;
-  --yellow-400: #f5c451;
-  --red-400: #f87171;
-  --blue-400: #5aa2ff;
-  --cyan-400: #22d3ee;
+  --green-400: #3fbf8a;
+  --yellow-400: #e8892b;         /* copper, so warnings never read as the gold accent */
+  --red-400: var(--brand-crimson-lit);
+  --blue-400: #b8c2d0;           /* steel */
+  --cyan-400: #b8c2d0;
 }
 
 /* Semantic — what the utilities (bg-surface, text-muted, …) resolve to. */
@@ -47,17 +55,17 @@
   --color-sunken: var(--gray-950);
   --color-terminal: var(--gray-975);
   --color-line: var(--gray-750);
-  --color-line-strong: var(--cf-gray);
+  --color-line-strong: var(--brand-gunmetal);
   --color-ink: var(--gray-50);
   --color-ink-2: var(--gray-300);
   --color-muted: var(--gray-400);
   --color-faint: var(--gray-450);
-  --color-ring: var(--cf-tangerine);
+  --color-ring: var(--brand-gold-hi);
 
-  /* Accent / CTA — Cloudflare Orange for primary actions, selection, active nav. */
-  --color-signal: var(--cf-orange);
-  --color-signal-strong: var(--cf-orange-deep);
-  --color-signal-soft: var(--cf-tangerine);
+  /* Accent / CTA — gold for primary actions, selection, active nav. Crimson is brand energy and threats. */
+  --color-signal: var(--brand-gold);
+  --color-signal-strong: var(--brand-gold-deep);
+  --color-signal-soft: var(--brand-gold-hi);
   --color-signal-ink: var(--gray-975);
 
   /* Status — kept distinct from the accent so meaning never relies on one hue. */
@@ -69,7 +77,7 @@
   --color-cyan: var(--cyan-400);
 
   --radius-card: 14px;
-  --shadow-pop: 0 24px 60px -20px rgb(2 6 23 / 0.75), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --shadow-pop: 0 24px 60px -20px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.06);
 }
 
 /* Component tokens */
@@ -88,8 +96,8 @@
     background-color: var(--color-canvas);
     /* Soft light sources behind the glass so blur reads as depth. */
     background-image:
-      radial-gradient(900px 520px at 85% -10%, color-mix(in srgb, var(--color-signal) 10%, transparent), transparent 70%),
-      radial-gradient(700px 480px at -5% 105%, color-mix(in srgb, var(--color-signal-soft) 6%, transparent), transparent 70%);
+      radial-gradient(900px 520px at 85% -10%, color-mix(in srgb, var(--color-signal) 7%, transparent), transparent 70%),
+      radial-gradient(700px 480px at -5% 105%, color-mix(in srgb, var(--brand-crimson) 8%, transparent), transparent 70%);
     background-attachment: fixed;
     color: var(--color-ink);
     font-family: var(--font-sans);
@@ -105,6 +113,13 @@
 }
 
 @layer components {
+  /* Cast gold: the primary action everywhere (console and landing share the look). */
+  .btn-gold {
+    background: linear-gradient(180deg, var(--brand-gold-hi), var(--brand-gold) 50%, var(--brand-gold-deep));
+    color: var(--color-signal-ink);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), inset 0 -1px 0 rgb(0 0 0 / 0.15), 0 8px 22px -12px color-mix(in srgb, var(--brand-gold) 80%, transparent);
+  }
+  .btn-gold:hover:not(:disabled) { filter: brightness(1.07); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), 0 12px 28px -12px var(--brand-gold); }
   .eyebrow {
     font-size: 11px;
     letter-spacing: 0.12em;
@@ -163,6 +178,17 @@
   animation: stripes 1s linear infinite;
 }
 
+/* Skeletons: the shape of what is loading, with a soft sweep (still under reduced motion). */
+@keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+.skeleton {
+  background-color: var(--color-raised);
+  background-image: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / .055) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
 /* Respect the OS motion preference: render the final state immediately. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -171,4 +197,318 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ── Landing ───────────────────────────────────────────────────────────────
+   The marketing page at / (src/app/page.tsx, src/components/landing/). It extends the console's
+   tokens above, never forks them: same palette, more expressive type and motion.
+   Primitives → semantic → component, like the rest of this file. */
+
+/* Primitives (landing only) */
+:root {
+  --lp-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --lp-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --lp-band-ink-2-mix: color-mix(in srgb, var(--gray-50) 76%, var(--brand-crimson));
+}
+
+/* Semantic */
+@theme {
+  --font-display: var(--font-archivo), var(--font-fira-sans), ui-sans-serif, system-ui, sans-serif;
+}
+:root {
+  --lp-band: var(--brand-crimson-deep);      /* the one region crimson owns outright */
+  --lp-band-ink: var(--gray-50);
+  --lp-band-ink-2: var(--lp-band-ink-2-mix);
+  --lp-rule: var(--color-line);
+  --lp-diff-del: color-mix(in srgb, var(--color-bad) 14%, transparent);
+  --lp-diff-del-ink: color-mix(in srgb, var(--color-bad) 70%, var(--color-ink));
+  --lp-diff-add: color-mix(in srgb, var(--color-ok) 13%, transparent);
+  --lp-diff-add-ink: color-mix(in srgb, var(--color-ok) 70%, var(--color-ink));
+}
+
+/* Component */
+:root {
+  --lp-mock-bg: var(--color-surface);
+  --lp-mock-border: var(--color-line-strong);
+  --lp-mock-shadow: 0 40px 80px -40px rgb(0 0 0 / 0.85), 0 18px 36px -24px rgb(0 0 0 / 0.6);
+  --lp-cursor-travel: 720ms;
+  --lp-enter-dur: 900ms;
+}
+
+@layer components {
+  /* Type */
+  .lp-display {
+    font-family: var(--font-display);
+    font-stretch: 118%;
+    font-variation-settings: "wdth" 118;
+    font-weight: 800;
+    font-size: clamp(2.6rem, 1.4rem + 5.6vw, 6rem);
+    line-height: 0.96;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+  .lp-h2 {
+    font-family: var(--font-display);
+    font-stretch: 112%;
+    font-variation-settings: "wdth" 112;
+    font-weight: 760;
+    font-size: clamp(1.9rem, 1.2rem + 2.6vw, 3.4rem);
+    line-height: 1.02;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
+  .lp-h3 {
+    font-family: var(--font-display);
+    font-stretch: 106%;
+    font-variation-settings: "wdth" 106;
+    font-weight: 700;
+    font-size: 1.25rem;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+  .lp-num {
+    font-family: var(--font-display);
+    font-stretch: 125%;
+    font-variation-settings: "wdth" 125;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 0.9;
+    font-variant-numeric: tabular-nums;
+  }
+  .lp-lede { font-size: clamp(1.05rem, 0.98rem + 0.35vw, 1.25rem); line-height: 1.55; color: var(--color-ink-2); max-width: 62ch; text-wrap: pretty; }
+  .lp-copy { color: var(--color-muted); line-height: 1.6; max-width: 68ch; text-wrap: pretty; }
+  .lp-link { text-decoration: underline; text-underline-offset: 0.22em; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+  .lp-link:hover { text-decoration-color: currentColor; }
+
+  /* Buttons */
+  .lp-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    min-height: 3rem; padding: 0 1.25rem; border-radius: 12px;
+    font-weight: 600; font-size: 15px;
+    transition: background-color var(--motion-base), color var(--motion-base), border-color var(--motion-base), transform var(--motion-fast);
+  }
+  .lp-btn:active { transform: translateY(1px); }
+  /* Gold: a cast-metal gradient, a lit top edge, and a glint that crosses it every few seconds. */
+  .lp-btn-primary, .lp-btn-ink {
+    position: relative; isolation: isolate; overflow: hidden;
+    background: linear-gradient(180deg, var(--brand-gold-hi), var(--brand-gold) 48%, var(--brand-gold-deep));
+    color: var(--gray-975);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.55), inset 0 -1px 0 rgb(0 0 0 / 0.18), 0 14px 32px -14px color-mix(in srgb, var(--brand-gold) 75%, transparent);
+  }
+  .lp-btn-primary::after, .lp-btn-ink::after {
+    content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background: linear-gradient(110deg, transparent 32%, rgb(255 255 255 / 0.7) 50%, transparent 68%);
+    transform: translateX(-130%); animation: lp-glint 6.5s var(--lp-ease-in-out) 2.4s infinite;
+  }
+  .lp-btn-primary:hover, .lp-btn-ink:hover { box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), 0 18px 40px -14px color-mix(in srgb, var(--brand-gold) 90%, transparent); filter: brightness(1.06); }
+  /* Chrome: a brushed-metal hairline border. */
+  .lp-btn-ghost {
+    border: 1px solid transparent; color: var(--color-ink);
+    background: linear-gradient(var(--color-canvas), var(--color-canvas)) padding-box, linear-gradient(120deg, var(--brand-chrome-lo), var(--brand-chrome-hi) 45%, var(--brand-gunmetal) 70%, var(--brand-chrome)) border-box;
+  }
+  .lp-btn-ghost:hover { background: linear-gradient(var(--color-raised), var(--color-raised)) padding-box, linear-gradient(120deg, var(--brand-chrome), var(--brand-chrome-hi) 45%, var(--brand-chrome-lo) 70%, var(--brand-chrome-hi)) border-box; }
+  .lp-btn-outline-ink { border: 1.5px solid var(--lp-band-ink); color: var(--lp-band-ink); }
+  .lp-btn-outline-ink:hover { background: color-mix(in srgb, var(--lp-band-ink) 10%, transparent); }
+
+  /* Header */
+  .lp-header {
+    background: color-mix(in srgb, var(--color-canvas) 82%, transparent);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    backdrop-filter: blur(12px) saturate(140%);
+    border-bottom: 1px solid var(--lp-rule);
+  }
+
+  /* Hero rotor: one verb visible, the next slides up through a clipped line */
+  .lp-rotor { display: block; overflow: hidden; height: 1.1em; padding-bottom: 0.06em; margin-bottom: -0.1em; box-sizing: content-box; }
+  .lp-rotor-word { display: inline-block; animation: lp-word-in 620ms var(--lp-ease-out-expo) both; }
+
+  /* Product mock */
+  .lp-mock {
+    background: var(--lp-mock-bg);
+    border: 1px solid var(--lp-mock-border);
+    border-radius: 16px;
+    box-shadow: var(--lp-mock-shadow);
+  }
+  .lp-mock-main { height: 25.5rem; }
+  @media (min-width: 640px) { .lp-mock-main { height: 24rem; } }
+  .lp-scene { animation: lp-scene-in 420ms var(--lp-ease-out-expo) both; }
+  .lp-cursor {
+    position: absolute; left: 0; top: 0; z-index: 30;
+    width: 22px; height: 22px; margin: -3px 0 0 -4px;
+    pointer-events: none; opacity: 0;
+    filter: drop-shadow(0 3px 4px rgb(0 0 0 / 0.55));
+    transition: transform var(--lp-cursor-travel) var(--lp-ease-in-out), opacity 300ms ease;
+  }
+  .lp-cursor.is-shown { opacity: 1; }
+  .lp-cursor path { transform-origin: 30% 20%; transition: transform 160ms ease; }
+  .lp-cursor.is-down path { transform: scale(0.82); }
+  .lp-ping { animation: lp-ping-in 520ms var(--lp-ease-out-expo) both, lp-ping-out 400ms ease-in 3.2s forwards; }
+  .lp-bar { display: block; background: color-mix(in srgb, var(--color-signal) 38%, var(--color-raised-2)); transform-origin: bottom; animation: lp-bar-in 600ms var(--lp-ease-out-expo) both; }
+  .lp-bar.is-hot { background: var(--color-signal); }
+  button.lp-bar.is-hot:hover { background: var(--color-signal-soft); }
+  .lp-del { background: var(--lp-diff-del); color: var(--lp-diff-del-ink); }
+  .lp-add { background: var(--lp-diff-add); color: var(--lp-diff-add-ink); }
+
+  /* Hero entrance: staged, from a near-visible state */
+  .lp-enter { animation: lp-enter var(--lp-enter-dur) var(--lp-ease-out-expo) both; animation-delay: var(--lp-d, 0ms); }
+  .lp-enter-mock { animation: lp-enter-mock 1100ms var(--lp-ease-out-expo) both; animation-delay: var(--lp-d, 0ms); }
+
+  /* Scroll reveal (src/components/landing/reveal.tsx). Server HTML is "static" = final state. */
+  [data-reveal] .lp-rv { transition: opacity 700ms var(--lp-ease-out-expo), transform 900ms var(--lp-ease-out-expo), filter 700ms var(--lp-ease-out-expo); transition-delay: calc(var(--i, 0) * 90ms); }
+  [data-reveal="armed"] .lp-rv { opacity: 0; transform: translateY(18px); filter: blur(4px); }
+
+  /* Bento: tiles assemble from their own side, the grid closing in like a build */
+  .lp-tile { position: relative; isolation: isolate; clip-path: inset(0 0 0 0 round 16px); background: var(--color-surface); border: 1px solid var(--lp-rule); border-radius: 16px; }
+  /* Spotlight: a gold pool under the pointer, and the tile's edge lit in gold and crimson near it. */
+  .lp-tile::before, .lp-tile::after { content: ""; position: absolute; pointer-events: none; opacity: 0; transition: opacity 500ms var(--lp-ease-out-expo); }
+  .lp-tile::before { inset: 0; z-index: -1; background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--brand-gold) 9%, transparent), transparent 60%); }
+  .lp-tile::after {
+    inset: -1px; border-radius: 16px; padding: 1px;
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 0%), var(--brand-gold-hi), color-mix(in srgb, var(--brand-crimson) 70%, transparent) 45%, transparent 70%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  }
+  .lp-tile:hover::before, .lp-tile:hover::after { opacity: 1; }
+  [data-reveal] .lp-tile { transition: opacity 600ms var(--lp-ease-out-expo), transform 1000ms var(--lp-ease-out-expo), clip-path 1000ms var(--lp-ease-out-expo); transition-delay: calc(var(--i, 0) * 110ms); }
+  [data-reveal="armed"] .lp-tile { opacity: 0; transform: translate(var(--tx, 0), var(--ty, 24px)) scale(0.96); clip-path: inset(8% 8% 8% 8% round 16px); }
+
+  /* Process: the rail draws, then each stop lights in turn */
+  .lp-rail-track, .lp-rail { position: absolute; }
+  .lp-rail-track { background: var(--lp-rule); }
+  .lp-rail { background: var(--color-signal); transform-origin: left top; }
+  [data-reveal] .lp-rail { transition: transform 1600ms var(--lp-ease-in-out); }
+  [data-reveal="armed"] .lp-rail { transform: scaleY(0); }
+  @media (min-width: 1024px) { [data-reveal="armed"] .lp-rail { transform: scaleX(0); } }
+  .lp-stop { background: var(--color-signal); color: var(--color-signal-ink); border: 2px solid var(--color-signal); }
+  [data-reveal] .lp-stop, [data-reveal] .lp-stop-copy { transition: background-color 400ms ease, color 400ms ease, border-color 400ms ease, opacity 600ms var(--lp-ease-out-expo), transform 700ms var(--lp-ease-out-expo); transition-delay: calc(250ms + var(--i, 0) * 380ms); }
+  [data-reveal="armed"] .lp-stop { background: var(--color-canvas); border-color: var(--color-line-strong); color: var(--color-faint); }
+  [data-reveal="armed"] .lp-stop-copy { opacity: 0; transform: translateY(10px); }
+
+  /* Before / after */
+  .lp-compare { position: relative; display: grid; border-radius: 16px; border: 1px solid var(--lp-rule); background: var(--color-terminal); overflow: hidden; touch-action: pan-y; cursor: ew-resize; }
+  .lp-compare-pane { grid-area: 1 / 1; position: relative; padding: 3rem 1rem 1.25rem; background: var(--color-terminal); }
+  @media (min-width: 640px) { .lp-compare-pane { padding: 3.25rem 1.5rem 1.5rem; } }
+  .lp-compare-top { background: color-mix(in srgb, var(--color-bad) 5%, var(--color-terminal)); }
+  .lp-compare-tag { position: absolute; top: 1rem; right: 1rem; margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.01em; }
+  .lp-compare-top .lp-compare-tag { left: 1rem; right: auto; }
+  .lp-compare-rule { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--color-signal); pointer-events: none; }
+  .lp-compare-handle {
+    position: absolute; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px;
+    display: grid; place-items: center; border-radius: 999px;
+    background: var(--color-signal); color: var(--color-signal-ink);
+    box-shadow: 0 8px 20px -6px rgb(0 0 0 / 0.7);
+    touch-action: none; cursor: ew-resize;
+    transition: transform var(--motion-fast);
+  }
+  .lp-compare.is-dragging .lp-compare-handle, .lp-compare-handle:hover { transform: scale(1.08); }
+  .lp-compare-handle:focus-visible { outline: 3px solid var(--color-ink); outline-offset: 3px; border-radius: 999px; }
+
+  /* Click → success: a button that morphs into its result */
+  .lp-morph {
+    position: relative; isolation: isolate; overflow: hidden;
+    display: inline-flex; align-items: center; min-height: 2.75rem; min-width: 13.5rem; padding: 0 1.1rem;
+    border-radius: 12px; font-weight: 600; font-size: 14px;
+    background: var(--color-signal); color: var(--color-signal-ink);
+    transition: background-color 400ms ease, color 400ms ease, border-radius 500ms var(--lp-ease-out-expo);
+  }
+  .lp-morph[data-phase="idle"]:hover { background: var(--color-signal-soft); }
+  .lp-morph[data-phase="running"] { background: var(--color-raised-2); color: var(--color-ink); cursor: progress; }
+  .lp-morph[data-phase="done"] { background: color-mix(in srgb, var(--color-ok) 16%, var(--color-surface)); color: var(--color-ok); border-radius: 999px; cursor: default; }
+  .lp-morph-fill { position: absolute; inset: 0; z-index: -1; background: color-mix(in srgb, var(--color-signal) 45%, var(--color-raised-2)); transform: scaleX(0); transform-origin: left; }
+  .lp-morph[data-phase="running"] .lp-morph-fill { transform: scaleX(1); transition: transform 1600ms var(--lp-ease-in-out); }
+  .lp-morph-label { display: inline-flex; align-items: center; gap: 0.5rem; margin-inline: auto; }
+  .lp-check { stroke-dasharray: 1; stroke-dashoffset: 1; animation: lp-draw 420ms 80ms var(--lp-ease-out-expo) forwards; }
+
+  /* Us vs them */
+  .lp-vs { width: 100%; border-collapse: collapse; }
+  .lp-vs th, .lp-vs td { text-align: left; vertical-align: top; padding: 1.1rem 1rem; border-top: 1px solid var(--lp-rule); line-height: 1.55; }
+  .lp-vs thead th { border-top: 0; padding-top: 0; font-size: 13px; font-weight: 600; color: var(--color-muted); }
+  .lp-vs thead th.is-us { color: var(--color-signal); }
+  .lp-vs tbody th { font-weight: 600; color: var(--color-ink); width: 22%; }
+  .lp-vs td.is-us { color: var(--color-ink); background: color-mix(in srgb, var(--color-signal) 6%, transparent); }
+  .lp-vs td.is-them { color: var(--color-muted); }
+  @media (max-width: 767px) {
+    .lp-vs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .lp-vs tr { display: block; border-top: 1px solid var(--lp-rule); padding: 1rem 0; }
+    .lp-vs th, .lp-vs td { display: block; border: 0; padding: 0.35rem 0; width: auto; }
+    .lp-vs tbody th { font-size: 16px; padding-bottom: 0.6rem; }
+    .lp-vs td::before { content: attr(data-label); display: block; font-size: 12px; font-weight: 600; color: var(--color-faint); margin-bottom: 0.15rem; }
+    .lp-vs td.is-us { padding: 0.6rem 0.75rem; border-radius: 10px; margin-top: 0.4rem; }
+    .lp-vs td.is-us::before { color: var(--color-signal); }
+  }
+
+  /* FAQ (native details/summary) */
+  .lp-faq summary { list-style: none; }
+  .lp-faq summary::-webkit-details-marker { display: none; }
+  .lp-faq .lp-faq-icon { transition: transform 300ms var(--lp-ease-out-expo); }
+  .lp-faq[open] .lp-faq-icon { transform: rotate(45deg); }
+  .lp-faq[open] .lp-faq-body { animation: lp-faq-open 360ms var(--lp-ease-out-expo) both; }
+
+  /* Hero backdrop: the live chrome field (hero-field.tsx) over a still fallback. */
+  .lp-hero { position: relative; isolation: isolate; }
+  .lp-hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none;
+    background: radial-gradient(60% 50% at 78% 18%, color-mix(in srgb, var(--brand-gold) 10%, transparent), transparent 70%), radial-gradient(45% 40% at 95% 55%, color-mix(in srgb, var(--brand-crimson) 12%, transparent), transparent 70%);
+  }
+  .lp-field {
+    position: absolute; left: 0; top: 0; z-index: -1; width: 100%; height: min(100%, 980px); pointer-events: none;
+    opacity: 0; transition: opacity 1600ms var(--lp-ease-out-expo);
+    -webkit-mask-image: linear-gradient(#000 45%, transparent 96%); mask-image: linear-gradient(#000 45%, transparent 96%);
+  }
+  .lp-field[data-ready] { opacity: 1; }
+
+  /* Metal type: chrome for the line that stays, gold for the word that turns, each with a sheen. */
+  .lp-chrome, .lp-gold {
+    -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
+    background-size: 250% 100%; animation: lp-sheen 10s linear infinite;
+  }
+  .lp-chrome { background-image: linear-gradient(100deg, #8e949d 0%, #f5f6f8 16%, #a7adb6 30%, #ffffff 44%, #7d838c 58%, #dfe2e6 76%, #9aa0a9 100%); }
+  .lp-gold { background-image: linear-gradient(100deg, #a87d25 0%, #f6df9b 18%, #c99a35 34%, #fff1c4 48%, #b88a2c 62%, #f0d58a 80%, #a87d25 100%); }
+  .lp-gold { padding-right: 0.04em; }
+
+  /* Reading progress under the header: gold into crimson, driven by the scroll itself. */
+  .lp-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; transform-origin: left; transform: scaleX(0); background: linear-gradient(90deg, var(--brand-gold-deep), var(--brand-gold-hi) 55%, var(--brand-crimson-lit)); }
+  @supports (animation-timeline: scroll()) { .lp-progress { animation: lp-progress linear both; animation-timeline: scroll(root); } }
+
+  /* The logo builds itself once: the keep rises, the gold bar slides home. */
+  .ek-intro .ek-body { transform-box: fill-box; animation: ek-rise 900ms var(--lp-ease-out-expo) 150ms both; }
+  .ek-intro .ek-bar { transform-box: fill-box; animation: ek-slide 1100ms var(--lp-ease-out-expo) 600ms both; }
+
+  /* The accent band */
+  .lp-band {
+    position: relative; isolation: isolate; overflow: hidden; color: var(--lp-band-ink);
+    background: radial-gradient(120% 140% at 15% 0%, var(--brand-crimson) 0%, var(--lp-band) 45%, var(--brand-obsidian) 100%);
+  }
+  /* A slow light sweep across the band. */
+  .lp-band::before {
+    content: ""; position: absolute; inset: -40% -10%; z-index: -1; pointer-events: none;
+    background: linear-gradient(105deg, transparent 40%, color-mix(in srgb, var(--brand-gold-hi) 16%, transparent) 50%, transparent 60%);
+    animation: lp-sweep 9s var(--lp-ease-in-out) infinite;
+  }
+  .lp-band :focus-visible { outline-color: var(--lp-band-ink); }
+  .lp-band ::selection { background: var(--lp-band-ink); color: var(--lp-band); }
+}
+
+@keyframes lp-glint { 0%, 72% { transform: translateX(-130%); } 100% { transform: translateX(130%); } }
+@keyframes lp-sweep { from { transform: translateX(-60%); } to { transform: translateX(60%); } }
+@keyframes lp-sheen { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes lp-progress { to { transform: scaleX(1); } }
+@keyframes ek-rise { from { clip-path: inset(100% 0 0 0); transform: translateY(18%); } to { clip-path: inset(0); transform: none; } }
+@keyframes ek-slide { from { opacity: 0; transform: translateX(-60%); } to { opacity: 1; transform: none; } }
+@keyframes lp-enter { from { opacity: 0; transform: translateY(22px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes lp-enter-mock { from { opacity: 0; transform: translateY(48px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes lp-word-in { from { transform: translateY(105%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes lp-scene-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes lp-ping-in { from { opacity: 0; transform: translateY(14px) scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes lp-ping-out { to { opacity: 0; transform: translateY(-6px); } }
+@keyframes lp-bar-in { from { transform: scaleY(0.05); } to { transform: none; } }
+@keyframes lp-draw { to { stroke-dashoffset: 0; } }
+@keyframes lp-faq-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* Reduced motion: the rule above already shortens every animation; also drop the delays so nothing
+   waits hidden, and skip the scroll entrances outright (JS never arms them in this mode either). */
+@media (prefers-reduced-motion: reduce) {
+  .lp-enter, .lp-enter-mock, .lp-check { animation-delay: 0ms !important; }
+  [data-reveal] .lp-rv, [data-reveal] .lp-tile, [data-reveal] .lp-rail, [data-reveal] .lp-stop, [data-reveal] .lp-stop-copy { transition: none !important; }
+  .lp-cursor { display: none; }
 }

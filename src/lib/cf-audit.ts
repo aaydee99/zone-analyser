@@ -278,9 +278,10 @@ function zoneEvents(zones: ZoneRow[] | null, changes: CfChange[], accountId: str
 
 /**
  * Audit-log changes for one stored Cloudflare credential, or for every stored one
- * (credentialId "all"; credentials for the same account are read once).
+ * (credentialId "all"; credentials for the same account are read once) — optionally only for one
+ * Cloudflare account (accountId), whichever credential can read it.
  */
-export async function cloudflareAudit(credentialId: string, period: { range: CfRange; since: Date; before: Date }): Promise<CfAuditReport> {
+export async function cloudflareAudit(credentialId: string, period: { range: CfRange; since: Date; before: Date }, onlyAccount?: string): Promise<CfAuditReport> {
   const options = (await listCredentialOptions()).filter((o) => o.kind === 'cloudflare');
   const chosen = credentialId === 'all' ? options : options.filter((o) => o.id === credentialId);
   if (!chosen.length) throw new HttpError(credentialId === 'all' ? 409 : 404, credentialId === 'all' ? 'No Cloudflare credentials are stored yet' : 'Credential not found');
@@ -294,11 +295,12 @@ export async function cloudflareAudit(credentialId: string, period: { range: CfR
   for (const o of chosen) {
     const c = await credentialForRun(o.id, 'cloudflare');
     try {
-      for (const a of await tokenAccounts(c)) targets.push({ c, o, accountId: a.id, accountName: a.name });
+      for (const a of await tokenAccounts(c)) if (!onlyAccount || a.id === onlyAccount) targets.push({ c, o, accountId: a.id, accountName: a.name });
     } catch (err) {
       accounts.push({ accountId: '', accountName: '', credentialName: o.name, count: 0, truncated: false, error: err instanceof Error ? err.message : 'Could not list the accounts of this token' });
     }
   }
+  if (onlyAccount && !targets.length && !accounts.some((a) => a.error)) throw new HttpError(404, 'No stored credential can read that Cloudflare account');
   for (const { c, o, accountId, accountName: knownName } of targets) {
     if (seen.has(accountId)) continue;
     seen.add(accountId);

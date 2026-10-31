@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ArrowLeft, Network, RefreshCw, Search, ShieldAlert, X } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import { CACHED_STATUSES, MANAGED_RULESETS, MITIGATING_ACTIONS, OWASP_ANOMALY_RULE, OWASP_RULESET, SECURITY_VIEWS, type DatasetDetail, type DetailView, type DetailFilter, type DetailRow, type FirewallEvent, type ZoneDetail, type ZoneDetailPending } from '@/lib/traffic-types';
-import { Alert, Badge, Button, Card, Modal, SectionHeader, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, Loading, Modal, SectionHeader, Skeleton, SkeletonChart, SkeletonTable, cx } from '@/components/ui';
 import { bytes, dayLabel, num, pct, whole } from './format';
 
 // One zone's (or account's) security events and requests (see src/lib/traffic-security.ts). Any card, bar, IP,
@@ -59,9 +59,10 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
     setBusy(true); setError(''); setPending(null); setD(null);
     void (async () => {
       try {
-        // Every load reads Cloudflare; the polls name the read they wait for.
+        // The server always reads Cloudflare; this tab reuses a finished read until Refresh. The polls name the read they wait for.
         for (let job = ''; ;) {
-          const r = await api<ZoneDetail | ZoneDetailPending>(`/api/traffic/detail?${qs}${job ? `&job=${encodeURIComponent(job)}` : ''}`);
+          // Refresh reads again; otherwise a read another page already made is used.
+          const r = await api<ZoneDetail | ZoneDetailPending>(`/api/traffic/detail?${qs}${job ? `&job=${encodeURIComponent(job)}` : ''}`, { fresh: refresh > 0 && !job });
           if (mine !== seq.current) return;
           if (!r || typeof r !== 'object') throw new Error('The console sent an empty answer');
           if (!('pending' in r)) {
@@ -88,19 +89,25 @@ function useDetail(t: Target, filter: DetailFilter | null, refresh: number) {
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
+/** While a section is read: how far it got, over the shape of what is coming (nothing is drawn until all of it is in). */
 function Reading({ what, pending }: { what: string; pending: ZoneDetailPending | null }) {
+  const share = pending && pending.total > 0 ? Math.min(100, (pending.done / pending.total) * 100) : null;
   return (
-    <div className="py-8 text-center text-sm text-muted">
-      <RefreshCw className="mx-auto mb-3 size-5 animate-spin text-faint" />
-      Reading {what} from Cloudflare…
-      {pending && pending.total > 0 && (
-        <div className="mx-auto mt-3 max-w-xs">
-          <div className="h-1.5 overflow-hidden rounded-full bg-raised"><div className="h-full rounded-full bg-signal transition-all" style={{ width: `${Math.min(100, (pending.done / pending.total) * 100)}%` }} /></div>
-          <div className="mt-1 text-xs tabular-nums text-faint">{pending.done} of {pending.total} queries done</div>
+    <Loading label={`Reading ${what} from Cloudflare`} className="space-y-6">
+      <div className="text-xs text-muted">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <span>Reading {what} from Cloudflare…</span>
+          {pending && pending.total > 0 && <span className="tabular-nums text-faint">{pending.done} of {pending.total} queries</span>}
         </div>
-      )}
-      {pending?.note && <div className="mx-auto mt-2 max-w-md text-xs text-warn">{pending.note}</div>}
-    </div>
+        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">
+          <div className={cx('h-full rounded-full bg-signal transition-all', share === null && 'progress-live w-1/3')} style={share !== null ? { width: `${Math.max(4, share)}%` } : undefined} />
+        </div>
+        {pending?.note && <div className="mt-2 text-warn">{pending.note}</div>}
+      </div>
+      <div className="flex flex-wrap gap-8">{[0, 1, 2].map((i) => <div key={i} className="space-y-2"><Skeleton className="h-3 w-24" /><Skeleton className="h-7 w-20" /></div>)}</div>
+      <SkeletonChart />
+      <SkeletonTable rows={5} cols={5} />
+    </Loading>
   );
 }
 
@@ -210,7 +217,7 @@ function TimeChart({ b, label, onPick, split }: { b: Record<string, DetailRow[]>
             style={{ left: `${((hover + 0.5) / rows.length) * 100}%`, transform: `translateX(${hover < rows.length / 3 ? '-10%' : hover > (rows.length * 2) / 3 ? '-90%' : '-50%'})` }}>
             <span className="text-muted">{alias === 'daily' ? dayLabel(h.dims[key]) : `${dayLabel(h.dims[key])} ${timeLabel(alias, h.dims[key])}`}</span>{' '}
             <span className="tabular-nums text-ink">{num(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
-            {split && <div className="text-[11px]">{partsAt(h.dims[key]).map((n, k) => <span key={k} className="mr-2"><span className="text-muted">{split.parts[k].label}</span> <span className="tabular-nums text-ink">{num(n)}</span></span>)}</div>}
+            {split && <div className="mt-0.5 text-[11px]">{partsAt(h.dims[key]).map((n, k) => <span key={k} className="mr-2.5 inline-flex items-center gap-1"><span className={cx('size-2 rounded-sm', split.parts[k].dot)} /><span className="text-muted">{split.parts[k].label}</span> <span className="tabular-nums text-ink">{num(n)}</span></span>)}</div>}
             {clickable && <div className="text-[10.5px] text-faint">Click for this {PER[alias]}&apos;s detail</div>}
           </div>
         )}
@@ -787,7 +794,7 @@ export function EventsChart({ target }: { target?: Target }) {
   const d = useLoadedDetail(target);
   const open = useOpenDetail();
   if (!target) return null;
-  if (!d) return <p className="text-xs text-faint">Security events per day: reading…</p>;
+  if (!d) return <Loading label="Reading security events"><SkeletonChart height="h-24" /></Loading>;
   if (d === 'error' || !d.security.available) return null;
   const b = d.security.breakdowns;
   return (

@@ -7,15 +7,15 @@ import { api, duration, fmtDate } from '@/lib/client';
 import type { RestoreOutcome, RestoreRecord } from '@/lib/restore-history';
 import { OutcomeBadge } from '@/components/restore-table';
 import { Terminal } from '@/components/terminal';
-import { Badge, Button, Card, cx } from '@/components/ui';
+import { Badge, Button, Card, Loading, Skeleton, cx } from '@/components/ui';
 
 type Detail = RestoreRecord & { outcome: RestoreOutcome; live: boolean };
 
-function Metric({ label, value, tone }: { label: string; value: React.ReactNode; tone?: 'ok' | 'bad' | 'warn' }) {
+function Metric({ label, value, tone, pending }: { label: string; value: React.ReactNode; tone?: 'ok' | 'bad' | 'warn'; pending?: boolean }) {
   return (
     <div className="px-5 py-4">
       <div className="eyebrow">{label}</div>
-      <div className={cx('mt-1.5 text-xl font-semibold tabular-nums', tone === 'ok' && 'text-ok', tone === 'bad' && 'text-bad', tone === 'warn' && 'text-warn')}>{value}</div>
+      {pending ? <Skeleton className="mt-2.5 h-5 w-16" /> : <div className={cx('mt-1.5 text-xl font-semibold tabular-nums', tone === 'ok' && 'text-ok', tone === 'bad' && 'text-bad', tone === 'warn' && 'text-warn')}>{value}</div>}
     </div>
   );
 }
@@ -47,7 +47,7 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
     return (
       <div className="py-20 text-center">
         <h1 className="text-xl font-semibold">Restore not found</h1>
-        <Link href="/restore/history" className="mt-3 inline-block text-sm text-signal hover:underline">Back to restore history</Link>
+        <Link href="/console/restore/history" className="mt-3 inline-block text-sm text-signal hover:underline">Back to restore history</Link>
       </div>
     );
   }
@@ -58,10 +58,12 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
 
   return (
     <div className="rise">
-      <Link href="/restore/history" className="mb-5 inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink"><ArrowLeft className="size-3.5" /> Restore history</Link>
+      <Link href="/console/restore/history" className="mb-5 inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink"><ArrowLeft className="size-3.5" /> Restore history</Link>
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
+        {!r ? (
+          <Loading label="Loading restore" className="space-y-3 py-1"><Skeleton className="h-7 w-56" /><Skeleton className="h-3 w-96 max-w-full" /></Loading>
+        ) : <div>
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-[24px] font-semibold tracking-[-0.02em]">{r?.zone.name || 'Restore'}</h1>
             {r && <OutcomeBadge outcome={r.outcome} />}
@@ -69,12 +71,12 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
           <p className="mt-1.5 font-mono text-xs text-muted">
             {r?.legacy ? 'from the audit log' : id} · started {fmtDate(r?.createdAt)}{r?.createdBy ? ` by ${r.createdBy}` : ''}{r && ended ? ` · ${duration(r.createdAt, ended)}` : ''}
           </p>
-        </div>
+        </div>}
         <div className="flex gap-2">
           {r?.live && (r.outcome === 'running' || r.outcome === 'open') && (
-            <Link href="/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{running ? 'Watch live' : 'Continue in New restore'}</Button></Link>
+            <Link href="/console/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{running ? 'Watch live' : 'Continue in New restore'}</Button></Link>
           )}
-          <Link href="/restore/new"><Button icon={<RotateCcw className="size-4" />}>New restore</Button></Link>
+          <Link href="/console/restore/new"><Button icon={<RotateCcw className="size-4" />}>New restore</Button></Link>
         </div>
       </div>
 
@@ -85,11 +87,11 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
             style={{ width: `${r?.appliedAt || r?.outcome === 'failed' ? 100 : r?.plan ? 66 : r ? 33 : 0}%` }} />
         </div>
         <div className="grid grid-cols-2 divide-line sm:grid-cols-3 lg:grid-cols-5 lg:divide-x">
-          <Metric label="Audit-log changes" value={r?.legacy ? '—' : r?.auditChanges ?? '—'} />
-          <Metric label="Mode" value={r?.scan ? 'Everything' : r?.legacy ? '—' : 'Changes'} />
-          <Metric label="Planned changes" value={r?.plan ? changes.length : '—'} />
-          <Metric label="Applied" value={r?.appliedAt ? fmtDate(r.appliedAt) : '—'} tone={r?.appliedAt ? 'ok' : r?.outcome === 'failed' ? 'bad' : undefined} />
-          <Metric label="Verified" value={r?.verified === null || r?.verified === undefined ? '—' : r.verified ? 'Matches backup' : 'Differences'} tone={r?.verified === true ? 'ok' : r?.verified === false ? 'warn' : undefined} />
+          <Metric pending={!r} label="Audit-log changes" value={r?.legacy ? '—' : r?.auditChanges ?? '—'} />
+          <Metric pending={!r} label="Mode" value={r?.scan ? 'Everything' : r?.legacy ? '—' : 'Changes'} />
+          <Metric pending={!r} label="Planned changes" value={r?.plan ? changes.length : '—'} />
+          <Metric pending={!r} label="Applied" value={r?.appliedAt ? fmtDate(r.appliedAt) : '—'} tone={r?.appliedAt ? 'ok' : r?.outcome === 'failed' ? 'bad' : undefined} />
+          <Metric pending={!r} label="Verified" value={r?.verified === null || r?.verified === undefined ? '—' : r.verified ? 'Matches backup' : 'Differences'} tone={r?.verified === true ? 'ok' : r?.verified === false ? 'warn' : undefined} />
         </div>
       </Card>
 
@@ -101,7 +103,11 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
               <span className="text-sm font-semibold">{r?.appliedAt ? 'Applied plan' : 'Reviewed plan'}</span>
               {r?.plan && <span className="text-xs text-muted">{fmtDate(r.plan.at)}{r.plan.hasDelete ? ' · has deletions' : ''}{r.plan.hasReplace ? ' · has replacements' : ''}</span>}
             </div>
-            {!r?.plan ? <p className="px-5 py-4 text-[13px] text-muted">No plan was made for this restore.</p>
+            {!r ? (
+              <Loading label="Loading the plan" className="divide-y divide-line/60">
+                {[60, 48, 70].map((w) => <div key={w} className="flex items-center gap-3 px-5 py-3"><Skeleton className="h-5 w-14" /><Skeleton className="h-3" style={{ width: `${w}%` }} /></div>)}
+              </Loading>
+            ) : !r.plan ? <p className="px-5 py-4 text-[13px] text-muted">No plan was made for this restore.</p>
               : !changes.length ? <p className="px-5 py-4 text-[13px] text-muted">The plan had no changes: the zone already matched the backup.</p> : (
                 <ul className="divide-y divide-line/60">
                   {changes.map((c) => {
@@ -122,7 +128,12 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
         <div className="space-y-4">
           <Card>
             <div className="border-b border-line px-5 py-3.5 text-sm font-semibold">Steps</div>
-            <ol className="space-y-3 px-5 py-4 text-[13px]">
+            {!r && (
+              <Loading label="Loading steps" className="space-y-3 px-5 py-4">
+                {[0, 1, 2].map((i) => <div key={i} className="flex gap-3"><Skeleton className="size-4 shrink-0 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-1/2" /></div></div>)}
+              </Loading>
+            )}
+            <ol className={cx('space-y-3 px-5 py-4 text-[13px]', !r && 'hidden')}>
               {(r?.steps ?? []).map((s, i) => {
                 const bad = /failed/i.test(s.step);
                 const good = /^Applied/.test(s.step);
@@ -142,7 +153,12 @@ export default function RestoreDetail({ params }: { params: Promise<{ id: string
           </Card>
           <Card>
             <div className="border-b border-line px-5 py-3.5 text-sm font-semibold">Backup</div>
-            <dl className="space-y-2.5 px-5 py-4 text-[13px]">
+            {!r && (
+              <Loading label="Loading backup details" className="space-y-2.5 px-5 py-4">
+                {[0, 1, 2, 3, 4].map((i) => <div key={i} className="flex justify-between gap-3 py-0.5"><Skeleton className="h-3 w-16" /><Skeleton className="h-3 w-28" /></div>)}
+              </Loading>
+            )}
+            <dl className={cx('space-y-2.5 px-5 py-4 text-[13px]', !r && 'hidden')}>
               {r && ([
                 ['Folder', r.source.folder || '—'],
                 ['Taken', r.source.backupTime ? fmtDate(r.source.backupTime) : '—'],

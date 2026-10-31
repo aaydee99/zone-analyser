@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError, copyText, relTime } from '@/lib/client';
 import { KIND_ORDER, KINDS, STORAGE_LABEL, groupKey, type CredentialKind, type CredentialSummary, type FieldDef, type StorageKind } from '@/lib/kinds';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, cx } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 import { PasswordStrength } from '@/components/auth-frame';
@@ -353,13 +353,28 @@ function VaultContents({ onLocked, header }: { onLocked: () => void; header: Rea
           if (k !== 'all' && KINDS[k].legacy && !n) return null; // legacy filters only while some exist
           return (
             <button key={k} onClick={() => setFilter(k)} className={cx('rounded-lg border px-3 py-1.5 text-[13px] transition-colors', filter === k ? 'border-line-strong bg-raised text-ink' : 'border-transparent text-muted hover:text-ink-2')}>
-              {k === 'all' ? 'All' : KINDS[k].short} <span className="ml-1 font-mono text-[11px] text-faint">{n}</span>
+              {k === 'all' ? 'All' : KINDS[k].short} {creds ? <span className="ml-1 font-mono text-[11px] text-faint">{n}</span> : <Skeleton className="ml-1 !inline-block h-2.5 w-3 align-middle" />}
             </button>
           );
         })}
       </div>
 
-      {creds && shown.length === 0 ? (
+      {!creds ? (
+        <Loading label="Loading credentials" className="grid gap-4 md:grid-cols-2">
+          {[0, 1].map((i) => (
+            <Card key={i} className="flex flex-col">
+              <div className="flex items-start gap-3 border-b border-line px-5 py-4">
+                <Skeleton className="size-9 shrink-0 rounded-lg" />
+                <div className="flex-1 space-y-2 pt-0.5"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-28" /></div>
+              </div>
+              <div className="flex-1 space-y-3 px-5 py-4">
+                {[0, 1, 2, 3].map((j) => <div key={j} className="grid grid-cols-[130px_1fr] items-center gap-3"><Skeleton className="h-3 w-20" /><Skeleton className="h-3 w-3/4" /></div>)}
+              </div>
+              <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-3"><Skeleton className="h-3 w-24" /><Skeleton className="h-6 w-32" /></div>
+            </Card>
+          ))}
+        </Loading>
+      ) : shown.length === 0 ? (
         <Card>
           <EmptyState
             icon={<KeyRound className="size-5" />}
@@ -617,7 +632,14 @@ export default function VaultPage() {
       </Card>
     );
   }
-  if (!status) return <p className="text-sm text-muted">Checking the vault…</p>;
+  if (!status) {
+    return (
+      <Loading label="Checking the vault" className="space-y-3">
+        <Skeleton className="h-3 w-24" /><Skeleton className="h-8 w-56" /><Skeleton className="h-3 w-[32rem] max-w-full" />
+        <Skeleton className="!mt-8 h-40 w-full max-w-lg rounded-xl" />
+      </Loading>
+    );
+  }
   if (!status.unlocked) return <VaultGate status={status} onDone={load} />;
 
   const lock = async () => { await api('/api/vault/lock', { method: 'POST' }).catch(() => {}); load(); };

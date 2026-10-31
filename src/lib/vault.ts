@@ -105,6 +105,7 @@ function parseKey(raw: string, where: string): Buffer {
 
 /** How long a server instance reuses the key it read; a key changed in Supabase is picked up after this. */
 const SERVER_KEY_TTL_MS = 30_000;
+const SERVER_KEY_STALE_MS = 10 * 60_000;
 const gk = globalThis as unknown as { __vaultServerKey?: { key: Buffer; at: number } };
 
 /**
@@ -117,6 +118,18 @@ async function serverKey(): Promise<Buffer> {
   if (inline) return parseKey(inline, 'VAULT_SERVER_KEY');
   const hit = gk.__vaultServerKey;
   if (hit && Date.now() - hit.at < SERVER_KEY_TTL_MS) return Buffer.from(hit.key);
+  // Older: used at once, and read again in the background (a rotated key is picked up within moments).
+  if (hit && Date.now() - hit.at < SERVER_KEY_STALE_MS) { void loadServerKey().catch(() => {}); return Buffer.from(hit.key); }
+  return loadServerKey();
+}
+
+let keyLoading: Promise<Buffer> | null = null;
+function loadServerKey(): Promise<Buffer> {
+  return (keyLoading ??= readServerKey().finally(() => { keyLoading = null; }));
+}
+
+async function readServerKey(): Promise<Buffer> {
+  const hit = gk.__vaultServerKey;
   const read = async () => {
     const { data, error } = await db().from('vault_keys').select('server_key').eq('id', 1).maybeSingle();
     if (error) {

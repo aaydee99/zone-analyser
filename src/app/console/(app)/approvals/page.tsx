@@ -7,7 +7,7 @@ import { api, fmtDate, relTime } from '@/lib/client';
 import type { Approval, ApprovalKind, ApprovalStatus } from '@/lib/approvals-store';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonTable } from '@/components/ui';
 
 const STATUS: Record<ApprovalStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'info' | 'neutral' | 'signal' }> = {
   pending: { label: 'Waiting', tone: 'signal' },
@@ -30,7 +30,7 @@ const left = (iso?: string) => {
   return m < 1 ? 'less than a minute left' : `${m} min left`;
 };
 
-const link = (a: Approval) => (a.runId ? { href: `/runs/${a.runId}`, label: 'Open the run' } : a.restore && a.status === 'approved' ? { href: `/restore/history/${a.restore.restoreId}`, label: 'Open the restore' } : null);
+const link = (a: Approval) => (a.runId ? { href: `/console/runs/${a.runId}`, label: 'Open the run' } : a.restore && a.status === 'approved' ? { href: `/console/restore/history/${a.restore.restoreId}`, label: 'Open the restore' } : null);
 
 export default function ApprovalsPage() {
   const toast = useToast();
@@ -70,6 +70,16 @@ export default function ApprovalsPage() {
         description="Operator backups wait for an admin or super admin. Admin restore applies wait for a super admin. Approving starts the backup or the apply at once; every request and decision is in the audit log." />
 
       <h2 className="mb-3 text-[15px] font-semibold">Waiting {pending.length > 0 && <span className="ml-1 font-mono text-xs text-faint">{pending.length}</span>}</h2>
+      {!list && (
+        <Loading label="Loading approvals" className="mb-8">
+          <Card className="px-5 py-4">
+            <div className="flex gap-3">
+              <Skeleton className="size-10 shrink-0 rounded-xl" />
+              <div className="flex-1 space-y-2 pt-0.5"><Skeleton className="h-4 w-64 max-w-full" /><Skeleton className="h-3 w-48" /></div>
+            </div>
+          </Card>
+        </Loading>
+      )}
       {list && !pending.length && (
         <Card className="mb-6"><EmptyState icon={<ShieldCheck className="size-5" />} title="Nothing is waiting" description="Requests to approve appear here, and so do your own requests until someone decides them." /></Card>
       )}
@@ -124,7 +134,8 @@ export default function ApprovalsPage() {
 
       <Card>
         <div className="border-b border-line px-5 py-4"><h2 className="text-[15px] font-semibold">Decided</h2></div>
-        {list && !decided.length ? <p className="px-5 py-5 text-[13px] text-muted">No decisions yet.</p> : (
+        {!list ? <Loading label="Loading decided requests"><SkeletonTable rows={4} cols={4} className="!rounded-none !border-0" /></Loading>
+          : !decided.length ? <p className="px-5 py-5 text-[13px] text-muted">No decisions yet.</p> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-[13px]">
               <thead>

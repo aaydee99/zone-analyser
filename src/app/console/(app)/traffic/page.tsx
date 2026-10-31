@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { BarChart3, ChevronRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { DetailFilter, StatusClass, TrafficCountry, TrafficDay, TrafficPending, TrafficReport, TrafficSlice, TrafficTotals, TrafficZone } from '@/lib/traffic-types';
-import { Alert, Badge, Button, Card, EmptyState, PageHeader, SectionHeader, Stat, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Loading, PageHeader, SectionHeader, Skeleton, SkeletonChart, SkeletonStats, SkeletonTable, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { zoneList as loadZoneList } from '@/lib/zone-list-client';
@@ -58,15 +58,16 @@ function Totals({ s, month, partial, target }: { s: TrafficSlice; month: string;
   const detail = useLoadedDetail(target);
   const sec = detail && detail !== 'error' ? detail.security : null;
   const mitigated = sec?.breakdowns.actions ? sec.breakdowns.actions.filter((r) => MITIGATING_ACTIONS.includes(r.dims.action)).reduce((n, r) => n + r.count, 0) : null;
-  const origin = t.requests - t.cachedRequests, originBytes = t.bytes - t.cachedBytes;
+  // Like the chart: what is neither a threat (stopped by Cloudflare) nor served from cache.
+  const origin = Math.max(0, t.requests - t.cachedRequests - t.threats), originBytes = Math.max(0, t.bytes - t.cachedBytes);
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       <OpenCard label="Requests" onOpen={go('Requests', 'requests')}><Stat label="Requests" value={num(t.requests)} sub={<Change now={t.requests} before={p?.requests} month={month} />} /></OpenCard>
       <OpenCard label="Bandwidth" onOpen={go('Bandwidth', 'requests', 'bytes')}><Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} /></OpenCard>
       <OpenCard label="Served from cache" onOpen={go('Served from cache', 'requests', 'cache')}><Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} /></OpenCard>
-      <OpenCard label="Served by origin" onOpen={go('Served by origin', 'requests', 'origin')}><Stat label="Served by origin" value={num(origin)} sub={<span>{pct(origin, t.requests)} · {bytes(originBytes)} <Change now={origin} before={p ? p.requests - p.cachedRequests : undefined} month={month} /></span>} /></OpenCard>
+      <OpenCard label="Served by origin" onOpen={go('Served by origin', 'requests', 'origin')}><Stat label="Served by origin" value={num(origin)} sub={<span>{pct(origin, t.requests)} · {bytes(originBytes)} <Change now={origin} before={p ? Math.max(0, p.requests - p.cachedRequests - p.threats) : undefined} month={month} /></span>} /></OpenCard>
       <OpenCard label="Threats" onOpen={go('Threats', 'security', 'threats')}><Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} /></OpenCard>
-      <OpenCard label="Mitigated" onOpen={go('Mitigated', 'security', 'threats')}><Stat label="Mitigated" value={mitigated !== null ? num(mitigated) : sec || detail === 'error' ? '—' : '…'}
+      <OpenCard label="Mitigated" onOpen={go('Mitigated', 'security', 'threats')}><Stat label="Mitigated" value={mitigated !== null ? num(mitigated) : sec || detail === 'error' ? '—' : <Skeleton className="h-7 w-20" />}
         sub={<span>{mitigated !== null ? `${pct(mitigated, sec!.total)} of security events` : sec ? (sec.message ?? 'Not available') : detail === 'error' ? 'Security events could not be read' : 'Reading security events…'}</span>} /></OpenCard>
       <OpenCard label="Page views" onOpen={go('Page views', 'requests', 'pages')}><Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} /></OpenCard>
       <OpenCard label="Visitors" onOpen={go('Visitors', 'requests')}><Stat label="Visitors / day" value={num(perDay(t))} sub={<span title={`Average of the daily unique visitors${vs}`}>daily average</span>} /></OpenCard>
@@ -85,7 +86,14 @@ function fillDays(daily: TrafficDay[], since: string, until: string): TrafficDay
   return out;
 }
 
-/** Requests per day: served from cache (orange) on top of those that went to the origin (grey). */
+/** What each day's bar is made of: threats (stopped by Cloudflare), served from cache, and served by the origin. */
+const parts = (d: TrafficDay) => {
+  const threats = Math.min(d.threats, d.requests);
+  const cached = Math.min(d.cachedRequests, d.requests - threats);
+  return { threats, cached, origin: Math.max(0, d.requests - cached - threats) };
+};
+
+/** Requests per day, one bar each: threats (red) on top of served from cache (blue) and served by the origin (grey). */
 function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; since: string; until: string; target?: Target }) {
   const days = useMemo(() => fillDays(daily, since, until), [daily, since, until]);
   const open = useOpenDetail();
@@ -97,6 +105,7 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
         <span className="font-medium text-ink-2">Requests per day</span>{target && <span className="text-faint">click a bar for that day&apos;s detail</span>}
+        <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-bad" />Threats</span>
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-signal" />From cache</span>
         <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-faint" />From origin</span>
       </div>
@@ -106,15 +115,16 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
         <span className="pointer-events-none absolute top-0 right-0 -translate-y-full pb-0.5 text-[10.5px] text-faint tabular-nums">{num(max)}</span>
         <div className="flex h-40 items-end gap-[2px] border-b border-line-strong pt-1" onMouseLeave={() => setHover(null)}>
           {days.map((d, i) => {
-            const origin = Math.max(0, d.requests - d.cachedRequests);
+            const p = parts(d);
             return (
               <button key={d.date} type="button" aria-label={`${dayLabel(d.date)}: ${whole.format(d.requests)} requests`}
                 onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
                 onClick={() => target && open({ t: target, filter: { day: d.date }, label: 'All traffic' })}
                 className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus:outline-none', hover === i && 'bg-raised/60', target && 'cursor-pointer')}>
                 <span className="flex w-full flex-col gap-[2px] overflow-hidden rounded-t-[4px]" style={{ height: `${(d.requests / max) * 100}%` }}>
-                  {d.cachedRequests > 0 && <span className="w-full bg-signal" style={{ flexGrow: d.cachedRequests }} />}
-                  {origin > 0 && <span className="w-full bg-faint" style={{ flexGrow: origin }} />}
+                  {p.threats > 0 && <span className="w-full bg-bad" style={{ flexGrow: p.threats }} />}
+                  {p.cached > 0 && <span className="w-full bg-signal" style={{ flexGrow: p.cached }} />}
+                  {p.origin > 0 && <span className="w-full bg-faint" style={{ flexGrow: p.origin }} />}
                 </span>
               </button>
             );
@@ -125,10 +135,14 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
             style={{ left: `${((hover + 0.5) / days.length) * 100}%`, transform: `translateX(${hover < days.length / 3 ? '-10%' : hover > (days.length * 2) / 3 ? '-90%' : '-50%'})` }}>
             <div className="mb-1 font-medium text-ink">{dayLabel(h.date)}</div>
             <Row k="Requests" v={num(h.requests)} />
-            <Row k="From cache" v={`${num(h.cachedRequests)} (${pct(h.cachedRequests, h.requests)})`} />
-            <Row k="From origin" v={`${num(h.requests - h.cachedRequests)} (${pct(h.requests - h.cachedRequests, h.requests)})`} />
+            {(() => { const p = parts(h); return (
+              <>
+                <Row k={<Key cls="bg-bad">Threats</Key>} v={`${num(p.threats)} (${pct(p.threats, h.requests)})`} />
+                <Row k={<Key cls="bg-signal">From cache</Key>} v={`${num(p.cached)} (${pct(p.cached, h.requests)})`} />
+                <Row k={<Key cls="bg-faint">From origin</Key>} v={`${num(p.origin)} (${pct(p.origin, h.requests)})`} />
+              </>
+            ); })()}
             <Row k="Bandwidth" v={bytes(h.bytes)} />
-            <Row k="Threats" v={num(h.threats)} />
             <Row k="Visitors" v={num(h.uniques)} />
           </div>
         )}
@@ -158,7 +172,9 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
   );
 }
 
-const Row = ({ k, v }: { k: string; v: string }) => <div className="flex justify-between gap-3 text-ink-2"><span className="text-muted">{k}</span><span className="tabular-nums">{v}</span></div>;
+const Row = ({ k, v }: { k: ReactNode; v: string }) => <div className="flex justify-between gap-3 text-ink-2"><span className="text-muted">{k}</span><span className="tabular-nums">{v}</span></div>;
+/** A tooltip label with the colour of its part of the bar. */
+const Key = ({ cls, children }: { cls: string; children: ReactNode }) => <span className="inline-flex items-center gap-1.5"><span className={cx("size-2 rounded-sm", cls)} />{children}</span>;
 
 const STATUS: { k: StatusClass; label: string; cls: string }[] = [
   { k: '2xx', label: '2xx success', cls: 'bg-ok' },
@@ -411,15 +427,27 @@ export default function TrafficPage() {
       {error && <div className="mb-5"><Alert tone="bad" title="Traffic could not be read">{error}</Alert></div>}
 
       {applied && busy && (
-        <Card className={cx('px-5 text-center text-sm text-muted', shown ? 'mb-5 py-4' : 'py-10')}>
-          <RefreshCw className={cx('mx-auto size-5 animate-spin text-faint', shown ? 'mb-2' : 'mb-3')} />
-          Reading {applied.zone ? zoneName(applied.zone) : accountName(applied.account)} for {monthName(applied.month)} from Cloudflare{shown ? ' again' : ''}…
-          {pending && pending.total > 0 && (
-            <div className="mx-auto mt-3 max-w-xs">
-              <div className="h-1.5 overflow-hidden rounded-full bg-raised"><div className="h-full rounded-full bg-signal transition-all" style={{ width: `${Math.min(100, (pending.done / pending.total) * 100)}%` }} /></div>
-              <div className="mt-1 text-xs tabular-nums text-faint">{pending.done} of {pending.total} parts read</div>
+        // How far the read got; with nothing shown yet, over the shape of the month (drawn only once all of it is in).
+        <Card className={cx('px-5', shown ? 'mb-5 py-4' : 'py-5')}>
+          <Loading label={`Reading ${applied.zone ? zoneName(applied.zone) : accountName(applied.account)} from Cloudflare`} className="space-y-5">
+            <div className="text-xs text-muted">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span>Reading {applied.zone ? zoneName(applied.zone) : accountName(applied.account)} for {monthName(applied.month)} from Cloudflare{shown ? ' again' : ''}…</span>
+                {pending && pending.total > 0 && <span className="tabular-nums text-faint">{pending.done} of {pending.total} parts</span>}
+              </div>
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">
+                <div className={cx('h-full rounded-full bg-signal transition-all', !(pending && pending.total > 0) && 'progress-live w-1/3')}
+                  style={pending && pending.total > 0 ? { width: `${Math.max(4, Math.min(100, (pending.done / pending.total) * 100))}%` } : undefined} />
+              </div>
             </div>
-          )}
+            {!shown && (
+              <>
+                <SkeletonStats count={8} />
+                <SkeletonChart bars={30} height="h-40" />
+                <div className="grid gap-5 lg:grid-cols-2"><SkeletonTable rows={4} cols={2} /><SkeletonTable rows={4} cols={3} /></div>
+              </>
+            )}
+          </Loading>
         </Card>
       )}
 

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
-import { DatabaseBackup, Lock } from 'lucide-react';
+import { BRAND } from '@/lib/brand';
+import { Lock } from 'lucide-react';
+import { BrandMark } from './brand-mark';
 
 /** Centered card used by the sign-in and setup screens. */
 export function AuthFrame({ title, description, children, footer, wide }: {
@@ -9,10 +11,10 @@ export function AuthFrame({ title, description, children, footer, wide }: {
     <div className="grid-bg relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
       <div className={`rise relative w-full ${wide ? 'max-w-[560px]' : 'max-w-[420px]'}`}>
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="mb-5 grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-signal-soft to-signal text-signal-ink shadow-[0_10px_30px_-10px_var(--color-signal)]">
-            <DatabaseBackup className="size-7" strokeWidth={2.2} />
+          <div className="mb-5 grid size-14 place-items-center rounded-2xl border border-line-strong/70 bg-terminal shadow-[0_10px_30px_-12px_var(--color-signal)]">
+            <BrandMark className="h-7" />
           </div>
-          <div className="eyebrow mb-2">Backup Console · Cloudflare → Terraform</div>
+          <div className="eyebrow mb-2">{BRAND.name} · {BRAND.tagline}</div>
           <h1 className="text-[24px] font-semibold tracking-[-0.02em]">{title}</h1>
           <div className="mt-2 max-w-[400px] text-sm text-muted">{description}</div>
         </div>

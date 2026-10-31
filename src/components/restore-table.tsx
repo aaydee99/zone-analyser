@@ -45,7 +45,7 @@ export function RestoreTable({ restores }: { restores: RestoreSummary[] }) {
             <tr key={r.id} className="group border-b border-line/60 last:border-0 hover:bg-raised/40">
               <td className="px-5 py-3.5 whitespace-nowrap"><OutcomeBadge outcome={r.outcome} /></td>
               <td className="px-5 py-3.5">
-                <Link href={`/restore/history/${r.id}`} className="block font-medium text-ink hover:text-signal">{r.zone.name || '—'}</Link>
+                <Link href={`/console/restore/history/${r.id}`} className="block font-medium text-ink hover:text-signal">{r.zone.name || '—'}</Link>
                 <span className="text-[11px] text-faint">{r.legacy ? 'recorded in the audit log' : r.scan ? 'compare everything' : `${r.auditChanges} audit-log change${r.auditChanges === 1 ? '' : 's'}`}</span>
               </td>
               <td className="max-w-[170px] truncate px-5 py-3.5 font-mono text-[11.5px] text-ink-2" title={r.source.folder}>{r.source.folder || '—'}</td>
@@ -55,7 +55,7 @@ export function RestoreTable({ restores }: { restores: RestoreSummary[] }) {
               </td>
               <td className="px-5 py-3.5 tabular-nums text-ink-2">{r.planned || (r.legacy && r.selected) || '—'}</td>
               <td className="px-3 py-3.5 text-right">
-                <Link href={`/restore/history/${r.id}`} className="inline-flex rounded-md p-1.5 text-faint group-hover:text-ink" aria-label="Open restore"><ChevronRight className="size-4" /></Link>
+                <Link href={`/console/restore/history/${r.id}`} className="inline-flex rounded-md p-1.5 text-faint group-hover:text-ink" aria-label="Open restore"><ChevronRight className="size-4" /></Link>
               </td>
             </tr>
           ))}

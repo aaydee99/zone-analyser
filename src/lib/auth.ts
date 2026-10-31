@@ -251,12 +251,17 @@ export async function getMe(token: string | undefined, touch = true): Promise<Me
   if (!token) return null;
   const hash = hashToken(token);
   const now = Date.now();
-  const idleMs = (await getSettings()).sessionIdleMinutes * 60_000;
   let c = state.sessions.get(hash);
+  const stale = !c || now - c.profileAt > PROFILE_TTL_MS;
+  // The settings and the session, read at the same time.
+  const [settings, read] = await Promise.all([
+    getSettings(),
+    stale ? db().from('sessions').select('user_id, last_seen_at, expires_at').eq('token_hash', hash).maybeSingle() : null,
+  ]);
+  const idleMs = settings.sessionIdleMinutes * 60_000;
 
-  if (!c || now - c.profileAt > PROFILE_TTL_MS) {
-    const row = must(await db().from('sessions').select('user_id, last_seen_at, expires_at').eq('token_hash', hash).maybeSingle(), 'Reading session') as
-      { user_id: string; last_seen_at: string; expires_at: string } | null;
+  if (stale) {
+    const row = must(read!, 'Reading session') as { user_id: string; last_seen_at: string; expires_at: string } | null;
     if (!row) { if (c) endLocal(hash); return null; }
     const profile = await loadProfile(row.user_id);
     if (!profile || profile.disabled || !isRole(profile.role)) { await logout(token); return null; }
@@ -267,13 +272,15 @@ export async function getMe(token: string | undefined, touch = true): Promise<Me
     };
     state.sessions.set(hash, c);
   }
+  if (!c) return null;
 
   if (now > c.absoluteExpiry || now - c.lastSeen > idleMs) { await logout(token); return null; }
   if (touch) {
     c.lastSeen = now;
     if (now - c.dbTouchedAt > DB_TOUCH_MS) {
       c.dbTouchedAt = now;
-      await db().from('sessions').update({ last_seen_at: new Date(now).toISOString() }).eq('token_hash', hash);
+      // Not waited for: nothing in this request depends on it.
+      void db().from('sessions').update({ last_seen_at: new Date(now).toISOString() }).eq('token_hash', hash).then(() => {}, () => {});
     }
   }
   return { ...c.me, expiresAt: Math.min(c.absoluteExpiry, c.lastSeen + idleMs) };

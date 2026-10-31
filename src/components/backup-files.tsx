@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Copy, Download, FileCode2, FileJson, FileText, Search } from 'lucide-react';
 import { api, copyText } from '@/lib/client';
-import { Badge, Button, Card, Modal, cx } from './ui';
+import { Badge, Button, Card, Loading, Modal, Skeleton, cx } from './ui';
 import { useToast } from './toast';
 
 interface BackupFile { path: string; size: number }
@@ -40,7 +40,7 @@ export function BackupFiles({ runId }: { runId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
           <h2 className="text-[15px] font-semibold">Backup files</h2>
-          <p className="mt-0.5 text-xs text-muted">{files ? `${files.length} files · ${fmtSize(total)}` : 'Loading…'}</p>
+          {files ? <p className="mt-0.5 text-xs text-muted">{`${files.length} files · ${fmtSize(total)}`}</p> : <Skeleton className="mt-1.5 h-3 w-28" />}
         </div>
         <a href={`/api/runs/${runId}/download`}><Button variant="primary" icon={<Download className="size-4" />} disabled={!files?.length}>Download .zip</Button></a>
       </div>
@@ -54,6 +54,15 @@ export function BackupFiles({ runId }: { runId: string }) {
         </button>
       </div>
       <div className="max-h-[420px] overflow-y-auto">
+        {!files && (
+          <Loading label="Loading backup files">
+            {[52, 40, 64, 46, 58, 36].map((w, i) => (
+              <div key={i} className="flex items-center gap-3 border-b border-line/50 px-5 py-2.5 last:border-0">
+                <Skeleton className="size-4 shrink-0" /><Skeleton className="h-3" style={{ width: `${w}%` }} /><Skeleton className="ml-auto h-3 w-12 shrink-0" />
+              </div>
+            ))}
+          </Loading>
+        )}
         {shown.map((f) => {
           const Icon = iconFor(f.path);
           const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';

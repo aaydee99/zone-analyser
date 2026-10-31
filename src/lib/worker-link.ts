@@ -180,11 +180,13 @@ export async function relayJson<T>(me: Me, path: string, timeoutMs: number): Pro
 }
 
 async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal?: AbortSignal, wake = true): Promise<Response> {
-  if (wake) await onlineWorker(r.me);
-  else if (!(await latestWorker())?.online) throw new RelayError(503, OFFLINE);
   const id = crypto.randomUUID();
   const claims = JSON.stringify({ me: r.me, method: r.method, path: r.path, call: id, exp: Date.now() + timeoutMs + 60_000 });
-  const identity = `${Buffer.from(claims).toString('base64url')}.${await signRelay(claims)}`;
+  const [, sig] = await Promise.all([
+    wake ? onlineWorker(r.me) : latestWorker().then((w) => { if (!w?.online) throw new RelayError(503, OFFLINE); }),
+    signRelay(claims),
+  ]);
+  const identity = `${Buffer.from(claims).toString('base64url')}.${sig}`;
   const request: RelayRequest = { ...r, identity };
   const sealed = await sealRelay(Buffer.from(JSON.stringify(request)), aadFor(id));
   const ins = await db().from('worker_calls').insert({ id, request: sealed, expires_at: new Date(Date.now() + timeoutMs).toISOString() });
@@ -195,7 +197,7 @@ async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal
     for (let i = 0; ; i++) {
       if (signal?.aborted) throw new RelayError(499, 'The request was cancelled');
       if (Date.now() - started > timeoutMs) throw new RelayError(504, 'The worker did not answer in time (it may still finish the job: check again shortly)');
-      await sleep(i < 20 ? 100 : 300);
+      await sleep(Math.min(25 * 2 ** Math.floor(i / 2), 250));
       const { data, error } = await db().from('worker_calls').select('status, response, chunks, error').eq('id', id).maybeSingle();
       if (error) throw new RelayError(503, `Could not read the worker's answer: ${error.message}`);
       const row = data as { status: string; response: unknown; chunks: number; error: string | null } | null;
@@ -203,7 +205,11 @@ async function send(r: Omit<RelayRequest, 'identity'>, timeoutMs: number, signal
       if (row.status === 'failed') throw new RelayError(502, `The worker could not run this: ${row.error ?? 'unknown error'}`);
       if (row.status !== 'done') {
         // Queued for long: the worker may have stopped since it was last seen.
-        if (row.status === 'queued' && Date.now() - started > 10_000 && !(await latestWorker(true))?.online) throw new RelayError(503, OFFLINE);
+        if (row.status === 'queued' && Date.now() - started > 10_000 && !(await latestWorker(true))?.online) {
+          // The worker stopped after the call was queued: start it (and wait for it) when allowed.
+          if (!wake) throw new RelayError(503, OFFLINE);
+          await onlineWorker(r.me);
+        }
         continue;
       }
       const answer = JSON.parse((await openRelay(row.response as never, aadFor(id, 'response'))).toString('utf8')) as RelayResponse;

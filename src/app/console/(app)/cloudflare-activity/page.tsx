@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Cloud, Copy, Download, History as HistoryIcon, Lock, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { api, copyText, fmtDate } from '@/lib/client';
+import { zoneList } from '@/lib/zone-list-client';
 import type { CredentialOption } from '@/lib/kinds';
 import {
   CATEGORIES, CATEGORY_LABEL, CF_RANGES, actorLabel, byAccount, byCategory, changeTitle, contextLabel, filterChanges, summaryText, totals, zoneLabel,
   type CategoryKey, type CfAuditReport, type CfChange, type CfHistoryResult, type CfRange, type CfZoneEvent, type Tally,
 } from '@/lib/cf-audit-report';
-import { Alert, Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Stat, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonStats, Stat, cx } from '@/components/ui';
 import type { CfRevertPlan } from '@/lib/cf-revert';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
@@ -219,7 +220,15 @@ export default function CloudflareActivityPage() {
   const canRevert = can('cloudflare:revert');
   const [reverting, setReverting] = useState<CfChange | null>(null);
   const [creds, setCreds] = useState<CredentialOption[] | null>(null);
-  const [credentialId, setCredentialId] = useState('all');
+  // One Cloudflare account ('' = all of them), not a stored credential: a token can reach several accounts.
+  const [accountId, setAccountId] = useState('');
+  const [knownAccounts, setKnownAccounts] = useState<Record<string, string>>({});
+  const learnAccounts = useCallback((list: { id: string; name: string }[]) => setKnownAccounts((m) => {
+    const next = { ...m };
+    let changed = false;
+    for (const a of list) if (a.id && (!(a.id in next) || (!next[a.id] && a.name))) { next[a.id] = a.name; changed = true; }
+    return changed ? next : m;
+  }), []);
   const [range, setRange] = useState<CfRange>('week');
   const today = isoDay(new Date());
   const [custom, setCustom] = useState({ since: isoDay(new Date(Date.now() - 14 * 86_400_000)), before: today });
@@ -240,20 +249,29 @@ export default function CloudflareActivityPage() {
       .then((r) => setCreds(r.options.filter((o) => o.kind === 'cloudflare')))
       .catch((e) => { setCreds([]); toast((e as Error).message, 'bad'); });
   }, [allowed, toast]);
+  // The accounts, from the zone list every page shares (usually loaded already, so the menu fills at once).
+  useEffect(() => {
+    if (!allowed) return;
+    zoneList().then((l) => learnAccounts(l.zones.map((z) => ({ id: z.accountId, name: z.accountName })))).catch(() => { /* the report below lists them too */ });
+  }, [allowed, learnAccounts]);
+  const accountOptions = useMemo(() => Object.entries(knownAccounts).map(([id, name]) => ({ id, name: name || id })).sort((a, b) => a.name.localeCompare(b.name)), [knownAccounts]);
 
-  const query0 = useMemo(() => new URLSearchParams({ credentialId, range, ...(range === 'custom' ? applied : {}) }), [credentialId, range, applied]);
+  const query0 = useMemo(() => new URLSearchParams({ credentialId: 'all', range, ...(accountId ? { accountId } : {}), ...(range === 'custom' ? applied : {}) }), [accountId, range, applied]);
   const load = useCallback(async (fresh = false) => {
     setLoading(true);
     setError('');
     try {
-      setReport(await api<CfAuditReport>(`/api/cloudflare-audit?${query0}${fresh ? '&fresh=1' : ''}`));
+      const rep = await api<CfAuditReport>(`/api/cloudflare-audit?${query0}${fresh ? '&fresh=1' : ''}`);
+      // Every account the report read (also ones without zones) joins the menu.
+      learnAccounts(rep.accounts.filter((a) => a.accountId).map((a) => ({ id: a.accountId, name: a.accountName })));
+      setReport(rep);
       setHistory({});
       setShown(TIMELINE_PAGE);
     } catch (e) {
       setReport(null);
       setError((e as Error).message);
     } finally { setLoading(false); }
-  }, [query0]);
+  }, [query0, learnAccounts]);
   useEffect(() => { if (allowed && creds?.length) load(); }, [load, allowed, creds]);
 
   const lookup = useCallback(async (c: CfChange) => {
@@ -334,9 +352,9 @@ export default function CloudflareActivityPage() {
           <Card className="mb-4 space-y-3 px-5 py-4">
             <div className="flex flex-wrap items-center gap-3">
               <label className="text-[13px] text-muted" htmlFor="cf-cred">Account</label>
-              <select id="cf-cred" className="input !w-auto min-w-[220px]" value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-                <option value="all">All Cloudflare accounts</option>
-                {creds?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <select id="cf-cred" className="input !w-auto min-w-[260px]" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">All Cloudflare accounts{accountOptions.length ? ` (${accountOptions.length})` : ''}</option>
+                {accountOptions.map((a) => <option key={a.id} value={a.id}>{a.name} · {a.id.slice(0, 8)}</option>)}
               </select>
             </div>
             <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Period">
@@ -366,18 +384,20 @@ export default function CloudflareActivityPage() {
             </div>
           ))}
 
-          <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          {!report && !error ? (
+            <Loading label="Loading Cloudflare activity stats" className="mb-6"><SkeletonStats className="sm:!gap-4 md:!grid-cols-2 lg:!grid-cols-4" /></Loading>
+          ) : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <Stat label="Changes" value={report ? t.total.toLocaleString() : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
             <Stat label="Zones changed" value={report ? t.zones : '—'} sub={report ? `in ${t.accounts} account${t.accounts === 1 ? '' : 's'}` : ' '} />
             <Stat label="Categories" value={report ? t.categories : '—'} sub={groups[0] ? `${groups.map((x) => x.label).slice(0, 2).join(', ')}${groups.length > 2 ? '…' : ''}` : report ? 'nothing changed' : ' '} />
             <Stat label="Zones onboarded" value={report ? onboarded : '—'} sub={report ? (removed ? `${removed} removed` : 'none removed') : ' '} tone={onboarded ? 'ok' : undefined} />
-          </div>
+          </div>}
 
           {report && <ZoneOnboarding events={report.zoneEvents} accountsWithoutList={noZoneList} />}
 
           <Card>
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Category">
-              <Chip active={category === ''} onClick={() => setCategory('')}>All <span className="tabular-nums text-faint">{searched.length}</span></Chip>
+              <Chip active={category === ''} onClick={() => setCategory('')}>All {report || error ? <span className="tabular-nums text-faint">{searched.length}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}</Chip>
               {CATEGORIES.filter((c) => categoryCounts.get(c.key)).map((c) => (
                 <Chip key={c.key} active={category === c.key} onClick={() => setCategory(c.key)}>
                   <span title={c.description}>{c.label}</span> <span className="tabular-nums text-faint">{categoryCounts.get(c.key)}</span>
@@ -395,9 +415,20 @@ export default function CloudflareActivityPage() {
               </label>
             </div>
 
-            {!report ? (
-              <p className="px-5 py-6 text-[13px] text-muted">{loading ? 'Reading Cloudflare audit logs…' : error ? 'Nothing to show.' : 'Loading…'}</p>
-            ) : !filtered.length ? (
+            {!report && error ? (
+              <p className="px-5 py-6 text-[13px] text-muted">Nothing to show.</p>
+            ) : !report ? (
+              <Loading label="Reading Cloudflare audit logs">
+                {[40, 28, 52, 34, 46].map((w, i) => (
+                  <div key={i} className="flex items-center gap-3 border-b border-line/60 px-5 py-3.5 last:border-0">
+                    <Skeleton className="size-4 shrink-0" />
+                    <Skeleton className="h-3.5" style={{ width: `${w}%` }} />
+                    <Skeleton className="hidden h-3 w-24 sm:block" />
+                    <span className="ml-auto flex gap-2"><Skeleton className="h-5 w-10" /><Skeleton className="h-5 w-8" /></span>
+                  </div>
+                ))}
+              </Loading>
+            ) :  !filtered.length ? (
               <EmptyState icon={<Cloud className="size-5" />} title={query || category ? 'No changes match' : 'No changes in this period'}
                 description={query || category ? 'Try another category, zone or value.' : 'Cloudflare recorded no changes for the selected accounts.'} />
             ) : view === 'category' ? (

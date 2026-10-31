@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  AlertTriangle, Archive, BookmarkPlus, Cloud, Copy, Database, FolderOutput, Globe2, Loader2, Play, RefreshCw, Search, Trash2,
+  AlertTriangle, Archive, BookmarkPlus, Cloud, Copy, Database, FolderOutput, Globe2, Play, RefreshCw, Search, Trash2,
 } from 'lucide-react';
 import { api, copyText, relTime } from '@/lib/client';
 import type { Approval } from '@/lib/approvals-store';
@@ -14,7 +14,7 @@ import {
 import type { CredentialOption } from '@/lib/kinds';
 import type { RunMeta } from '@/lib/run-types';
 import {
-  Alert, Badge, Button, Card, Checkbox, CheckboxBox, EmptyState, Field, FlagCard, Modal, PageHeader, SectionHeader, Segmented, Switch, cx,
+  Alert, Badge, Button, Card, Checkbox, CheckboxBox, EmptyState, Field, FlagCard, Loading, Modal, PageHeader, SectionHeader, Segmented, Skeleton, Switch, cx,
 } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
@@ -58,7 +58,7 @@ function CredentialSelect({ value, onChange, options, empty }:{ value: string; o
       <div className="flex items-center justify-between rounded-[9px] border border-dashed border-line-strong px-3 py-2.5 text-[13px] text-muted">
         {empty}
         {can('vault:access')
-          ? <Link href="/vault" className="font-medium text-signal hover:underline">Add an account set →</Link>
+          ? <Link href="/console/vault" className="font-medium text-signal hover:underline">Add an account set →</Link>
           : <span className="text-xs text-faint">Ask a super admin to add one</span>}
       </div>
     );
@@ -154,7 +154,17 @@ function ZonePicker({ list, accountId, selected, onChange }: { list: ZoneList; a
           <span className="font-mono text-xs text-muted">{selected.length} selected{zones ? ` / ${zones.length}` : ''}</span>
         </div>
         <div className="max-h-[320px] overflow-y-auto">
-          {loading && !zones && <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted"><Loader2 className="size-4 animate-spin" /> Loading zones from Cloudflare…</div>}
+          {!zones && !error && (
+            <Loading label="Loading zones from Cloudflare">
+              {[44, 36, 52, 40, 30].map((w, i) => (
+                <div key={i} className="flex items-center gap-3 border-b border-line/60 px-4 py-2.5 last:border-0">
+                  <Skeleton className="size-4 shrink-0 rounded" />
+                  <span className="min-w-0 flex-1 space-y-1.5"><Skeleton className="h-3.5" style={{ width: `${w}%` }} /><Skeleton className="h-2.5 w-56 max-w-full" /></span>
+                  <Skeleton className="h-5 w-14" />
+                </div>
+              ))}
+            </Loading>
+          )}
           {zones && shown.length === 0 && <div className="px-4 py-6 text-sm text-muted">No zones match.</div>}
           {shown.map((z) => (
             <button
@@ -320,7 +330,7 @@ function BackupBuilder() {
       const r = await api<{ run?: RunMeta; approval?: Approval }>('/api/runs', {
         method: 'POST', json: { config: cfg, presetName: presets.find((p) => p.id === presetId)?.name },
       });
-      if (r.run) { router.push(`/runs/${r.run.id}`); return; }
+      if (r.run) { router.push(`/console/runs/${r.run.id}`); return; }
       if (r.approval) {
         setRequest(r.approval);
         try { sessionStorage.setItem('backup.request', r.approval.id); } catch { /* storage blocked */ }
@@ -348,7 +358,7 @@ function BackupBuilder() {
         if (r.approval.status === 'approved' && r.approval.runId) {
           try { sessionStorage.removeItem('backup.request'); } catch { /* storage blocked */ }
           toast(`Approved by ${r.approval.decidedBy?.email} — the backup is running`, 'ok');
-          router.push(`/runs/${r.approval.runId}`);
+          router.push(`/console/runs/${r.approval.runId}`);
         }
       }).catch(() => {});
     }, 3000);
@@ -404,8 +414,10 @@ function BackupBuilder() {
             <div className="p-5">
               {!cfg.cloudflareCredentialId ? (
                 <p className="text-[13px] text-muted">Choose an account set first.</p>
-              ) : zoneList.loading && !zoneList.zones ? (
-                <p className="flex items-center gap-2 text-[13px] text-muted"><Loader2 className="size-4 animate-spin" /> Reading the accounts and zones from Cloudflare…</p>
+              ) : !zoneList.zones && !zoneList.error ? (
+                <Loading label="Reading the accounts and zones from Cloudflare" className="space-y-2">
+                  <Skeleton className="h-3 w-16" /><Skeleton className="h-10 w-full rounded-[9px]" />
+                </Loading>
               ) : zoneList.error && !zoneList.zones ? (
                 <Alert tone="bad" title="Could not read the accounts">{zoneList.error}</Alert>
               ) : (
@@ -622,7 +634,7 @@ function BackupBuilder() {
                 {request.status === 'pending' ? (
                   <>
                     <div className="flex items-start gap-2.5"><span className="live-dot mt-1.5 size-2 shrink-0 rounded-full bg-live" />
-                      <span><span className="font-medium text-ink">Waiting for an admin to approve</span><span className="block text-xs text-muted">Asked {relTime(request.requestedAt)} — the backup starts as soon as it is approved. <Link href="/approvals" className="text-signal hover:underline">Approvals</Link></span></span>
+                      <span><span className="font-medium text-ink">Waiting for an admin to approve</span><span className="block text-xs text-muted">Asked {relTime(request.requestedAt)} — the backup starts as soon as it is approved. <Link href="/console/approvals" className="text-signal hover:underline">Approvals</Link></span></span>
                     </div>
                     <Button variant="ghost" size="sm" className="w-full" loading={withdrawing} onClick={withdrawRequest}>Withdraw the request</Button>
                   </>
@@ -630,7 +642,7 @@ function BackupBuilder() {
                   <>
                     <Alert tone={request.status === 'approved' ? 'ok' : request.status === 'withdrawn' ? 'info' : 'bad'}
                       title={request.status === 'approved' ? 'Approved' : request.status === 'rejected' ? `Rejected by ${request.decidedBy?.email}` : request.status === 'withdrawn' ? 'Withdrawn' : request.status === 'expired' ? 'Expired' : 'Could not start'}>
-                      {request.reason ?? (request.status === 'approved' && request.runId ? <Link href={`/runs/${request.runId}`} className="text-signal hover:underline">Open the run</Link> : 'Change the configuration and ask again if needed.')}
+                      {request.reason ?? (request.status === 'approved' && request.runId ? <Link href={`/console/runs/${request.runId}`} className="text-signal hover:underline">Open the run</Link> : 'Change the configuration and ask again if needed.')}
                     </Alert>
                     <Button variant="ghost" size="sm" className="w-full" onClick={clearRequest}>Dismiss</Button>
                   </>
@@ -643,11 +655,11 @@ function BackupBuilder() {
                   Request backup
                 </Button>
               ) : activeRun ? (
-                <Link href={`/runs/${activeRun}`} className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
+                <Link href={`/console/runs/${activeRun}`} className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
                   <span className="live-dot size-2 rounded-full bg-live" /> A backup is running — view it
                 </Link>
               ) : activeRestore ? (
-                <Link href="/restore/new" className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
+                <Link href="/console/restore/new" className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
                   <span className="live-dot size-2 rounded-full bg-live" /> A restore of {activeRestore.zone} is running — view it
                 </Link>
               ) : (

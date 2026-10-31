@@ -13,13 +13,14 @@ import { Captcha } from '@/components/captcha';
  * such as "/\evil.example" (read as "//evil.example") cannot leave this origin.
  */
 function safeNext(next: string | null): string {
-  if (!next || typeof window === 'undefined') return '/';
+  if (!next || typeof window === 'undefined') return '/console';
   try {
     const url = new URL(next, window.location.origin);
-    if (url.origin !== window.location.origin) return '/';
-    return `${url.pathname}${url.search}${url.hash}` || '/';
+    // Only back into the console (the landing page and other origins are not "next").
+    if (url.origin !== window.location.origin || !(url.pathname === '/console' || url.pathname.startsWith('/console/'))) return '/console';
+    return `${url.pathname}${url.search}${url.hash}`;
   } catch {
-    return '/';
+    return '/console';
   }
 }
 
@@ -42,7 +43,7 @@ function LoginInner() {
   // First run or missing configuration → setup screen.
   useEffect(() => {
     api<{ configured: boolean; needsSetup: boolean; schemaError: string | null; captchaSiteKey?: string | null }>('/api/setup')
-      .then((s) => { setSiteKey(s.captchaSiteKey ?? null); if (!s.configured || s.needsSetup || s.schemaError) router.replace('/setup'); })
+      .then((s) => { setSiteKey(s.captchaSiteKey ?? null); if (!s.configured || s.needsSetup || s.schemaError) router.replace('/console/setup'); })
       .catch(() => {});
   }, [router]);
 

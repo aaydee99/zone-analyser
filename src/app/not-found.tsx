@@ -8,7 +8,7 @@ export default function NotFound() {
         <p className="text-xs font-semibold tracking-[0.2em] text-faint uppercase">404</p>
         <h1 className="mt-2 text-2xl font-semibold text-ink">This page does not exist</h1>
         <p className="mt-2 text-sm text-muted">The address may be mistyped, or the page was moved.</p>
-        <Link href="/" className="mt-6 inline-flex h-9 items-center rounded-[10px] bg-signal px-4 text-sm font-semibold text-signal-ink hover:bg-signal-strong">
+        <Link href="/" className="mt-6 inline-flex h-9 items-center rounded-[10px] btn-gold px-4 text-sm font-semibold">
           Back to the console
         </Link>
       </div>

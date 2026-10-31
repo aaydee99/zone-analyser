@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // The backup script is spawned by path at runtime, never bundled.
   outputFileTracingExcludes: { '*': ['./runner/**', './data/**'] },
+  // The console moved under /console (the landing page is at /): old links and bookmarks still work.
+  async redirects() {
+    const moved = ['login', 'setup', 'unlock', 'account', 'approvals', 'audit', 'backup', 'changes', 'cloudflare-activity', 'restore', 'runs', 'settings', 'traffic', 'users', 'vault', 'zone-explorer'];
+    return moved.map((p) => ({ source: `/${p}/:path*`, destination: `/console/${p}/:path*`, permanent: true }));
+  },
   async headers() {
     return [{
       source: '/:path*',

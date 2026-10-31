@@ -33,12 +33,23 @@ function pick(raw: Partial<Settings> | null | undefined): Settings {
   return { sessionIdleMinutes, vaultAutoLockMinutes: m.vaultAutoLockMinutes, outputDir: m.outputDir, pluginCacheDir: m.pluginCacheDir };
 }
 
+/** Up to this old, cached settings are used while they are read again in the background. */
+const STALE_MS = 10 * 60_000;
+let refreshing: Promise<Settings> | null = null;
+const readSettings = () => (refreshing ??= (async () => {
+  try {
+    const row = must(await db().from('settings').select('data').eq('id', 1).maybeSingle(), 'Reading settings');
+    const value = pick(row?.data as Partial<Settings> | undefined);
+    g.__cfSettings = { value, at: Date.now() };
+    return value;
+  } finally { refreshing = null; }
+})());
+
 export async function getSettings(): Promise<Settings> {
-  if (g.__cfSettings && Date.now() - g.__cfSettings.at < CACHE_MS) return g.__cfSettings.value;
-  const row = must(await db().from('settings').select('data').eq('id', 1).maybeSingle(), 'Reading settings');
-  const value = pick(row?.data as Partial<Settings> | undefined);
-  g.__cfSettings = { value, at: Date.now() };
-  return value;
+  const hit = g.__cfSettings;
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  if (hit && Date.now() - hit.at < STALE_MS) { void readSettings().catch(() => {}); return hit.value; }
+  return readSettings();
 }
 
 /** Cached value for synchronous callers (idle timers); falls back to defaults before the first read. */

@@ -41,6 +41,11 @@ Checks on the Enterprise plan):
 `/api/health` needs no session and says only `ok`, `database`, `databaseMs` and `worker`
 (`online` or `offline`; offline is normal — the worker starts when needed).
 
+How fast the worker picks up calls: with `supabase/migrations/0009_worker_calls_realtime.sql` applied,
+its log says `queue: Supabase Realtime connected` and each call is taken as soon as it is queued.
+`Supabase Realtime not available … polling instead` means it asks every 100–250 ms instead (slower,
+still working): check that the migration ran and that Realtime is on (Supabase › Realtime).
+
 Alerts worth setting:
 
 - The two console URLs above failing twice in a row → page/notify.

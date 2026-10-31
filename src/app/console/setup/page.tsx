@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { BRAND } from '@/lib/brand';
 import { useRouter } from 'next/navigation';
 import { CheckCircle2, Circle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -44,7 +45,7 @@ export default function SetupPage() {
     try {
       const s = await api<SetupState>('/api/setup');
       setState(s);
-      if (s.configured && !s.needsSetup && !s.schemaError) router.replace('/login');
+      if (s.configured && !s.needsSetup && !s.schemaError) router.replace('/console/login');
     } finally { setChecking(false); }
   }, [router]);
   useEffect(() => { load().catch(() => {}); }, [load]);
@@ -57,7 +58,7 @@ export default function SetupPage() {
     setBusy(true);
     try {
       await api('/api/setup', { method: 'POST', json: { name: form.name, email: form.email, password: form.password, setupToken: form.token, captcha } });
-      router.replace('/');
+      router.replace('/console');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Setup failed');
       setBusy(false);
@@ -69,7 +70,7 @@ export default function SetupPage() {
   const schemaOk = envOk && !state?.schemaError;
 
   return (
-    <AuthFrame wide title="Set up Backup Console" description="Connect Supabase, then create the first super admin. Everyone else is added from Users & roles.">
+    <AuthFrame wide title={`Set up ${BRAND.name}`} description="Connect Supabase, then create the first super admin. Everyone else is added from Users & roles.">
       <div className="panel space-y-5 p-6 shadow-pop">
         <ol className="space-y-4">
           <Step done={envOk} title="1 · Fill in .env.local">

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Copy, FileClock, Lock, RefreshCw } from 'lucide-react';
 import { api, copyText, fmtDate } from '@/lib/client';
 import { ACTIVITY, AREA_LABEL, CHANGE_AREA, describeChange, reportText, type ChangeArea, type ChangeReport } from '@/lib/audit-changes';
-import { Badge, Button, Card, EmptyState, PageHeader, Stat, cx } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
@@ -85,16 +85,18 @@ export default function ChangesPage() {
         ))}
       </div>
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <Stat label="Changes" value={report ? report.changes.length : '—'} sub={report ? `since ${fmtDate(report.since)}` : 'Loading…'} />
+      {!report ? (
+        <Loading label="Loading change stats" className="mb-6"><SkeletonStats className="sm:!gap-4 md:!grid-cols-2 lg:!grid-cols-4" /></Loading>
+      ) : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <Stat label="Changes" value={report.changes.length} sub={`since ${fmtDate(report.since)}`} />
         <Stat label="People who made changes" value={report ? report.people.length : '—'} sub={report?.people[0] ? `most: ${report.people[0].email}` : 'nobody'} />
         <Stat label="Failed sign-ins" value={report ? a.failedSignIns ?? 0 : '—'} sub={`${a.signIns ?? 0} successful`} tone={(a.failedSignIns ?? 0) > 0 ? 'bad' : undefined} />
         <Stat label="Secrets revealed" value={report ? a.reveals ?? 0 : '—'} sub={`${a.vaultUnlocks ?? 0} vault unlock${a.vaultUnlocks === 1 ? '' : 's'}`} tone={(a.reveals ?? 0) > 0 ? 'warn' : undefined} />
-      </div>
+      </div>}
 
       {report?.truncated && (
         <p className="mb-4 rounded-lg border border-warn/30 bg-warn/10 px-4 py-2.5 text-[13px] text-warn">
-          This period has more audit entries than one report reads. The newest are shown; use the <Link href="/audit" className="underline">audit log</Link> for older ones.
+          This period has more audit entries than one report reads. The newest are shown; use the <Link href="/console/audit" className="underline">audit log</Link> for older ones.
         </p>
       )}
 
@@ -103,7 +105,7 @@ export default function ChangesPage() {
           <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Area">
             <button onClick={() => setArea('')} aria-pressed={area === ''}
               className={cx('rounded-lg border px-2.5 py-1 text-[12.5px] transition-colors', area === '' ? 'border-line-strong bg-raised text-ink' : 'border-transparent text-muted hover:text-ink-2')}>
-              All <span className="tabular-nums text-faint">{report?.changes.length ?? 0}</span>
+              All {report ? <span className="tabular-nums text-faint">{report.changes.length}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}
             </button>
             {(Object.keys(AREA_LABEL) as ChangeArea[]).filter((k) => areaCounts.get(k)).map((k) => (
               <button key={k} onClick={() => setArea(k)} aria-pressed={area === k}
@@ -113,7 +115,19 @@ export default function ChangesPage() {
             ))}
           </div>
 
-          {report && byDay.length === 0 ? (
+          {!report ? (
+            <Loading label="Loading recent changes" className="px-5 py-4">
+              <Skeleton className="mb-4 h-3 w-36" />
+              <div className="space-y-4">
+                {[78, 62, 70, 54].map((w) => (
+                  <div key={w} className="grid grid-cols-[68px_minmax(0,1fr)] gap-3">
+                    <Skeleton className="mt-0.5 h-3 w-10" />
+                    <div className="space-y-2"><Skeleton className="h-3.5" style={{ width: `${w}%` }} /><Skeleton className="h-3 w-40" /></div>
+                  </div>
+                ))}
+              </div>
+            </Loading>
+          ) : byDay.length === 0 ? (
             <EmptyState icon={<FileClock className="size-5" />} title="No changes in this period"
               description="Nothing was added, edited or removed. Sign-ins and backup runs are counted on the right." />
           ) : (
@@ -137,7 +151,6 @@ export default function ChangesPage() {
                   </ol>
                 </section>
               ))}
-              {!report && <p className="px-5 py-6 text-[13px] text-muted">Loading…</p>}
             </div>
           )}
         </Card>
@@ -145,7 +158,11 @@ export default function ChangesPage() {
         <div className="space-y-6">
           <Card>
             <h2 className="border-b border-line px-5 py-4 text-[15px] font-semibold">Who made changes</h2>
-            {report?.people.length ? (
+            {!report ? (
+              <Loading label="Loading people" className="space-y-2.5 px-5 py-4">
+                {[0, 1, 2].map((i) => <div key={i} className="flex items-center justify-between gap-3 py-0.5"><Skeleton className="h-3 w-40" /><Skeleton className="h-3 w-5" /></div>)}
+              </Loading>
+            ) : report.people.length ? (
               <ul className="space-y-2 px-5 py-4 text-[13px]">
                 {report.people.map((p) => (
                   <li key={p.email} className="flex items-center justify-between gap-3">
@@ -154,7 +171,7 @@ export default function ChangesPage() {
                   </li>
                 ))}
               </ul>
-            ) : <p className="px-5 py-4 text-[13px] text-muted">{report ? 'Nobody' : 'Loading…'}</p>}
+            ) : <p className="px-5 py-4 text-[13px] text-muted">Nobody</p>}
           </Card>
 
           <Card>
@@ -165,13 +182,13 @@ export default function ChangesPage() {
                 return (
                   <li key={x.key} className="flex items-center justify-between gap-3">
                     <span className="text-ink-2">{x.label}</span>
-                    <span className={cx('font-mono tabular-nums', n > 0 && x.tone === 'bad' ? 'text-bad' : n > 0 && x.tone === 'warn' ? 'text-warn' : 'text-muted')}>{report ? n : '—'}</span>
+                    <span className={cx('font-mono tabular-nums', n > 0 && x.tone === 'bad' ? 'text-bad' : n > 0 && x.tone === 'warn' ? 'text-warn' : 'text-muted')}>{report ? n : <Skeleton className="h-3 w-5" />}</span>
                   </li>
                 );
               })}
             </ul>
             <div className="border-t border-line px-5 py-3 text-[12.5px]">
-              <Link href="/audit" className="text-muted hover:text-ink">Full audit log →</Link>
+              <Link href="/console/audit" className="text-muted hover:text-ink">Full audit log →</Link>
             </div>
           </Card>
         </div>

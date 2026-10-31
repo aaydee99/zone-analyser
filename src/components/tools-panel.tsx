@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowUpCircle, Download, PackageCheck, Trash2 } from 'lucide-react';
 import { api, relTime } from '@/lib/client';
-import { Badge, Button, Card, SectionHeader } from './ui';
+import { Badge, Button, Card, Loading, SectionHeader, Skeleton } from './ui';
 import { useToast } from './toast';
 import { useMe } from './me';
 
@@ -83,7 +83,16 @@ export function ToolsPanel({ onChange }: { onChange?: () => void }) {
             </div>
           </div>
         ))}
-        {!tools && <div className="px-5 py-5 text-sm text-muted">Checking installed versions…</div>}
+        {!tools && (
+          <Loading label="Checking installed versions">
+            {[0, 1].map((i) => (
+              <div key={i} className="flex items-center gap-4 border-b border-line/70 px-5 py-4 last:border-0">
+                <Skeleton className="size-9 shrink-0 rounded-lg" />
+                <div className="flex-1 space-y-2"><Skeleton className="h-3.5 w-36" /><Skeleton className="h-3 w-3/4" /></div>
+              </div>
+            ))}
+          </Loading>
+        )}
       </div>
     </Card>
   );

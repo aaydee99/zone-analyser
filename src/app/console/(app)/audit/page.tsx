@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { FileClock, Lock, ScrollText } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
-import { Badge, Button, Card, EmptyState, PageHeader, cx } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Loading, PageHeader, SkeletonTable, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
@@ -31,6 +31,7 @@ export default function AuditPage() {
   const [filter, setFilter] = useState('');
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async (before?: number) => {
     setLoading(true);
@@ -39,7 +40,7 @@ export default function AuditPage() {
       const { entries: page } = await api<{ entries: Entry[] }>(`/api/audit?${q}`);
       setEntries((cur) => (before ? [...cur, ...page] : page));
       setMore(page.length === 100);
-    } catch (e) { toast((e as Error).message, 'bad'); } finally { setLoading(false); }
+    } catch (e) { toast((e as Error).message, 'bad'); } finally { setLoading(false); setLoaded(true); }
   }, [filter, toast]);
   const allowed = can('audit:read');
   useEffect(() => { if (allowed) load(); }, [load, allowed]);
@@ -51,7 +52,7 @@ export default function AuditPage() {
   return (
     <div className="rise">
       <PageHeader eyebrow="Access" title="Audit log" description="Every sign-in, vault access, credential change, run and permission change — stored in Supabase."
-        actions={<Link href="/changes"><Button icon={<FileClock className="size-4" />}>Recent changes</Button></Link>} />
+        actions={<Link href="/console/changes"><Button icon={<FileClock className="size-4" />}>Recent changes</Button></Link>} />
       <div className="mb-4 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
           <button key={f.value} onClick={() => setFilter(f.value)} aria-pressed={filter === f.value}
@@ -61,7 +62,9 @@ export default function AuditPage() {
         ))}
       </div>
       <Card>
-        {!loading && entries.length === 0 ? (
+        {entries.length === 0 && (loading || !loaded) ? (
+          <Loading label="Loading audit log"><SkeletonTable rows={10} cols={5} className="!rounded-none !border-0" /></Loading>
+        ) : entries.length === 0 ? (
           <EmptyState icon={<ScrollText className="size-5" />} title="Nothing recorded yet" description="Actions appear here as people use the console." />
         ) : (
           <div className="overflow-x-auto">

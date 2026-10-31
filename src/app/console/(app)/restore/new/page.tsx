@@ -8,7 +8,7 @@ import type { CredentialOption } from '@/lib/kinds';
 import { actorLabel, changeSummary, changeTitle, type CfChange } from '@/lib/cf-audit-report';
 import type { CandidateMode } from '@/lib/restore-hcl';
 import type { RestoreView, PlannedChange } from '@/lib/restore';
-import { Alert, Badge, Button, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
 import { Terminal } from '@/components/terminal';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
@@ -77,6 +77,7 @@ export default function RestorePage() {
   const { can, activeRunId, activeRestore, refresh: refreshMe } = useMe();
   const allowed = can('restore:run');
   const [creds, setCreds] = useState<CredentialOption[]>([]);
+  const [credsLoaded, setCredsLoaded] = useState(false);
   const [cfId, setCfId] = useState('');
   const [zones, setZones] = useState<Zone[] | null>(null);
   const [zoneId, setZoneId] = useState('');
@@ -101,7 +102,7 @@ export default function RestorePage() {
     api<{ options: CredentialOption[] }>('/api/credentials/options').then(({ options }) => {
       setCreds(options);
       setCfId((x) => x || options.find((o) => o.kind === 'cloudflare')?.id || '');
-    }).catch((e) => toast((e as Error).message, 'bad'));
+    }).catch((e) => toast((e as Error).message, 'bad')).finally(() => setCredsLoaded(true));
   }, [allowed, toast]);
 
   useEffect(() => {
@@ -136,8 +137,8 @@ export default function RestorePage() {
   }, [r?.id]);
 
   // Only one job runs at a time: a backup, or another restore, blocks every step here.
-  const otherJob = activeRunId ? { text: 'A backup is running', href: `/runs/${activeRunId}`, link: 'View the backup' }
-    : activeRestore && activeRestore.id !== r?.id ? { text: `A restore of ${activeRestore.zone} is running (${activeRestore.job}, by ${activeRestore.by})`, href: '/restore/new', link: '' }
+  const otherJob = activeRunId ? { text: 'A backup is running', href: `/console/runs/${activeRunId}`, link: 'View the backup' }
+    : activeRestore && activeRestore.id !== r?.id ? { text: `A restore of ${activeRestore.zone} is running (${activeRestore.job}, by ${activeRestore.by})`, href: '/console/restore/new', link: '' }
     : null;
   const lockedOut = !!otherJob;
 
@@ -306,7 +307,9 @@ export default function RestorePage() {
             </div>
           </Field>
           <Field label="Bucket" hint={buckets.length ? 'Only this account set’s approved buckets.' : undefined}>
-            {buckets.length ? (
+            {!credsLoaded ? (
+              <Loading label="Loading buckets"><Skeleton className="h-10 w-full rounded-[9px]" /></Loading>
+            ) : buckets.length ? (
               <select id="restore-bucket" className="input font-mono !text-[13px]" value={bucket || buckets[0]} onChange={(e) => { setBucket(e.target.value === buckets[0] ? '' : e.target.value); setR(null); }}>
                 {buckets.map((b, i) => <option key={b} value={b}>{b}{i === 0 ? ' (default)' : ''}</option>)}
               </select>
@@ -481,7 +484,7 @@ export default function RestorePage() {
                         <p className="flex items-center gap-2 text-[13px] font-medium"><span className="live-dot size-2 rounded-full bg-live" /> Waiting for a super admin to approve the apply</p>
                         <p className="mt-1 text-xs text-muted">
                           Asked by {r.approval.requestedBy} {relTime(r.approval.requestedAt)}. The apply starts as soon as it is approved — until {fmtDate(r.approval.expiresAt)}, when the plan gets too old.
-                          The Global API Key is held in the console&apos;s memory only until then. <Link href="/approvals" className="text-signal hover:underline">Approvals</Link>
+                          The Global API Key is held in the console&apos;s memory only until then. <Link href="/console/approvals" className="text-signal hover:underline">Approvals</Link>
                         </p>
                         <Button className="mt-3" variant="ghost" size="sm" loading={withdrawing} onClick={withdrawApply}>Withdraw the request</Button>
                       </div>
@@ -530,7 +533,7 @@ export default function RestorePage() {
                   <Alert tone="ok" title="Restore complete">{r.plan?.noChanges ? 'Terraform found nothing to change: the live zone already matches the backup.' : 'The comparison found the live zone matches the backup.'} Nothing was applied, and this restore is closed.</Alert>
                 )}
                 {(r.state === 'applied' || r.state === 'apply-failed' || r.state === 'matched') && (
-                  <Link href={`/restore/history/${r.id}`} className="inline-flex items-center gap-1.5 text-[13px] text-signal hover:underline">This restore in Restore history →</Link>
+                  <Link href={`/console/restore/history/${r.id}`} className="inline-flex items-center gap-1.5 text-[13px] text-signal hover:underline">This restore in Restore history →</Link>
                 )}
                 {r.log.length > 0 && <Terminal lines={r.log} live={running} filename={`restore-${r.zone.name}.log`} />}
                 {running && (

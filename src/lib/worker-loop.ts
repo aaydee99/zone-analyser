@@ -106,7 +106,7 @@ async function run() {
 
   // Wait for this server to answer before replaying calls on it.
   for (let i = 0; i < 120; i++) {
-    try { await fetch(`${base()}/login`, { signal: AbortSignal.timeout(2_000) }); break; } catch { await sleep(500); }
+    try { await fetch(`${base()}/console/login`, { signal: AbortSignal.timeout(2_000) }); break; } catch { await sleep(500); }
   }
   await beat();
   log(`${id} online at ${base()}${ip ? `, public IP ${ip}` : ''}`);
@@ -130,6 +130,23 @@ async function run() {
 
   let inflight = 0;
   let lastWork = Date.now();
+  // Claimed calls waiting for one of the MAX_PARALLEL slots.
+  const waiting: { id: string; request: never }[] = [];
+  const next = () => {
+    while (inflight < MAX_PARALLEL && waiting.length) {
+      const row = waiting.shift()!;
+      inflight++;
+      void handle(row.id, row.request).finally(() => { inflight--; lastWork = Date.now(); next(); });
+    }
+  };
+  // Woken at once when the web side queues a call (Supabase Realtime), instead of at the next poll.
+  let kick: (() => void) | null = null;
+  const nap = (ms: number) => new Promise<void>((resolve) => {
+    const done = () => { clearTimeout(t); kick = null; resolve(); };
+    const t = setTimeout(done, ms);
+    kick = done;
+  });
+  listenForCalls(() => kick?.());
   // Supabase unreachable or answering 5xx (often an HTML gateway page): one short line, then every
   // 10th failure, waiting longer each time (2 s up to 30 s); a line again once it answers.
   let failures = 0;
@@ -141,36 +158,57 @@ async function run() {
   for (;;) {
     let took = 0;
     try {
-      if (inflight < MAX_PARALLEL) {
-        const { data, error } = await db().from('worker_calls').select('id').eq('status', 'queued').gt('expires_at', new Date().toISOString())
-          .order('created_at').limit(MAX_PARALLEL - inflight);
+      if (inflight + waiting.length < MAX_PARALLEL) {
+        // Every queued call claimed in one request: only rows still queued change, so a second worker
+        // never takes the same call. More than MAX_PARALLEL wait here for a free slot.
+        const now = new Date().toISOString();
+        const { data, error } = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: now })
+          .eq('status', 'queued').gt('expires_at', now).select('id, request, created_at');
         if (error) { await queueFailed(error.message); continue; }
         if (failures) { log(`queue: Supabase answers again after ${failures} failed ${failures === 1 ? 'try' : 'tries'}`); failures = 0; }
-        for (const { id: callId } of (data ?? []) as { id: string }[]) {
-          // Claimed only if still queued: a second worker never takes the same call.
-          const claim = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: new Date().toISOString() })
-            .eq('id', callId).eq('status', 'queued').select('id, request');
-          const row = (claim.data as { id: string; request: never }[] | null)?.[0];
-          if (!row) continue;
-          took++;
-          inflight++;
-          void handle(row.id, row.request).finally(() => { inflight--; });
-        }
+        const rows = ((data ?? []) as { id: string; request: never; created_at: string }[]).sort((a, b) => a.created_at.localeCompare(b.created_at));
+        took = rows.length;
+        waiting.push(...rows.map((r) => ({ id: r.id, request: r.request })));
+        next();
       }
     } catch (err) {
       // A dropped connection to Supabase: keep going.
       await queueFailed(err instanceof Error ? err.message : String(err));
       continue;
     }
-    if (took || inflight) lastWork = Date.now();
+    if (took || inflight || waiting.length) lastWork = Date.now();
     const idle = IDLE_MS > 0 && Date.now() - lastWork > IDLE_MS;
     const old = MAX_MS > 0 && Date.now() - PROCESS_START > MAX_MS;
-    if ((idle || old || g.__outdated) && !inflight && !busy()) {
+    if ((idle || old || g.__outdated) && !inflight && !waiting.length && !busy()) {
       await retire(id, g.__outdated ? 'a newer version of the console is deployed' : old ? `running for ${Math.round(MAX_MS / 60_000)} minutes` : `idle for ${Math.round(IDLE_MS / 60_000)} minutes`);
       process.exit(0);
     }
-    // Quick to pick up while busy, gentler on Supabase when idle.
-    await sleep(took ? 50 : Date.now() - lastWork < 30_000 ? 250 : 1_000);
+    // Quick to pick up while busy, gentler on Supabase when idle; a new call (Realtime) ends the wait at once.
+    await nap(took ? 50 : Date.now() - lastWork < 30_000 ? 100 : 250);
+  }
+}
+
+/**
+ * Supabase Realtime: a new row in worker_calls wakes the loop at once. Needs the table in the
+ * supabase_realtime publication (supabase/migrations/0009_worker_calls_realtime.sql); without it,
+ * or when the websocket cannot connect, nothing changes: the loop keeps polling.
+ */
+function listenForCalls(wake: () => void) {
+  // One subscription per process (run() may start again): a new run only swaps the function it wakes.
+  const gl = globalThis as unknown as { __callsListener?: { wake: () => void } };
+  if (gl.__callsListener) { gl.__callsListener.wake = wake; return; }
+  const listener = (gl.__callsListener = { wake });
+  let said = '';
+  const say = (msg: string) => { if (said !== msg) { said = msg; log(msg); } };
+  try {
+    db().channel('worker-calls')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'worker_calls' }, () => listener.wake())
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') say('queue: Supabase Realtime connected — calls are picked up as soon as they are queued');
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') say(`queue: Supabase Realtime not available (${err?.message ?? status.toLowerCase()}) — polling instead`);
+      });
+  } catch (err) {
+    say(`queue: Supabase Realtime not available (${err instanceof Error ? err.message : String(err)}) — polling instead`);
   }
 }
 

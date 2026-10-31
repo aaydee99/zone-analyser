@@ -17,7 +17,7 @@ export default function ConsoleError({ error, reset }: { error: Error & { digest
       </Alert>
       <div className="mt-4 flex gap-2">
         <Button onClick={reset} icon={<RefreshCw className="size-4" />}>Try again</Button>
-        <Link href="/" className="inline-flex h-9 items-center rounded-[10px] px-4 text-sm font-medium text-ink-2 hover:bg-raised hover:text-ink">Back to the overview</Link>
+        <Link href="/console" className="inline-flex h-9 items-center rounded-[10px] px-4 text-sm font-medium text-ink-2 hover:bg-raised hover:text-ink">Back to the overview</Link>
       </div>
     </div>
   );

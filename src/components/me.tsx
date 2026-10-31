@@ -18,6 +18,8 @@ export interface MeState {
   pendingApprovals?: number;
   /** On Vercel: the worker that runs backups, restores and Cloudflare reads. */
   worker?: WorkerSummary;
+  /** Not known yet (the page did not wait for it): the shell asks at once. */
+  stale?: boolean;
 }
 
 interface Ctx extends MeState {

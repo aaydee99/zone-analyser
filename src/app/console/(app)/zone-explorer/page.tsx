@@ -5,7 +5,7 @@ import { ChevronRight, Download, FileJson, Globe, RefreshCw, Search } from 'luci
 import { api, fmtDate } from '@/lib/client';
 import type { ZoneGroupReport, ZoneListItem, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
-import { Alert, Badge, Button, Card, EmptyState, PageHeader, Stat, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, SkeletonText, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { zoneList } from '@/lib/zone-list-client';
 
@@ -447,6 +447,18 @@ export default function ZoneExplorerPage() {
                   </section>
                 );
               })}
+              {!zones && (
+                <Loading label="Loading zones">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="border-b border-line/60 pb-1 last:border-0">
+                      <div className="flex items-center gap-2 px-3 py-2.5"><Skeleton className="size-4 shrink-0" /><Skeleton className="h-3.5 flex-1" /><Skeleton className="h-5 w-7" /></div>
+                      {[70, 55, 82, 60].map((w) => (
+                        <div key={w} className="flex items-center gap-2 py-2 pr-4 pl-9"><Skeleton className="h-3" style={{ width: `${w}%` }} /><Skeleton className="ml-auto h-3 w-8 shrink-0" /></div>
+                      ))}
+                    </div>
+                  ))}
+                </Loading>
+              )}
               {zones && !shownZones.length && <p className="px-4 py-3 text-[13px] text-muted">No zone matches.</p>}
             </div>
           </Card>
@@ -454,7 +466,20 @@ export default function ZoneExplorerPage() {
           <div className="min-w-0">
             {!selected && <Card><EmptyState icon={<Globe className="size-5" />} title="Choose a zone" description="Its full configuration is read from Cloudflare when you open it." /></Card>}
             {error && <div className="mb-4"><Alert tone="bad" title="Could not read the zone">{error}</Alert></div>}
-            {selected && !summary && loading && <Card><p className="px-5 py-6 text-[13px] text-muted">Opening the zone…</p></Card>}
+            {selected && !summary && loading && (
+              <Loading label="Opening the zone">
+                <Card className="mb-4 px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-2"><Skeleton className="h-5 w-48" /><Skeleton className="h-3 w-64" /></div>
+                    <div className="flex gap-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-8 w-20" />)}</div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2.5 sm:grid-cols-3">
+                    {Array.from({ length: 9 }, (_, i) => <div key={i} className="space-y-1.5"><Skeleton className="h-2.5 w-16" /><Skeleton className="h-3 w-28" /></div>)}
+                  </div>
+                </Card>
+                <SkeletonStats count={5} className="mb-4 sm:!grid-cols-3 md:!grid-cols-3 xl:!grid-cols-5" />
+              </Loading>
+            )}
             {summary && (
               <>
                 <Card className="mb-4 px-5 py-4">
@@ -520,7 +545,7 @@ export default function ZoneExplorerPage() {
                     </h2>
                   );
                   if (!part || part.state === 'loading' && !part.data) {
-                    return find ? null : <Card key={g.key} className="mb-4">{head()}<p className="px-5 py-3 text-[13px] text-muted">Reading from Cloudflare…</p></Card>;
+                    return find ? null : <Card key={g.key} className="mb-4">{head()}<Loading label={`Reading ${g.label} from Cloudflare`} className="px-5 py-4"><SkeletonText lines={3} /></Loading></Card>;
                   }
                   if (part.state === 'error' && !part.data) {
                     return <Card key={g.key} className="mb-4">{head()}<div className="px-5 py-3"><Alert tone="bad" title="Could not read this section">{part.error}</Alert></div></Card>;

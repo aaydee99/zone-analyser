@@ -9,7 +9,7 @@ import type { RunMeta } from '@/lib/run-types';
 import type { RestoreHistory, RestoreSummary } from '@/lib/restore-history';
 import { useMe } from '@/components/me';
 import { OutcomeBadge, RestoreTable } from '@/components/restore-table';
-import { Badge, Button, Card, EmptyState, PageHeader, Stat, cx } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonChart, SkeletonStats, SkeletonTable, Stat, cx } from '@/components/ui';
 
 interface Check { ok: boolean; detail: string }
 interface SystemCheck { terraform: Check }
@@ -116,10 +116,10 @@ export default function RestoreOverview() {
   const backups = runs.filter((r) => r.status === 'succeeded');
 
   const steps = [
-    { done: creds.some((c) => c.kind === 'cloudflare'), label: 'A Cloudflare API token with R2 or S3 storage is stored (Credentials)', href: '/vault' },
-    { done: backups.length > 0 || restores.length > 0, label: 'A backup in that R2 / S3 bucket to restore from', href: '/backup' },
-    { done: !!sys?.terraform.ok, label: 'terraform ready (auto-downloaded on first use)', href: '/settings' },
-    { done: restores.length > 0, label: 'Run your first restore', href: '/restore/new' },
+    { done: creds.some((c) => c.kind === 'cloudflare'), label: 'A Cloudflare API token with R2 or S3 storage is stored (Credentials)', href: '/console/vault' },
+    { done: backups.length > 0 || restores.length > 0, label: 'A backup in that R2 / S3 bucket to restore from', href: '/console/backup' },
+    { done: !!sys?.terraform.ok, label: 'terraform ready (auto-downloaded on first use)', href: '/console/settings' },
+    { done: restores.length > 0, label: 'Run your first restore', href: '/console/restore/new' },
   ];
   const setupDone = steps.every((s) => s.done);
 
@@ -129,15 +129,17 @@ export default function RestoreOverview() {
         eyebrow="Overview"
         title="Restore control"
         description="Put a zone back the way a backup has it: compare, review the plan, then apply with a Global API Key."
-        actions={<Link href="/restore/new"><Button variant="primary" size="lg" icon={<RotateCcw className="size-4" />}>New restore</Button></Link>}
+        actions={<Link href="/console/restore/new"><Button variant="primary" size="lg" icon={<RotateCcw className="size-4" />}>New restore</Button></Link>}
       />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {!loaded ? (
+        <Loading label="Loading restore stats" className="mb-6"><SkeletonStats className="!grid-cols-1 !gap-4 sm:!grid-cols-2 lg:!grid-cols-4" /></Loading>
+      ) : <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Last applied" value={stats.lastApplied ? relTime(stats.lastApplied.appliedAt ?? stats.lastApplied.createdAt) : '—'} sub={stats.lastApplied ? stats.lastApplied.zone.name : 'No restore applied yet'} tone={stats.lastApplied ? undefined : 'warn'} />
         <Stat label="Success rate" value={stats.rate === null ? '—' : `${stats.rate}%`} sub={`of ${stats.ended} applied or failed`} tone={stats.rate === null ? undefined : stats.rate >= 90 ? 'ok' : stats.rate >= 60 ? 'warn' : 'bad'} />
         <Stat label="Verified" value={stats.applied ? `${stats.verified}/${stats.applied}` : '—'} sub="matched the backup after applying" tone={stats.applied && stats.verified < stats.applied ? 'warn' : undefined} />
         <Stat label="Last 30 days" value={stats.month} sub={history ? `${history.planned30} planned · ${stats.zones} zone${stats.zones === 1 ? '' : 's'} restored in all` : ' '} />
-      </div>
+      </div>}
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-6">
@@ -164,24 +166,33 @@ export default function RestoreOverview() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    {(live || latest?.outcome === 'open') && <Link href="/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{live ? 'Watch live' : 'Continue'}</Button></Link>}
-                    <Link href={`/restore/history/${id}`}><Button icon={<ArrowRight className="size-4" />}>Open</Button></Link>
+                    {(live || latest?.outcome === 'open') && <Link href="/console/restore/new"><Button variant="primary" icon={<ArrowRight className="size-4" />}>{live ? 'Watch live' : 'Continue'}</Button></Link>}
+                    <Link href={`/console/restore/history/${id}`}><Button icon={<ArrowRight className="size-4" />}>Open</Button></Link>
                   </div>
                 </div>
               </Card>
             );
           })()}
 
-          <Activity restores={restores} />
+          {loaded ? <Activity restores={restores} /> : (
+            <Card>
+              <Loading label="Loading restore activity">
+                <div className="space-y-2 border-b border-line px-5 py-4"><Skeleton className="h-4 w-44" /><Skeleton className="h-3 w-36" /></div>
+                <SkeletonChart bars={30} height="h-28" className="px-5 pt-4 pb-3" />
+              </Loading>
+            </Card>
+          )}
 
           <Card>
             <div className="flex items-center justify-between border-b border-line px-5 py-4">
               <h2 className="text-[15px] font-semibold">Recent restores</h2>
-              <Link href="/restore/history" className="text-[13px] text-muted hover:text-ink">View all →</Link>
+              <Link href="/console/restore/history" className="text-[13px] text-muted hover:text-ink">View all →</Link>
             </div>
-            {loaded && !restores.length ? (
+            {!loaded ? (
+              <Loading label="Loading recent restores"><SkeletonTable rows={6} cols={5} className="!rounded-none !border-0" /></Loading>
+            ) : !restores.length ? (
               <EmptyState icon={<RotateCcw className="size-5" />} title="No restores yet" description="Every restore appears here: the backup it used, what it changed and how it ended."
-                action={<Link href="/restore/new"><Button variant="primary">Start a restore</Button></Link>} />
+                action={<Link href="/console/restore/new"><Button variant="primary">Start a restore</Button></Link>} />
             ) : (
               <RestoreTable restores={restores.slice(0, 6)} />
             )}
@@ -189,6 +200,18 @@ export default function RestoreOverview() {
         </div>
 
         <div className="space-y-6">
+          {!loaded && (
+            <Card>
+              <Loading label="Loading setup checklist">
+                <div className="space-y-2 border-b border-line px-5 py-4"><Skeleton className="h-4 w-24" /><Skeleton className="h-3 w-28" /></div>
+                <div className="space-y-1 p-3">
+                  {[80, 70, 64, 52].map((w) => (
+                    <div key={w} className="flex items-center gap-3 px-2 py-2"><Skeleton className="size-4 shrink-0 rounded-full" /><Skeleton className="h-3" style={{ width: `${w}%` }} /></div>
+                  ))}
+                </div>
+              </Loading>
+            </Card>
+          )}
           {!setupDone && loaded && (
             <Card>
               <div className="border-b border-line px-5 py-4">
@@ -213,13 +236,17 @@ export default function RestoreOverview() {
               <h2 className="text-[15px] font-semibold">Recent backups</h2>
               <DatabaseBackup className="size-4 text-faint" />
             </div>
-            {!backups.length ? (
-              <p className="px-5 py-5 text-[13px] text-muted">No successful backup run in the console yet. A restore can also use backups already in the account&apos;s R2 / S3 bucket; <Link href="/backup" className="text-signal hover:underline">run a backup</Link> to add one.</p>
+            {!loaded ? (
+              <Loading label="Loading recent backups" className="space-y-1 p-2">
+                {[0, 1, 2].map((i) => <div key={i} className="space-y-2 px-3 py-2.5"><Skeleton className="h-3.5 w-36" /><Skeleton className="h-3 w-28" /></div>)}
+              </Loading>
+            ) : !backups.length ? (
+              <p className="px-5 py-5 text-[13px] text-muted">No successful backup run in the console yet. A restore can also use backups already in the account&apos;s R2 / S3 bucket; <Link href="/console/backup" className="text-signal hover:underline">run a backup</Link> to add one.</p>
             ) : (
               <ul className="p-2">
                 {backups.slice(0, 5).map((r) => (
                   <li key={r.id}>
-                    <Link href={`/runs/${r.id}`} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-raised/60">
+                    <Link href={`/console/runs/${r.id}`} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-raised/60">
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[13.5px] font-medium">{r.presetName ?? r.summary.account ?? r.credentialNames.cloudflare}</div>
                         <div className="text-xs text-muted" title={fmtDate(r.endedAt ?? r.startedAt)}>
@@ -235,11 +262,11 @@ export default function RestoreOverview() {
             <p className="border-t border-line px-5 py-3 text-xs text-muted">A restore uses the newest backup of the zone in the account&apos;s R2 / S3 bucket.</p>
           </Card>
 
-          <Link href="/restore/history" className="panel flex items-center gap-3 px-5 py-4 transition-colors hover:border-line-strong">
+          <Link href="/console/restore/history" className="panel flex items-center gap-3 px-5 py-4 transition-colors hover:border-line-strong">
             <History className="size-4 text-muted" aria-hidden />
             <span className="flex-1 text-[13px] text-ink-2">
               Restore history
-              <span className="block text-xs text-muted">{restores.length} restore{restores.length === 1 ? '' : 's'}, each with its plan, steps and log</span>
+              {!loaded ? <Skeleton className="mt-1 h-3 w-52" /> : <span className="block text-xs text-muted">{restores.length} restore{restores.length === 1 ? '' : 's'}, each with its plan, steps and log</span>}
             </span>
             <ArrowRight className="size-4 text-faint" aria-hidden />
           </Link>

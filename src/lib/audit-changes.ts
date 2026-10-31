@@ -1,5 +1,6 @@
 // Turns audit-log entries into a readable change report. Shared by server and client — no Node imports.
 import { KINDS, type CredentialKind } from './kinds';
+import { BRAND } from '@/lib/brand';
 import { ROLE_META, isRole } from './rbac';
 
 export interface AuditEntry {
@@ -165,7 +166,7 @@ export function describeChange(e: AuditEntry): string {
 export function reportText(r: ChangeReport): string {
   const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  const lines = [`Backup Console — changes from ${day(r.since)} to ${day(r.until)} (${r.days} day${r.days === 1 ? '' : 's'})`, ''];
+  const lines = [`${BRAND.name} — changes from ${day(r.since)} to ${day(r.until)} (${r.days} day${r.days === 1 ? '' : 's'})`, ''];
   if (!r.changes.length) lines.push('No changes recorded.');
   let current = '';
   for (const c of r.changes) {

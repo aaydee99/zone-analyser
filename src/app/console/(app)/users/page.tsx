@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { KeyRound, Lock, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { api, relTime } from '@/lib/client';
 import { canManageRole, ROLE_META, ROLES, type Role } from '@/lib/rbac';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Switch, cx } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, Switch, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 import { PasswordStrength } from '@/components/auth-frame';
@@ -126,7 +126,7 @@ export default function UsersPage() {
           <div key={r} className="panel px-4 py-3">
             <div className="flex items-center justify-between">
               <Badge tone={ROLE_TONE[r]}>{ROLE_META[r].label}</Badge>
-              <span className="font-mono text-sm tabular-nums text-ink-2">{users?.filter((u) => u.role === r).length ?? '–'}</span>
+              {users ? <span className="font-mono text-sm tabular-nums text-ink-2">{users.filter((u) => u.role === r).length}</span> : <Skeleton className="h-3.5 w-4" />}
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted">{ROLE_META[r].description}</p>
           </div>
@@ -175,7 +175,19 @@ export default function UsersPage() {
             </tbody>
           </table>
         </div>
-        {!users && <p className="px-5 py-5 text-sm text-muted">Loading users…</p>}
+        {!users && (
+          <Loading label="Loading users">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-6 border-b border-line/60 px-5 py-3.5 last:border-0">
+                <div className="w-1/4 min-w-0 space-y-1.5"><Skeleton className="h-3.5 w-32" /><Skeleton className="h-3 w-44 max-w-full" /></div>
+                <Skeleton className="h-5 w-20" />
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-5 w-9 rounded-full" />
+              </div>
+            ))}
+          </Loading>
+        )}
       </Card>
 
       <UserEditor open={editorOpen} onClose={() => setEditorOpen(false)} initial={editing} onSaved={load} />

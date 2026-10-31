@@ -12,6 +12,6 @@ import { can, type Permission } from './rbac';
  */
 export async function requirePage(perm: Permission) {
   const me = await getMe((await cookies()).get(SESSION_COOKIE)?.value, false);
-  if (!me) redirect('/login');
+  if (!me) redirect('/console/login');
   if (!can(me.role, perm)) notFound();
 }

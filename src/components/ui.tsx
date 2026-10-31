@@ -10,7 +10,7 @@ export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Bool
 // ── Button ──────────────────────────────────────────────────────────────────
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 const VARIANTS: Record<Variant, string> = {
-  primary: 'bg-signal text-signal-ink font-semibold hover:bg-signal-strong shadow-[0_8px_24px_-12px_var(--color-signal)]',
+  primary: 'btn-gold font-semibold',
   secondary: 'bg-raised text-ink border border-line-strong hover:border-faint hover:bg-raised-2',
   ghost: 'text-ink-2 hover:text-ink hover:bg-raised',
   danger: 'bg-bad/10 text-bad border border-bad/30 hover:bg-bad/20',
@@ -293,4 +293,58 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
       {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
     </div>
   );
+}
+
+// ── Skeletons: the shape of what is loading ─────────────────────────────────
+
+/** One grey block (give it a size with className). Hidden from screen readers; wrap a group in <Loading>. */
+export function Skeleton({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return <span aria-hidden className={cx('skeleton block', className)} style={style} />;
+}
+
+/** Marks a skeleton region for assistive tech ("Loading …") while it shows. */
+export function Loading({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return <div role="status" aria-live="polite" aria-busy="true" className={className}><span className="sr-only">{label}</span>{children}</div>;
+}
+
+/** A row of stat cards. */
+export function SkeletonStats({ count = 4, className }: { count?: number; className?: string }) {
+  return (
+    <div className={cx('grid grid-cols-2 gap-3 md:grid-cols-4', className)}>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="panel space-y-3 px-5 py-4"><Skeleton className="h-3 w-20" /><Skeleton className="h-7 w-24" /><Skeleton className="h-3 w-16" /></div>
+      ))}
+    </div>
+  );
+}
+
+/** A bar chart: a title line and bars of varied height. */
+export function SkeletonChart({ bars = 30, height = 'h-24', className }: { bars?: number; height?: string; className?: string }) {
+  return (
+    <div className={className}>
+      <div className="mb-2 flex justify-between"><Skeleton className="h-3 w-40" /><Skeleton className="h-3 w-10" /></div>
+      <div className={cx('flex items-end gap-0.5 border-b border-line-strong', height)}>
+        {Array.from({ length: bars }, (_, i) => <Skeleton key={i} className="flex-1 rounded-b-none" style={{ height: `${35 + ((i * 37) % 60)}%` }} />)}
+      </div>
+    </div>
+  );
+}
+
+/** A table: a header line and rows. */
+export function SkeletonTable({ rows = 6, cols = 4, className }: { rows?: number; cols?: number; className?: string }) {
+  return (
+    <div className={cx('overflow-hidden rounded-lg border border-line', className)}>
+      <div className="flex gap-4 bg-raised/50 px-3 py-2.5">{Array.from({ length: cols }, (_, i) => <Skeleton key={i} className="h-3 flex-1" />)}</div>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className="flex gap-4 border-t border-line/50 px-3 py-3">
+          {Array.from({ length: cols }, (_, c) => <Skeleton key={c} className={cx('h-3', c === 0 ? 'flex-[2]' : 'flex-1')} style={{ opacity: 1 - r * 0.08 }} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Lines of text. */
+export function SkeletonText({ lines = 3, className }: { lines?: number; className?: string }) {
+  return <div className={cx('space-y-2', className)}>{Array.from({ length: lines }, (_, i) => <Skeleton key={i} className="h-3" style={{ width: `${i === lines - 1 ? 60 : 100 - i * 6}%` }} />)}</div>;
 }

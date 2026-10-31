@@ -24,7 +24,7 @@ export function RunTable({ runs }: { runs: RunMeta[] }) {
               <tr key={r.id} className="group border-b border-line/60 last:border-0 hover:bg-raised/40">
                 <td className="px-5 py-3.5"><StatusBadge status={r.status} /></td>
                 <td className="px-5 py-3.5">
-                  <Link href={`/runs/${r.id}`} className="block font-medium text-ink hover:text-signal">{r.presetName ?? s.account ?? r.credentialNames.cloudflare ?? 'Backup'}</Link>
+                  <Link href={`/console/runs/${r.id}`} className="block font-medium text-ink hover:text-signal">{r.presetName ?? s.account ?? r.credentialNames.cloudflare ?? 'Backup'}</Link>
                   <span className="font-mono text-[11px] text-faint">{r.id}</span>
                 </td>
                 <td className="px-5 py-3.5 text-ink-2">
@@ -47,7 +47,7 @@ export function RunTable({ runs }: { runs: RunMeta[] }) {
                         : s.errors ? <Badge tone="bad">{s.errors} errors</Badge> : <span className="text-faint">—</span>}
                 </td>
                 <td className="px-3 py-3.5 text-right">
-                  <Link href={`/runs/${r.id}`} className="inline-flex rounded-md p-1.5 text-faint group-hover:text-ink" aria-label="Open run"><ChevronRight className="size-4" /></Link>
+                  <Link href={`/console/runs/${r.id}`} className="inline-flex rounded-md p-1.5 text-faint group-hover:text-ink" aria-label="Open run"><ChevronRight className="size-4" /></Link>
                 </td>
               </tr>
             );

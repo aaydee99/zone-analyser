@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, RefreshCw, Save, ShieldAlert, XCircle } from 'lucide-react';
 import { api } from '@/lib/client';
-import { Alert, Badge, Button, Card, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { ToolsPanel } from '@/components/tools-panel';
 import { useMe } from '@/components/me';
@@ -64,6 +64,10 @@ function PathView({ path: p }: { path: SystemCheck['path'] }) {
   );
 }
 
+function FieldSkeleton() {
+  return <div className="space-y-2"><Skeleton className="h-3 w-40" /><Skeleton className="h-10 w-full rounded-[9px]" /><Skeleton className="h-3 w-3/4" /></div>;
+}
+
 function CheckRow({ label, check, hint }: { label: string; check: Check; hint?: string }) {
   return (
     <div className="flex items-start gap-3 py-3">
@@ -116,10 +120,11 @@ export default function SettingsPage() {
   const toast = useToast();
   const { can, worker } = useMe();
   const editable = can('settings:write');
+  const [loadError, setLoadError] = useState('');
   const [s, setS] = useState<Settings | null>(null);
   const [defaultOut, setDefaultOut] = useState('');
   const [sys, setSys] = useState<SystemCheck | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [checking, setChecking] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const check = useCallback(async () => {
@@ -128,7 +133,7 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    api<{ settings: Settings; defaultOutputDir: string }>('/api/settings').then((r) => { setS(r.settings); setDefaultOut(r.defaultOutputDir); });
+    api<{ settings: Settings; defaultOutputDir: string }>('/api/settings').then((r) => { setS(r.settings); setDefaultOut(r.defaultOutputDir); }).catch((e) => setLoadError((e as Error).message));
     check();
   }, [check]);
 
@@ -152,6 +157,8 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <Card>
             <SectionHeader title="Runtime" description="Applied to every backup run." />
+            {!s && loadError && <div className="p-5"><Alert tone="bad" title="Settings could not be read">{loadError}</Alert></div>}
+            {!s && !loadError && <Loading label="Loading runtime settings" className="space-y-5 p-5">{[0, 1].map((i) => <FieldSkeleton key={i} />)}</Loading>}
             {s && (
               <div className="space-y-5 p-5">
                 <Field label="Default output directory" hint={`OUTPUT_DIR when a run leaves it blank. Blank here = ${defaultOut}`}>
@@ -167,6 +174,7 @@ export default function SettingsPage() {
 
           <Card>
             <SectionHeader title="Sessions" description="Idle timeouts. Running backups are never interrupted." />
+            {!s && !loadError && <Loading label="Loading session settings" className="space-y-5 p-5">{[0, 1].map((i) => <FieldSkeleton key={i} />)}</Loading>}
             {s && (
               <div className="space-y-5 p-5">
                 <MinutesField label="Sign users out after inactivity" max={30} disabled={!editable}
@@ -188,6 +196,16 @@ export default function SettingsPage() {
               description={sys?.platform}
               aside={<Button size="sm" variant="ghost" loading={checking} icon={<RefreshCw className="size-3.5" />} onClick={check}>Re-check</Button>}
             />
+            {!sys && checking && (
+              <Loading label="Checking the environment" className="divide-y divide-line/70 px-5">
+                {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                  <div key={i} className="flex items-start gap-3 py-3">
+                    <Skeleton className="mt-0.5 size-4 shrink-0 rounded-full" />
+                    <div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-44" /><Skeleton className="h-3 w-32" /></div>
+                  </div>
+                ))}
+              </Loading>
+            )}
             {sys && (
               <div className="divide-y divide-line/70 px-5">
                 <CheckRow label="Node.js ≥ 18" check={sys.node} />
@@ -206,6 +224,11 @@ export default function SettingsPage() {
 
           <Card>
             <SectionHeader title="Storage" description="Where this console keeps its own data." />
+            {!sys && checking && (
+              <Loading label="Loading storage locations" className="space-y-3 p-5">
+                {[0, 1, 2].map((i) => <div key={i} className="space-y-1.5"><Skeleton className="h-3 w-52" /><Skeleton className="h-3 w-64 max-w-full" /></div>)}
+              </Loading>
+            )}
             {sys && (
               <dl className="space-y-3 p-5 text-[13px]">
                 <div><dt className="text-muted">Users, vault, presets, runs, logs, audit</dt><dd className="mt-0.5 text-xs text-ink-2">Supabase (row-level security on, server-only access)</dd></div>
