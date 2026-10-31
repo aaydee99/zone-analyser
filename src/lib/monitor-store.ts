@@ -182,6 +182,9 @@ export async function forgetUnits(check: CheckId, kind: ScopeKind, ids: string[]
     let q = db().from('monitor_findings').update({ resolved_at: now }).eq('check_id', check).is('resolved_at', null);
     q = kind === 'zone' ? q.in('zone_id', part) : q.in('account_id', part).is('zone_id', null);
     must(await q, 'Resolving findings');
+    // Every zone has a drift unit: when that goes, the zone is gone, so it leaves the search index too
+    // (0016_zone_search; without it there is nothing to remove).
+    if (check === 'drift' && kind === 'zone') await db().rpc('zone_search_forget', { p_zones: part, p_source: null });
   }
 }
 

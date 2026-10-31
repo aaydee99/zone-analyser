@@ -5,7 +5,8 @@ import { BRAND } from '@/lib/brand';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { BrandMark } from './brand-mark';
-import { Eraser, Radar } from 'lucide-react';
+import { Eraser, FileOutput, FileText, Fingerprint, GitCompare, HeartPulse, ListFilter, MessageSquare, Radar, Search, Tags, Terminal, ScanSearch } from 'lucide-react';
+import { ZoneSearchBox } from './zone-search-box';
 import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
@@ -43,6 +44,16 @@ const NAV: { section: string; items: NavItem[] }[] = [
     section: 'Monitoring',
     items: [
       { href: '/console/monitoring', label: 'Monitoring', icon: Radar },
+      { href: '/console/health', label: 'Zone health', icon: HeartPulse },
+      { href: '/console/reports', label: 'Reports', icon: FileText },
+    ],
+  },
+  {
+    section: 'Find & investigate',
+    items: [
+      { href: '/console/search', label: 'Search', icon: Search },
+      { href: '/console/compare', label: 'Compare', icon: GitCompare },
+      { href: '/console/investigate', label: 'Investigate', icon: Fingerprint },
     ],
   },
   {
@@ -53,6 +64,17 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: '/console/analytics', label: 'DNS & Workers', icon: Activity },
       { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
       { href: '/console/purge', label: 'Cache purge', icon: Eraser, perm: 'cloudflare:act' },
+      { href: '/console/lists', label: 'IP & ASN lists', icon: ListFilter },
+      { href: '/console/logpush', label: 'Logpush', icon: FileOutput },
+      { href: '/console/onboarding', label: 'Zone onboarding', icon: ScanSearch },
+      { href: '/console/zones/tags', label: 'Zone tags', icon: Tags },
+    ],
+  },
+  {
+    section: 'Tools',
+    items: [
+      { href: '/console/tools/api', label: 'API console', icon: Terminal, perm: 'cloudflare:query' },
+      { href: '/console/tools/worker-logs', label: 'Worker logs', icon: ScrollText, perm: 'cloudflare:query' },
     ],
   },
   {
@@ -60,6 +82,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { href: '/console/vault', label: 'Credentials', icon: KeyRound, perm: 'vault:access' },
       { href: '/console/settings', label: 'Settings', icon: Settings2, perm: 'settings:read' },
+      { href: '/console/settings/slack', label: 'Slack command', icon: MessageSquare, perm: 'settings:read' },
     ],
   },
   {
@@ -155,7 +178,8 @@ export function Shell({ initial, children }: { initial: MeState; children: React
 
   const sidebar = (
     <div className="flex h-full flex-col">
-      <div className="px-5 pt-5 pb-6"><Logo /></div>
+      <div className="px-5 pt-5 pb-4"><Logo /></div>
+      <div className="px-3 pb-4"><ZoneSearchBox /></div>
       <nav className="flex-1 space-y-5 overflow-y-auto px-3">
         {nav.map(({ section, items }) => (
           <div key={section}>

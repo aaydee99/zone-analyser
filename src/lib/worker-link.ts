@@ -353,6 +353,11 @@ const WEB_ROUTES = [
   /^\/api\/audit(\/|$)/,
   // Live logs are followed in Supabase (run_logs), not through the queue.
   /^\/api\/runs\/[^/]+\/stream$/,
+  // Read from Supabase only (search index, health scores, tags, the person's own shortcuts).
+  /^\/api\/search$/,
+  /^\/api\/zone-health(\/summary)?$/,
+  /^\/api\/zones\/tags$/,
+  /^\/api\/me\/(zones|views(\/[^/]+)?)$/,
 ];
 
 export const relayed = (req: Request) => isWebRole() && !WEB_ROUTES.some((r) => r.test(new URL(req.url).pathname));

@@ -1,5 +1,6 @@
 import 'server-only';
 import { cached, tag } from './cache';
+import { cfCall } from './cf-read';
 import { HttpError } from './http';
 import { credentialForRun, listCredentialOptions } from './vault';
 import { tokenAccounts } from './providers';
@@ -88,17 +89,12 @@ function cfFailure(status: number, body: Envelope<unknown> | null, permission: s
   return msg ? `Cloudflare: ${msg}` : `Cloudflare answered HTTP ${status}`;
 }
 
+/** Through cf-read, so audit-log reads share each token's call budget (and wait while a backup uses it). */
 async function cfGet<T>(token: string, path: string, permission: string): Promise<Envelope<T>> {
-  let res: Response;
-  try {
-    res = await fetch(`${CF_API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000), cache: 'no-store' });
-  } catch (err) {
-    console.error('[cf-audit] request failed:', err);
-    throw new Error('Could not reach the Cloudflare API');
-  }
-  let body: Envelope<T> | null = null;
-  try { body = (await res.json()) as Envelope<T>; } catch { /* non-JSON */ }
-  if (!res.ok || !body?.success) throw new Error(cfFailure(res.status, body, permission));
+  const res = await cfCall<T>(token, 'GET', path);
+  if (res.status === 0) throw new Error('Could not reach the Cloudflare API');
+  const body = res.body as Envelope<T> | null;
+  if (res.status < 200 || res.status >= 300 || !body?.success) throw new Error(cfFailure(res.status, body, permission));
   return body;
 }
 

@@ -325,6 +325,8 @@ async function finishWrites(timeoutMs = 25_000) {
     const q = m as { stopQueue?: () => Promise<void> };
     return typeof q.stopQueue === 'function' ? q.stopQueue() : undefined;
   }));
+  // Live Worker log sessions: their Cloudflare tails are deleted now, not left to expire.
+  await within(import('./worker-tail').then((m) => m.stopAllTails()));
   await settleWrites(left());
   const mirror = (globalThis as unknown as { __stateMirror?: Map<string, Promise<void>> }).__stateMirror;
   if (mirror?.size) await within(Promise.allSettled([...mirror.values()]));
