@@ -150,8 +150,26 @@ function fillTime(alias: TimeAlias, rows: DetailRow[]): DetailRow[] {
 /** An ISO time as "29 Oct 05:00 UTC" (the windows are UTC days and hours). */
 const utc = (iso: string) => `${dayLabel(iso)} ${iso.slice(11, 16)} UTC`;
 
-/** Events or requests over time: one series, the exact number on hover; a day or an hour opens its own detail. */
-function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label: string; onPick?: (alias: TimeAlias, row: DetailRow) => void }) {
+/** A part of each bar: which rows of a split breakdown it counts, and how it looks. */
+interface Split { rows: DetailRow[]; parts: { label: string; cls: string; dot: string; keep: (r: DetailRow) => boolean }[] }
+
+const MITIGATION_SPLIT = (rows: DetailRow[]): Split => ({
+  rows,
+  parts: [
+    { label: 'Mitigated', cls: 'bg-signal', dot: 'bg-signal', keep: (r) => MITIGATING_ACTIONS.includes(r.dims.action) },
+    { label: 'Not mitigated', cls: 'bg-faint', dot: 'bg-faint', keep: (r) => !MITIGATING_ACTIONS.includes(r.dims.action) },
+  ],
+});
+const CACHE_SPLIT = (rows: DetailRow[]): Split => ({
+  rows,
+  parts: [
+    { label: 'From cache', cls: 'bg-signal', dot: 'bg-signal', keep: (r) => CACHED_STATUSES.includes(r.dims.cacheStatus) },
+    { label: 'From origin', cls: 'bg-faint', dot: 'bg-faint', keep: (r) => !CACHED_STATUSES.includes(r.dims.cacheStatus) },
+  ],
+});
+
+/** Events or requests over time, optionally split (e.g. mitigated on top of not mitigated); the exact numbers on hover; a day or an hour opens its own detail. */
+function TimeChart({ b, label, onPick, split }: { b: Record<string, DetailRow[]>; label: string; onPick?: (alias: TimeAlias, row: DetailRow) => void; split?: Split }) {
   const [hover, setHover] = useState<number | null>(null);
   const alias = timeAliasOf(b);
   if (!alias || !b[alias].length) return null;
@@ -160,10 +178,15 @@ function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label
   const clickable = !!onPick && alias !== 'minutes';
   const max = Math.max(1, ...rows.map((r) => r.count));
   const h = hover !== null ? rows[hover] : null;
+  // Per time slot, the count of each part of the split.
+  const partsAt = (t: string) => split?.parts.map((p) => split.rows.filter((r) => r.dims[key] === t && p.keep(r)).reduce((n, r) => n + r.count, 0)) ?? [];
   return (
     <div>
       <div className="mb-1 flex justify-between gap-3 text-xs text-muted">
-        <span><span className="font-medium text-ink-2">{label} per {PER[alias]}</span>{clickable && <span className="text-faint"> · click a bar for that {PER[alias]}&apos;s detail</span>}</span>
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span><span className="font-medium text-ink-2">{label} per {PER[alias]}</span>{clickable && <span className="text-faint"> · click a bar for that {PER[alias]}&apos;s detail</span>}</span>
+          {split?.parts.map((p) => <span key={p.label} className="inline-flex items-center gap-1"><span className={cx('size-2 rounded-full', p.dot)} />{p.label}</span>)}
+        </span>
         <span className="text-faint tabular-nums">{num(max)}</span>
       </div>
       <div className="relative">
@@ -172,7 +195,13 @@ function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label
             <button key={r.dims[key]} type="button" aria-label={`${timeLabel(alias, r.dims[key])}: ${whole.format(r.count)}`} disabled={!clickable}
               onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)} onClick={() => clickable && onPick!(alias, r)}
               className={cx('flex h-full min-w-0 flex-1 items-end rounded-t-sm focus:outline-none', hover === i && 'bg-raised/60', clickable && 'cursor-pointer')}>
-              <span className={cx('w-full rounded-t-sm bg-signal', clickable && hover === i && 'bg-signal-soft')} style={{ height: `${(r.count / max) * 100}%` }} />
+              {split ? (
+                <span className={cx('flex w-full flex-col overflow-hidden rounded-t-sm', clickable && hover === i && 'opacity-80')} style={{ height: `${(r.count / max) * 100}%` }}>
+                  {partsAt(r.dims[key]).map((n, k) => <span key={k} className={cx('w-full', split.parts[k].cls)} style={{ height: r.count ? `${(n / r.count) * 100}%` : 0 }} />)}
+                </span>
+              ) : (
+                <span className={cx('w-full rounded-t-sm bg-signal', clickable && hover === i && 'bg-signal-soft')} style={{ height: `${(r.count / max) * 100}%` }} />
+              )}
             </button>
           ))}
         </div>
@@ -181,6 +210,7 @@ function TimeChart({ b, label, onPick }: { b: Record<string, DetailRow[]>; label
             style={{ left: `${((hover + 0.5) / rows.length) * 100}%`, transform: `translateX(${hover < rows.length / 3 ? '-10%' : hover > (rows.length * 2) / 3 ? '-90%' : '-50%'})` }}>
             <span className="text-muted">{alias === 'daily' ? dayLabel(h.dims[key]) : `${dayLabel(h.dims[key])} ${timeLabel(alias, h.dims[key])}`}</span>{' '}
             <span className="tabular-nums text-ink">{num(h.count)}</span>{h.bytes !== undefined && <span className="text-muted"> · {bytes(h.bytes)}</span>}
+            {split && <div className="text-[11px]">{partsAt(h.dims[key]).map((n, k) => <span key={k} className="mr-2"><span className="text-muted">{split.parts[k].label}</span> <span className="tabular-nums text-ink">{num(n)}</span></span>)}</div>}
             {clickable && <div className="text-[10.5px] text-faint">Click for this {PER[alias]}&apos;s detail</div>}
           </div>
         )}
@@ -641,7 +671,7 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
           })}
         </div>
       </div>
-      <TimeChart b={b} label="Events" onPick={on.time} />
+      <TimeChart b={b} label="Events" onPick={on.time} split={b.timeActions ? MITIGATION_SPLIT(b.timeActions) : undefined} />
       {b.rules && (
         <div>
           <div className="eyebrow mb-2">Rules that matched</div>
@@ -705,7 +735,7 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
           );
         })()}
       </div>
-      <TimeChart b={b} label="Requests" onPick={on.time} />
+      <TimeChart b={b} label="Requests" onPick={on.time} split={b.timeCache ? CACHE_SPLIT(b.timeCache) : undefined} />
       {b.ips && (
         <div>
           <div className="eyebrow mb-2">Top client IPs</div>
@@ -749,6 +779,28 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
 export interface DetailRequest { t: Target; filter?: DetailFilter; focus?: 'security' | 'requests'; label?: string }
 
 const OpenCtx = createContext<(r: DetailRequest) => void>(() => {});
+/** The sections' loaded detail per target, for the summary cards above them (no second read). */
+const LoadedCtx = createContext<{ loaded: Record<string, ZoneDetail | 'error'>; set: (k: string, d: ZoneDetail | 'error' | null) => void }>({ loaded: {}, set: () => {} });
+const targetKey = (t: Target) => `${t.month}|${t.account}|${t.zone ?? ''}`;
+/** Security events per day (mitigated / not mitigated) for the monthly section, from what the sections below read; a day opens its events. */
+export function EventsChart({ target }: { target?: Target }) {
+  const d = useLoadedDetail(target);
+  const open = useOpenDetail();
+  if (!target) return null;
+  if (!d) return <p className="text-xs text-faint">Security events per day: reading…</p>;
+  if (d === 'error' || !d.security.available) return null;
+  const b = d.security.breakdowns;
+  return (
+    <TimeChart b={b} label="Security events" split={b.timeActions ? MITIGATION_SPLIT(b.timeActions) : undefined}
+      onPick={(alias, row) => { if (alias === 'daily') open({ t: target, filter: { day: row.dims.date, part: 'security' }, focus: 'security', label: 'Security events' }); }} />
+  );
+}
+
+/** The security events and requests the page's sections read for this target: null while they are read, 'error' if they could not be. */
+export function useLoadedDetail(t?: Target): ZoneDetail | 'error' | null {
+  const { loaded } = useContext(LoadedCtx);
+  return t ? loaded[targetKey(t)] ?? null : null;
+}
 /** Opens the details window (inside <DetailHost>). */
 export const useOpenDetail = () => useContext(OpenCtx);
 
@@ -835,10 +887,20 @@ export function DetailHost({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<DetailRequest[]>([]);
   const open = useCallback((r: DetailRequest) => setStack((s) => [...s, r]), []);
   const top = stack[stack.length - 1];
+  const [loaded, setLoaded] = useState<Record<string, ZoneDetail | 'error'>>({});
+  const set = useCallback((k: string, d: ZoneDetail | 'error' | null) => setLoaded((m) => {
+    if (m[k] === d || (!d && !(k in m))) return m;
+    const next = { ...m };
+    if (d) next[k] = d; else delete next[k];
+    return next;
+  }), []);
+  const shared = useMemo(() => ({ loaded, set }), [loaded, set]);
   return (
     <OpenCtx.Provider value={open}>
+     <LoadedCtx.Provider value={shared}>
       {children}
       {top && <DetailWindow key={stack.length + JSON.stringify(top)} req={top} open={open} onClose={() => setStack([])} onBack={stack.length > 1 ? () => setStack((s) => s.slice(0, -1)) : undefined} />}
+     </LoadedCtx.Provider>
     </OpenCtx.Provider>
   );
 }
@@ -850,6 +912,11 @@ export function ZoneDetailView({ month, account, zone }: Target) {
   const [refresh, setRefresh] = useState(0);
   const { d, pending, error, busy } = useDetail(t, null, refresh);
   const open = useOpenDetail();
+  const { set: share } = useContext(LoadedCtx);
+  useEffect(() => {
+    const k = targetKey(t);
+    share(k, d ?? (error ? 'error' : null));
+  }, [t, d, error, share]);
   const [ipQuery, setIpQuery] = useState('');
   const on = useMemo(() => handlersFor({ t }, open), [t, open]);
 

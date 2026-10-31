@@ -44,7 +44,8 @@ export function rangeOf(month: string, now = new Date()) {
   const next = firstOf(addMonths(month, 1));
   const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
   const until = next < tomorrow ? next : tomorrow;
-  return { since: `${month}-01`, until: ymd(until), partial: next > tomorrow, days: Math.round((until.getTime() - firstOf(month).getTime()) / 86_400_000) };
+  // Partial until the month has ended (on its last day too: today is still running).
+  return { since: `${month}-01`, until: ymd(until), partial: next.getTime() > now.getTime(), days: Math.round((until.getTime() - firstOf(month).getTime()) / 86_400_000) };
 }
 
 // ── Cloudflare GraphQL ──────────────────────────────────────────────────────

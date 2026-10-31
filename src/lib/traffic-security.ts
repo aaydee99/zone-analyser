@@ -69,9 +69,19 @@ function timeSpec(f: DetailFilter | null, bytes: boolean): Spec {
   return { alias: 'daily', dims: ['date'], limit: 40, bytes };
 }
 const timeRowsOf = (b: Record<string, DetailRow[]>) => b.daily ?? b.hourly ?? b.minutes;
+/** Security events over time by action (for the chart's mitigated / not mitigated split). */
+function timeActionsSpec(f: DetailFilter | null): Spec {
+  const t = timeSpec(f, false);
+  return { alias: 'timeActions', dims: [t.dims[0], 'action'], limit: t.limit * 15 };
+}
+/** Requests over time by cache status (for the chart's cache / origin split). */
+function timeCacheSpec(f: DetailFilter | null): Spec {
+  const t = timeSpec(f, false);
+  return { alias: 'timeCache', dims: [t.dims[0], 'cacheStatus'], limit: t.limit * 12 };
+}
 
 /** Shown per breakdown, after the parts are added up. */
-const SHOW: Record<string, number> = { rules: 250, ips: 100, paths: 50 };
+const SHOW: Record<string, number> = { rules: 250, ips: 100, paths: 50, timeActions: 5000, timeCache: 5000 };
 
 const EVENT_FIELDS = ['datetime', 'action', 'source', 'ruleId', 'rulesetId', 'description', 'clientIP', 'clientCountryName', 'clientAsn', 'clientASNDescription',
   'clientRequestHTTPMethodName', 'clientRequestHTTPHost', 'clientRequestPath', 'clientRequestQuery', 'userAgent', 'edgeResponseStatus', 'rayName'];
@@ -328,8 +338,11 @@ async function readSingles(gq: Ask, dataset: 'firewallEventsAdaptive' | 'httpReq
   fields: string[], minimal: string[], what: string): Promise<{ list: FirewallEvent[]; since?: string; note?: string }> {
   if (!limits.enabled) return { list: [], note: `Single ${what} are not available on this zone's plan` };
   const w = windowOf(month, limits, f);
-  const last = w.parts[w.parts.length - 1];
-  if (!last) return { list: [] };
+  if (!w.parts.length) return { list: [] };
+  // The newest full window (up to maxDuration) ending at the window's end, not just the newest part:
+  // right after a part begins, that part holds only a few minutes.
+  const until = w.until!;
+  const last = { since: new Date(Math.max(Date.parse(w.since!), Date.parse(until) - limits.maxDuration * 1000)).toISOString(), until };
   const ask = (x: string[]) => gq(zoneQuery(zoneId,
     `rows: ${dataset}(limit: ${Math.min(listSize(f), limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf(dataset, f)} }, orderBy: [datetime_DESC]) { ${x.join(' ')} }`));
   const named = fields.some((x) => offered(limits, x)) ? limits : { ...limits, availableFields: null };
@@ -410,9 +423,9 @@ async function readZoneDetail(scope: Scope, zoneId: string, month: string, f: De
     const limits = await limitsOf(ask, zoneId).finally(() => { progress.done++; });
     const noSecurity = f?.part === 'requests', noRequests = f?.part === 'security' || !!f?.rule || !!f?.ruleset;
     const [security, requests, events, names, samples] = await Promise.all([
-      noSecurity ? Promise.resolve(NOT_READ()) : readDataset(ask, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
+      noSecurity ? Promise.resolve(NOT_READ()) : readDataset(ask, 'firewallEventsAdaptiveGroups', zoneId, month, [timeSpec(f, false), timeActionsSpec(f), ...SECURITY_SPECS.filter((s) => !(f?.ip && s.alias === 'ips') && !(f?.rule && s.alias === 'rules'))], f, limits.firewallEventsAdaptiveGroups, progress),
       f?.rule || f?.ruleset ? Promise.resolve(NO_RULE_REQUESTS()) : noRequests ? Promise.resolve(NOT_READ())
-        : readDataset(ask, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
+        : readDataset(ask, 'httpRequestsAdaptiveGroups', zoneId, month, [timeSpec(f, true), timeCacheSpec(f), ...REQUEST_SPECS.filter((s) => !(f?.ip && s.alias === 'ips'))], f, limits.httpRequestsAdaptiveGroups, progress),
       noSecurity ? Promise.resolve({ list: [] as FirewallEvent[] } as { list: FirewallEvent[]; since?: string; note?: string })
         : readSingles(ask, 'firewallEventsAdaptive', zoneId, month, f, limits.firewallEventsAdaptive, EVENT_FIELDS, EVENT_FIELDS_MIN, 'events'),
       rulesetNames(zoneId, true).then((n) => ({ ...MANAGED_RULESETS, ...n })).catch(() => ({ ...MANAGED_RULESETS })),

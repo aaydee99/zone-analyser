@@ -9,7 +9,8 @@ import { useToast } from '@/components/toast';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { zoneList as loadZoneList } from '@/lib/zone-list-client';
 import { bytes, dayLabel, num, pct, whole } from './format';
-import { DetailHost, ZoneDetailView, useOpenDetail, type Target } from './zone-detail';
+import { DetailHost, EventsChart, ZoneDetailView, useLoadedDetail, useOpenDetail, type Target } from './zone-detail';
+import { MITIGATING_ACTIONS } from '@/lib/traffic-types';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -53,12 +54,20 @@ function Totals({ s, month, partial, target }: { s: TrafficSlice; month: string;
   // Each card opens only its section, filtered to what it counts.
   const go = (label: string, focus: 'security' | 'requests', view?: DetailFilter['view']) =>
     (target ? () => open({ t: target, focus, label, filter: { part: focus, ...(view ? { view } : {}) } }) : undefined);
+  // Mitigated comes from the security events the sections below read (no read of its own).
+  const detail = useLoadedDetail(target);
+  const sec = detail && detail !== 'error' ? detail.security : null;
+  const mitigated = sec?.breakdowns.actions ? sec.breakdowns.actions.filter((r) => MITIGATING_ACTIONS.includes(r.dims.action)).reduce((n, r) => n + r.count, 0) : null;
+  const origin = t.requests - t.cachedRequests, originBytes = t.bytes - t.cachedBytes;
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       <OpenCard label="Requests" onOpen={go('Requests', 'requests')}><Stat label="Requests" value={num(t.requests)} sub={<Change now={t.requests} before={p?.requests} month={month} />} /></OpenCard>
       <OpenCard label="Bandwidth" onOpen={go('Bandwidth', 'requests', 'bytes')}><Stat label="Bandwidth" value={bytes(t.bytes)} sub={<Change now={t.bytes} before={p?.bytes} month={month} />} /></OpenCard>
       <OpenCard label="Served from cache" onOpen={go('Served from cache', 'requests', 'cache')}><Stat label="Served from cache" value={pct(t.cachedRequests, t.requests)} sub={<span>{pct(t.cachedBytes, t.bytes)} of bandwidth</span>} /></OpenCard>
+      <OpenCard label="Served by origin" onOpen={go('Served by origin', 'requests', 'origin')}><Stat label="Served by origin" value={num(origin)} sub={<span>{pct(origin, t.requests)} · {bytes(originBytes)} <Change now={origin} before={p ? p.requests - p.cachedRequests : undefined} month={month} /></span>} /></OpenCard>
       <OpenCard label="Threats" onOpen={go('Threats', 'security', 'threats')}><Stat label="Threats" value={num(t.threats)} sub={<Change now={t.threats} before={p?.threats} month={month} />} /></OpenCard>
+      <OpenCard label="Mitigated" onOpen={go('Mitigated', 'security', 'threats')}><Stat label="Mitigated" value={mitigated !== null ? num(mitigated) : sec || detail === 'error' ? '—' : '…'}
+        sub={<span>{mitigated !== null ? `${pct(mitigated, sec!.total)} of security events` : sec ? (sec.message ?? 'Not available') : detail === 'error' ? 'Security events could not be read' : 'Reading security events…'}</span>} /></OpenCard>
       <OpenCard label="Page views" onOpen={go('Page views', 'requests', 'pages')}><Stat label="Page views" value={num(t.pageViews)} sub={<Change now={t.pageViews} before={p?.pageViews} month={month} />} /></OpenCard>
       <OpenCard label="Visitors" onOpen={go('Visitors', 'requests')}><Stat label="Visitors / day" value={num(perDay(t))} sub={<span title={`Average of the daily unique visitors${vs}`}>daily average</span>} /></OpenCard>
     </div>
@@ -115,11 +124,12 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
           <div className="pointer-events-none absolute bottom-full z-20 mb-2 w-52 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs shadow-pop"
             style={{ left: `${((hover + 0.5) / days.length) * 100}%`, transform: `translateX(${hover < days.length / 3 ? '-10%' : hover > (days.length * 2) / 3 ? '-90%' : '-50%'})` }}>
             <div className="mb-1 font-medium text-ink">{dayLabel(h.date)}</div>
-            <Row k="Requests" v={whole.format(h.requests)} />
-            <Row k="From cache" v={`${whole.format(h.cachedRequests)} (${pct(h.cachedRequests, h.requests)})`} />
+            <Row k="Requests" v={num(h.requests)} />
+            <Row k="From cache" v={`${num(h.cachedRequests)} (${pct(h.cachedRequests, h.requests)})`} />
+            <Row k="From origin" v={`${num(h.requests - h.cachedRequests)} (${pct(h.requests - h.cachedRequests, h.requests)})`} />
             <Row k="Bandwidth" v={bytes(h.bytes)} />
-            <Row k="Threats" v={whole.format(h.threats)} />
-            <Row k="Visitors" v={whole.format(h.uniques)} />
+            <Row k="Threats" v={num(h.threats)} />
+            <Row k="Visitors" v={num(h.uniques)} />
           </div>
         )}
       </div>
@@ -136,8 +146,8 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
             <tbody>
               {days.map((d) => (
                 <tr key={d.date} className="border-t border-line/50">
-                  <td className="px-3 py-1">{dayLabel(d.date)}</td><td className="px-3 py-1">{whole.format(d.requests)}</td><td className="px-3 py-1">{pct(d.cachedRequests, d.requests)}</td>
-                  <td className="px-3 py-1">{bytes(d.bytes)}</td><td className="px-3 py-1">{whole.format(d.threats)}</td><td className="px-3 py-1">{whole.format(d.pageViews)}</td><td className="px-3 py-1">{whole.format(d.uniques)}</td>
+                  <td className="px-3 py-1">{dayLabel(d.date)}</td><td className="px-3 py-1" title={whole.format(d.requests)}>{num(d.requests)}</td><td className="px-3 py-1">{pct(d.cachedRequests, d.requests)}</td>
+                  <td className="px-3 py-1">{bytes(d.bytes)}</td><td className="px-3 py-1" title={whole.format(d.threats)}>{num(d.threats)}</td><td className="px-3 py-1" title={whole.format(d.pageViews)}>{num(d.pageViews)}</td><td className="px-3 py-1" title={whole.format(d.uniques)}>{num(d.uniques)}</td>
                 </tr>
               ))}
             </tbody>
@@ -211,6 +221,7 @@ function SliceBody({ s, r, totals = true, target }: { s: TrafficSlice; r: Traffi
     <div className="space-y-5">
       {totals && <Totals s={s} month={r.month} partial={r.partial} target={target} />}
       <DailyChart daily={s.daily} since={r.since} until={r.until} target={target} />
+      <EventsChart target={target} />
       <div className="grid gap-5 lg:grid-cols-2">
         <div><div className="eyebrow mb-2">Status codes</div><Statuses s={s.statuses} /></div>
         <div><div className="eyebrow mb-2">Top countries</div><Countries list={s.countries} total={s.totals.requests} /></div>
