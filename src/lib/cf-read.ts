@@ -1,24 +1,40 @@
 import 'server-only';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { tag } from './cache';
 
 // Cloudflare API calls for the monitoring checks and actions. Every call spends from one budget per
-// token: Cloudflare allows 1,200 calls per 5 minutes per user or token, and backups, restores, the
-// Zone explorer and analytics need the same allowance, so checks take at most MONITOR_BUDGET of it
-// (400 by default) and wait for room instead of going over. A 429 pauses that token until Cloudflare's
-// Retry-After has passed. Tokens never leave this module except in the Authorization header.
+// token (a "lane"): Cloudflare allows 1,200 calls per 5 minutes per user or token. Monitoring takes
+// at most MONITOR_BUDGET of it (800 by default) and none at all while a backup or restore uses the
+// token, which then has it to itself; actions and analytics may use up to 1,150. Calls wait for room
+// instead of going over, and a 429 pauses the token until Cloudflare's Retry-After has passed.
+// Tokens never leave this module except in the Authorization header.
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const WINDOW_MS = 5 * 60_000;
-const BUDGET = Math.max(20, Number(process.env.MONITOR_BUDGET) || 400);
+export const MONITOR_BUDGET = Math.max(20, Number(process.env.MONITOR_BUDGET) || 800);
+const TOTAL_BUDGET = Math.max(MONITOR_BUDGET, 1_150);
 /** Longest a call waits for room in the budget before the check gives up on it. */
 const MAX_WAIT_MS = 90_000;
+
+/** A monitoring unit's calls: counted, and held back while its lane is paused. */
+export interface MonitorCalls { calls: number }
+const monitorScope = new AsyncLocalStorage<MonitorCalls>();
+/** Runs `fn` as monitoring work: its calls use the monitoring budget and are counted in `m`. */
+export const asMonitor = <T>(m: MonitorCalls, fn: () => Promise<T>) => monitorScope.run(m, fn);
+
+const gp = globalThis as unknown as { __cfLanePaused?: { fn: (lane: string) => string | null } };
+const pause = (gp.__cfLanePaused ??= { fn: () => null });
+/** Says why monitoring must not use a lane right now (a backup or restore uses that token), or null. */
+export function setLanePause(fn: (lane: string) => string | null) { pause.fn = fn; }
+/** The lane (budget) a token spends from. */
+export const laneOf = (token: string) => tag(token);
 
 interface Bucket { calls: number[]; pausedUntil: number }
 const gb = globalThis as unknown as { __cfBudget?: Map<string, Bucket> };
 const buckets = (gb.__cfBudget ??= new Map<string, Bucket>());
 
 export class BudgetError extends Error {
-  constructor() { super('Waited too long for Cloudflare’s rate limit — the rest is read on the next run'); }
+  constructor(why?: string) { super(why ? `${why} — checked again later` : 'Waited too long for Cloudflare’s rate limit — the rest is read on the next run'); }
 }
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -26,20 +42,31 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
   signal?.addEventListener('abort', () => { clearTimeout(t); reject(signal.reason ?? new Error('Stopped')); }, { once: true });
 });
 
-/** Takes one call from the token's budget, waiting while it is spent or paused by a 429. */
+/** Takes one call from the token's budget, waiting while it is spent or paused by a 429 (or, for monitoring, by a backup). */
 async function take(token: string, signal?: AbortSignal) {
   const key = tag(token);
   const b = buckets.get(key) ?? { calls: [], pausedUntil: 0 };
   buckets.set(key, b);
+  const m = monitorScope.getStore();
+  const limit = m ? MONITOR_BUDGET : TOTAL_BUDGET;
   const started = Date.now();
   for (;;) {
     const now = Date.now();
     b.calls = b.calls.filter((t) => t > now - WINDOW_MS);
-    const wait = Math.max(b.pausedUntil - now, b.calls.length >= BUDGET ? b.calls[0] + WINDOW_MS - now : 0);
-    if (wait <= 0) { b.calls.push(now); return; }
-    if (now - started + wait > MAX_WAIT_MS) throw new BudgetError();
+    const held = m ? pause.fn(key) : null;
+    const wait = held ? 5_000 : Math.max(b.pausedUntil - now, b.calls.length >= limit ? b.calls[b.calls.length - limit] + WINDOW_MS - now : 0);
+    if (wait <= 0) { b.calls.push(now); if (m) m.calls++; return; }
+    if (now - started + wait > MAX_WAIT_MS) throw new BudgetError(held ?? undefined);
     await sleep(Math.min(wait, 5_000), signal);
   }
+}
+
+/** A lane's use of the current 5-minute window. */
+export function laneUse(lane: string): { used: number; pausedUntil: number } {
+  const b = buckets.get(lane);
+  if (!b) return { used: 0, pausedUntil: 0 };
+  const now = Date.now();
+  return { used: b.calls.filter((t) => t > now - WINDOW_MS).length, pausedUntil: b.pausedUntil > now ? b.pausedUntil : 0 };
 }
 
 export interface CfError { code?: number; message?: string }

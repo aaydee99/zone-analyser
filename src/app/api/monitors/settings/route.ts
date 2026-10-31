@@ -8,12 +8,13 @@ export const dynamic = 'force-dynamic';
 /** The schedule and where notifications go (addresses masked), with the notifications sent lately. */
 export const GET = route(async () => ({ config: await monitorConfigView(), sent: await listNotifications(30) }), { perm: 'settings:read' });
 
-/** { intervalHours?, minSeverity?, slack?: url | null, webhook?: url | null } — null removes an address. */
+/** { scheduled?, intervals?: { [check]: hours }, minSeverity?, slack?: url | null, webhook?: url | null } — null removes an address. */
 export const PUT = route(async (req, _ctx, me) => {
   const p = await readBody<MonitorConfigPatch>(req);
   const config = await saveMonitorConfig(p);
   await audit(me, 'monitoring.settings_updated', null, {
-    ...(p.intervalHours !== undefined ? { intervalHours: config.intervalHours } : {}),
+    ...(p.scheduled !== undefined ? { scheduled: config.scheduled } : {}),
+    ...(p.intervals ? { intervals: p.intervals } : {}),
     ...(p.minSeverity !== undefined ? { minSeverity: config.minSeverity } : {}),
     ...(p.slack !== undefined ? { slack: p.slack ? 'set' : 'removed' } : {}),
     ...(p.webhook !== undefined ? { webhook: p.webhook ? 'set' : 'removed' } : {}),

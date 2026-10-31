@@ -1,56 +1,98 @@
 import 'server-only';
-import { BudgetError, ReadError } from '../cf-read';
-import { accountTargets, zoneTargets, type AccountTarget, type ZoneTarget } from '../cf-targets';
-import type { Progress } from '../bg-job';
+import { ReadError } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
-import type { CheckId, MonitorReport, ReportProblem, ReportSection, ReportStat, Severity } from '../monitor-types';
+import type { CheckId, Column, ReportStat, Row, Severity } from '../monitor-types';
 
-// What every check gets and gives back.
+// What every check is made of: units of work, each reading one zone, one account, or (global) the
+// whole console, run by the queue (src/lib/monitor-queue.ts) when they are due. A unit returns its
+// table rows, findings and counts; the check's page sums the counts and pages through the rows.
 
-export interface CheckContext {
-  progress: Progress;
+export type ScopeKind = 'zone' | 'account' | 'global';
+
+export interface UnitTarget {
+  kind: ScopeKind;
+  /** The zone or account ID; '*' for a global unit. */
+  id: string;
+  accountId: string;
+  accountName: string;
+  zoneName: string;
+  /** The token the queue chose for this unit (none for a global unit: it gets `tokens`). */
+  token: string;
+  credentialName: string;
+  /** Global units: every stored token, once each. */
+  tokens: { token: string; credentialName: string }[];
+}
+
+export interface UnitContext {
   signal?: AbortSignal;
-  accounts: () => Promise<{ accounts: AccountTarget[]; problems: ReportProblem[] }>;
-  zones: () => Promise<{ zones: ZoneTarget[]; problems: ReportProblem[] }>;
+  /** What this unit kept from its last run (an audit-log cursor …). */
+  state: unknown;
 }
 
-export interface CheckResult {
-  report: MonitorReport;
+export interface UnitResult {
+  /**
+   * Table rows by section key; they replace the unit's rows from before. `_sort` (a number, lowest
+   * first) orders a section; it is not shown. A unit that could read nothing throws instead, so its
+   * last result stays on the page with the error beside it.
+   */
+  rows: Partial<Record<string, Row[]>>;
   findings: NewFinding[];
-  /** Account and zone IDs read in full ('*' = everything the check covers): their old findings may be resolved. */
-  read: Set<string>;
+  /** Added up over every unit of the check for its stats. */
+  counts?: Record<string, number>;
+  /** Everything in scope was read: its old findings that were not found again are resolved. */
+  complete: boolean;
+  /** Reads that failed (shown on the check's page). */
+  problems?: string[];
+  /** Hours until the next run instead of the check's interval: shorter when something is urgent. */
+  dueInHours?: number;
+  /** Nothing here to watch (no product, no items): checked again only after the check's idle interval. */
+  idle?: boolean;
+  /** Kept for the next run. */
+  state?: unknown;
+  /** Other units of this check to run now (drift: the zones the audit log says changed). */
+  wake?: { kind: ScopeKind; ids: string[] };
 }
 
-export type CheckRunner = (ctx: CheckContext) => Promise<CheckResult>;
+export type UnitRunner = (t: UnitTarget, ctx: UnitContext) => Promise<UnitResult>;
 
-/** Accounts and zones are listed once per run of several checks. */
-export function makeContext(progress: Progress): CheckContext {
-  let a: ReturnType<CheckContext['accounts']> | null = null;
-  let z: ReturnType<CheckContext['zones']> | null = null;
-  return {
-    progress, signal: progress.signal,
-    accounts: () => (a ??= accountTargets()),
-    zones: () => (z ??= zoneTargets()),
-  };
+export interface SectionMeta {
+  key: string;
+  title: string;
+  description?: string;
+  columns: Column[];
+  empty?: string;
 }
 
-/** Builds the report; `partial` when a read stopped early. */
-export function report(check: CheckId, started: number, stats: ReportStat[], sections: ReportSection[], problems: ReportProblem[], partial = false): MonitorReport {
-  return { check, generatedAt: new Date().toISOString(), durationMs: Date.now() - started, stats, sections, problems, ...(partial ? { partial: true } : {}) };
+export interface CheckDef {
+  id: CheckId;
+  units: Partial<Record<ScopeKind, UnitRunner>>;
+  /** The kind whose interval is the check's (CheckMeta.every, or the one set in the settings). */
+  main: ScopeKind;
+  /** Fixed hours between runs for other kinds; a kind not listed runs at the check's interval. */
+  every?: Partial<Record<ScopeKind, number>>;
+  /** Kinds of unit that keep state between runs (UnitResult.state); the others never read it. */
+  stateful?: ScopeKind[];
+  /** Hours between runs of a unit with nothing to watch. */
+  idleHours?: number;
+  sections: SectionMeta[];
+  /** The page's stats from the summed counts and the open findings. */
+  stats: (t: Totals) => ReportStat[];
 }
 
-/** Collects read failures instead of stopping the check; a rate-limit stop marks the report partial. */
+export interface Totals {
+  counts: Record<string, number>;
+  open: Record<Severity, number>;
+  targets: { total: number; read: number; failing: number; never: number };
+}
+
+/** Collects read failures instead of stopping the unit. */
 export class Problems {
-  list: ReportProblem[] = [];
-  partial = false;
-  add(scope: string, err: unknown) {
-    if (err instanceof BudgetError) this.partial = true;
+  list: string[] = [];
+  complete = true;
+  add(what: string, err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') throw err;
-    this.list.push({ scope, error: err instanceof Error ? err.message : String(err) });
-  }
-  /** Runs one read; a failure is noted and `fallback` returned. */
-  async try<T>(scope: string, fn: () => Promise<T>, fallback: T): Promise<T> {
-    try { return await fn(); } catch (err) { this.add(scope, err); return fallback; }
+    this.complete = false;
+    this.list.push(`${what}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -61,13 +103,19 @@ export const DAY = 86_400_000;
 export const daysUntil = (iso: string | null | undefined, now = Date.now()) => (iso && Number.isFinite(Date.parse(iso)) ? Math.floor((Date.parse(iso) - now) / DAY) : null);
 export const daysSince = (iso: string | null | undefined, now = Date.now()) => (iso && Number.isFinite(Date.parse(iso)) ? Math.floor((now - Date.parse(iso)) / DAY) : null);
 
-export const countBy = (findings: NewFinding[], s: Severity) => findings.filter((f) => f.severity === s).length;
+export const SEV_SORT: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+export const TONE_SORT: Record<string, number> = { bad: 0, warn: 1, ok: 2, info: 3 };
 
-export function severityStats(findings: NewFinding[]): ReportStat[] {
-  const crit = countBy(findings, 'critical'), high = countBy(findings, 'high'), med = countBy(findings, 'medium');
+export function severityStats(open: Record<Severity, number>): ReportStat[] {
   return [
-    { label: 'Critical', value: crit, tone: crit ? 'bad' : 'ok' },
-    { label: 'High', value: high, tone: high ? 'bad' : 'ok' },
-    { label: 'Medium', value: med, tone: med ? 'warn' : 'ok' },
+    { label: 'Critical', value: open.critical, tone: open.critical ? 'bad' : 'ok' },
+    { label: 'High', value: open.high, tone: open.high ? 'bad' : 'ok' },
+    { label: 'Medium', value: open.medium, tone: open.medium ? 'warn' : 'ok' },
   ];
 }
+
+/** "6,410 of 6,532 read" for a check's coverage stat. */
+export const readStat = (t: Totals, what = 'Read'): ReportStat => ({
+  label: what, value: `${t.targets.read.toLocaleString('en-US')} of ${t.targets.total.toLocaleString('en-US')}`,
+  tone: t.targets.failing ? 'warn' : t.targets.total && t.targets.read === t.targets.total ? 'ok' : undefined,
+});

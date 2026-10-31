@@ -452,7 +452,7 @@ function claim(id: string, job: ActiveRestore['job'], by: string) {
   store.busy = id;
   const s = store.sessions.get(id);
   if (s) { s.cancelRequested = false; s.cancelled = null; }
-  setActiveRestore({ id, zone: s?.zone.name ?? '', job, by, since: new Date().toISOString() });
+  setActiveRestore({ id, zone: s?.zone.name ?? '', job, by, since: new Date().toISOString(), credentialId: s?.account.credentialId });
 }
 
 function release() {

@@ -8,6 +8,8 @@ export interface ActiveRestore {
   job: 'comparing' | 'planning' | 'applying';
   by: string;
   since: string;
+  /** The Cloudflare credential it uses (monitoring leaves its token alone meanwhile). */
+  credentialId?: string;
 }
 
 const g = globalThis as unknown as { __restoreJob?: { current: ActiveRestore | null } };

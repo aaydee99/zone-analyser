@@ -35,8 +35,12 @@ const cfMessage = (r: { status: number; body: Envelope | null }) =>
 // ── Zones the tokens can read ───────────────────────────────────────────────
 
 interface RawZone { id: string; name: string; status?: string; type?: string; paused?: boolean; plan?: { name?: string }; account?: { id?: string; name?: string }; name_servers?: string[]; created_on?: string; activated_on?: string | null }
-/** Cached without tokens: `credentialOf` names the stored credential that reads each zone; its token is decrypted when needed. */
-interface ZoneList { zones: ZoneListItem[]; problems: { credential: string; error: string }[]; at: number; credentialOf: Record<string, { id: string; name: string }> }
+/**
+ * Cached without tokens: `credentialOf` names the stored credential that reads each zone (its token is
+ * decrypted when needed); `readersOf` lists every stored credential that reads it (monitoring spreads
+ * zones over their tokens).
+ */
+export interface ZoneList { zones: ZoneListItem[]; problems: { credential: string; error: string }[]; at: number; credentialOf: Record<string, { id: string; name: string }>; readersOf: Record<string, string[]> }
 
 export function listZones(fresh = false): Promise<ZoneList> {
   return cached('path:/api/zone-explorer', LIST_TTL, readZoneList, fresh);
@@ -47,13 +51,19 @@ async function readZoneList(): Promise<ZoneList> {
   const tokenOf = new Map<string, { token: string; id: string; name: string }>();
   const problems: ZoneList['problems'] = [];
   const seenTokens = new Set<string>();
+  const readers = new Map<string, Set<string>>();
+  const reads = (zoneId: string, credentialId: string) => { const r = readers.get(zoneId) ?? new Set<string>(); r.add(credentialId); readers.set(zoneId, r); };
   for (const o of (await listCredentialOptions()).filter((x) => x.kind === 'cloudflare')) {
     let token: string;
     try { token = (await credentialForRun(o.id, 'cloudflare')).fields.apiToken; } catch { problems.push({ credential: o.name, error: 'Could not be decrypted' }); continue; }
     if (!token) continue;
     if (seenTokens.has(token)) {
       // Same token as an earlier credential: it reads the same zones.
-      for (const z of zones.values()) if (tokenOf.get(z.id)?.token === token && !z.credentials.includes(o.name)) z.credentials.push(o.name);
+      for (const z of zones.values()) {
+        if (tokenOf.get(z.id)?.token !== token) continue;
+        if (!z.credentials.includes(o.name)) z.credentials.push(o.name);
+        reads(z.id, o.id);
+      }
       continue;
     }
     seenTokens.add(token);
@@ -65,6 +75,7 @@ async function readZoneList(): Promise<ZoneList> {
       }
       const rows = (r.body.result as RawZone[]) ?? [];
       for (const z of rows) {
+        reads(z.id, o.id);
         const cur = zones.get(z.id);
         if (cur) { if (!cur.credentials.includes(o.name)) cur.credentials.push(o.name); continue; }
         zones.set(z.id, {
@@ -80,6 +91,7 @@ async function readZoneList(): Promise<ZoneList> {
   const list: ZoneList = {
     zones: [...zones.values()].sort((a, b) => a.accountName.localeCompare(b.accountName) || a.name.localeCompare(b.name)),
     problems, at: Date.now(), credentialOf: Object.fromEntries([...tokenOf].map(([zid, x]) => [zid, { id: x.id, name: x.name }])),
+    readersOf: Object.fromEntries([...readers].map(([zid, ids]) => [zid, [...ids]])),
   };
   return list;
 }

@@ -18,8 +18,8 @@ export function DriftAccept({ zoneId, zoneName, onDone, compact = false }: { zon
   const go = async () => {
     setBusy(true);
     try {
-      const r = await api<{ accepted: string[] }>('/api/monitors/drift/accept', { method: 'POST', json: zoneId ? { zoneId } : {} });
-      toast(`Accepted ${r.accepted.length === 1 ? r.accepted[0] : `${r.accepted.length} zones`} as the new baseline — checking drift again`, 'ok');
+      const r = await api<{ accepted: string[]; count: number }>('/api/monitors/drift/accept', { method: 'POST', json: zoneId ? { zoneId } : {} });
+      toast(`Accepted ${r.count === 1 ? r.accepted[0] : `${r.count.toLocaleString()} zones`} as the new baseline`, 'ok');
       setOpen(false);
       onDone();
     } catch (err) { toast((err as Error).message, 'bad'); } finally { setBusy(false); }

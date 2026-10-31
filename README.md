@@ -368,7 +368,7 @@ Super admins see **Revert** on each change in Cloudflare activity. Reverting goe
 
 ## Monitoring
 
-**Monitoring** checks every Cloudflare account and zone the stored tokens can reach and lists what needs attention. Every role sees it (Tokens & members is for admins and super admins). It needs `supabase/migrations/0010_monitoring.sql`.
+**Monitoring** checks every Cloudflare account and zone the stored tokens can reach and lists what needs attention. Every role sees it (Tokens & members is for admins and super admins). It needs `supabase/migrations/0010_monitoring.sql` and `0011_monitor_queue.sql`.
 
 | Check | What it finds | Token permissions it reads with |
 | --- | --- | --- |
@@ -383,21 +383,35 @@ Super admins see **Revert** on each change in Cloudflare activity. Reverting goe
 | Page Rules | Page Rules still in use and the rule type each setting moves to | Page Rules Read |
 
 - **Findings** have a severity. The same problem keeps one finding across runs; it closes by itself once a run has read its account or zone again and the problem is gone (a failed read never closes one). Admins can dismiss a finding: it stays out of counts and notifications, also after later runs.
-- **Runs:** admins press **Run all checks** (or **Check now** on one check). The worker also runs every check on a schedule (Overview › Schedule and notifications, every 6 hours by default) whenever it is up, so add a schedule that starts it — see below. Checks run one after another and take at most `MONITOR_BUDGET` Cloudflare calls per token per 5 minutes (400 of Cloudflare's 1,200 by default), so backups and restores keep their share; a check that waits too long is marked "partly read" and the rest is read on the next run.
-- **Notifications:** a Slack incoming-webhook address and/or any HTTPS webhook (JSON). New findings at or above the chosen severity are sent once per run; each batch is marked as sent **before** it goes out, so a failure is logged (Overview › Recently sent) and never resent. The addresses are sealed with the vault server key and never shown again. Set `CONSOLE_PUBLIC_URL` (for example `https://console.example.com`) to add a link to the console in each message.
-- **Cloudflare's own alerts:** a super admin connects an account on **Monitoring › Cloudflare alerts**. That creates a webhook destination in Cloudflare (the stored token needs **Notifications Edit** for this one step) pointing at `/api/hooks/cloudflare`, with a secret only the console knows. Then choose in Cloudflare › Notifications which alerts go to it. The console must be reachable from the internet at a host in `CONSOLE_ALLOWED_HOSTS`.
-- **Drift:** after reviewing changes, accept them as the new baseline (one zone or all). To undo a change instead, restore the zone from a backup.
+- **How it runs (built for thousands of zones):** each check is split into units — one per zone, one per account, or one for the whole console — and each unit has its own next run in `monitor_targets`. The worker takes what is due, hand-started units first, and runs them in **lanes**: one per stored API token, side by side, at most 6 units at a time per token and `MONITOR_PARALLEL` (24) overall. Each lane makes at most `MONITOR_BUDGET` monitoring calls per 5 minutes (**800** of Cloudflare's 1,200 by default; the console's own reads may use up to 1,150). **While a backup or restore uses a token, monitoring makes no calls with it** until it is done; other tokens carry on. A 429 pauses that token until Cloudflare's `Retry-After`. Nothing is lost when the worker stops: what is due stays due in the table, and a unit a stopped worker was running is taken again after 15 minutes. **Overview › API tokens** shows each token's accounts, zones, calls in the last 5 minutes and whether it is paused.
+- **How often:** each check has its own interval (Overview › Schedule and notifications), and units with nothing to watch are read less often:
 
-**Run the worker on a schedule** (GitHub Actions): add a schedule to `.github/workflows/worker.yml` so the checks run even when nobody uses the console:
+  | Check | Default | Notes |
+  | --- | --- | --- |
+  | Drift | every hour | one audit-log call per account; only the zones it shows a change in are read again (about 25 calls each). Every zone is also read in full once a week. Needs Account Settings Read for the audit log. |
+  | Cloudflare alerts, Availability | every hour | a zone with no health checks or waiting rooms (and an account with no tunnels or pools) once a day |
+  | Developer platform | every 6 hours | per account |
+  | Certificates | every day | a zone with a certificate expiring within 14 days, or being validated, every 6 hours |
+  | Scripts & APIs, Page Rules | every day | a zone where Page Shield / API Shield / Page Rules have nothing, once a week |
+  | Security posture, Tokens & members | every day | per account |
+
+  The accounts and zones are listed again every 6 hours, when a credential is added, removed or given a new token, and (in the background) when someone starts checks more than 10 minutes after the last listing. A zone or account no token reaches any more is removed and its open findings close — but only after a listing where every credential could be read.
+- **Pages:** results are kept per zone and account (`monitor_results`, `monitor_rows`) and shown 50 rows at a time with search; totals and counts come from SQL. Pages do not reload by themselves: they show the time they are from and a **Refresh** button. **Run all checks** / **Check now** put the units at the front of the queue (`POST /api/monitors/run` also takes `accountId` or `zoneId`); press Refresh to see what is done.
+- **Notifications:** a Slack incoming-webhook address and/or any HTTPS webhook (JSON). New findings at or above the chosen severity are sent in one message every 5 minutes at most while units run (`MONITOR_NOTIFY_SECONDS`), and as soon as nothing is due; only findings from the last 24 hours that were never sent are sent; each batch is marked as sent **before** it goes out, so a failure is logged (Overview › Recently sent) and never resent. The addresses are sealed with the vault server key and never shown again. Set `CONSOLE_PUBLIC_URL` (for example `https://console.example.com`) to add a link to the console in each message.
+- **Cloudflare's own alerts:** a super admin connects an account on **Monitoring › Cloudflare alerts**. That creates a webhook destination in Cloudflare (the stored token needs **Notifications Edit** for this one step) pointing at `/api/hooks/cloudflare`, with a secret only the console knows. Then choose in Cloudflare › Notifications which alerts go to it. The console must be reachable from the internet at a host in `CONSOLE_ALLOWED_HOSTS`.
+- **Drift:** after reviewing changes, accept them as the new baseline (one zone or all). To undo a change instead, restore the zone from a backup. 0011 moves baselines taken before it into one row per zone (`monitor_snapshots`).
+
+**Run the worker on a schedule** (GitHub Actions): scheduled checks run only while the worker is up, so add a schedule to `.github/workflows/worker.yml` that starts it. The worker stays up while units are running or due, and stops by itself when it has been idle for `CONSOLE_WORKER_IDLE_MINUTES` (and before `CONSOLE_WORKER_MAX_MINUTES`). How often to start it is a trade-off between freshness and GitHub Actions minutes (free on public repositories; private ones have a monthly allowance that depends on the plan):
 
 ```yaml
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */6 * * *'   # every 6 hours; GitHub may start it a few minutes late
+    - cron: '7 * * * *'      # every hour: hourly checks (drift, alerts, availability) stay on time
+    # - cron: '7 */6 * * *'  # every 6 hours: far fewer minutes; hourly checks then run 4 times a day
 ```
 
-The worker stops by itself when it has been idle for `CONSOLE_WORKER_IDLE_MINUTES`, after the checks finish.
+With 66 accounts and about 6,500 zones, the first full read is roughly 150,000–230,000 calls; at 800 calls per 5 minutes per token that is a few hours spread over the tokens, and the worker carries on over several starts if needed. After that, a day is roughly 70,000–100,000 calls (most zones have no health checks, Page Shield or Page Rules, so they are read daily or weekly), so each hourly start mostly has a few minutes of work.
 
 ## Cache purge and rollbacks
 
@@ -463,7 +477,7 @@ Every read-only Cloudflare view is its own endpoint, and its cached copy is kept
 | `profiles` (roles), `sessions`, Supabase Auth users | `tools/`: managed terraform and cf-terraforming |
 | `vault`, `credentials` (ciphertext only) | `plugin-cache/` |
 | `presets`, `runs`, `run_logs`, `settings`, `audit_log` | `backups/`: backup output (unless a run sets another directory); `restore-history/`: one record per restore; `approvals/`: one record per approval request |
-| `monitor_reports`, `monitor_findings`, `cloudflare_alerts`, `notifications` (monitoring; notification addresses are sealed inside `settings`) | |
+| `monitor_targets`, `monitor_results`, `monitor_rows`, `monitor_snapshots`, `monitor_findings`, `cloudflare_alerts`, `notifications` (monitoring; notification addresses are sealed inside `settings`; `monitor_reports` is no longer written) | |
 
 Row-level security is enabled on every table with **no policies**, so the anon and authenticated keys can read nothing. Only the server, using the service-role key, can read or write them. The browser never talks to Supabase directly.
 

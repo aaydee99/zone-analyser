@@ -1,45 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/client';
-import type { CheckId } from '@/lib/monitor-types';
-
-export interface RunState {
-  running: boolean;
-  startedAt: string | null;
-  by: string | null;
-  checks: CheckId[];
-  current: { check: CheckId; done: number; total: number } | null;
-  finishedAt: string | null;
-  lastError: string | null;
-}
+import type { Coverage } from '@/lib/monitor-types';
 
 /**
- * Loads `path` now, every 3 seconds while checks run, and every 30 seconds otherwise; reloads once
- * more when a run finishes so the new results show without a click.
+ * Loads `path` once and keeps what it got: the page stays as it is until someone presses Refresh
+ * (`reload`), while the worker keeps checking in the background. `version` goes up with each load,
+ * so the tables and findings below reload with it.
  */
-export function usePolled<T extends { run?: RunState }>(path: string) {
+export function useSnapshot<T>(path: string) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
-  const was = useRef(false);
-  const load = useCallback(() => api<T>(path).then((d) => { setData(d); setError(''); return d; }).catch((e) => { setError((e as Error).message); return null; }), [path]);
-  const running = !!data?.run?.running;
-  useEffect(() => {
-    void load();
-  }, [load]);
-  useEffect(() => {
-    const t = setInterval(() => { void load(); }, running ? 3_000 : 30_000);
-    if (was.current && !running) void load();
-    was.current = running;
-    return () => clearInterval(t);
-  }, [load, running]);
-  return { data, error, reload: load };
+  const [loading, setLoading] = useState(true);
+  const [version, setVersion] = useState(0);
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try { setData(await api<T>(path)); setError(''); setVersion((v) => v + 1); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+  }, [path]);
+  useEffect(() => { void reload(); }, [reload]);
+  return { data, error, loading, reload, version };
 }
 
-/** "Checking certificates · 12 of 40" while a run goes. */
-export function runLabel(run: RunState | undefined, labels: Record<string, string>) {
-  if (!run?.running) return '';
-  const c = run.current;
-  if (!c) return 'Starting the checks…';
-  return `Checking ${labels[c.check]?.toLowerCase() ?? c.check}${c.total ? ` · ${c.done} of ${c.total}` : '…'}`;
+const whole = new Intl.NumberFormat();
+
+/** "6,410 of 6,532 read · 122 waiting · 3 failing". */
+export function coverageLabel(c: Coverage) {
+  if (!c.targets) return 'Not checked yet';
+  const parts = [`${whole.format(c.read)} of ${whole.format(c.targets)} read`];
+  if (c.never) parts.push(`${whole.format(c.never)} not read yet`);
+  else if (c.due) parts.push(`${whole.format(c.due)} waiting`);
+  if (c.failing) parts.push(`${whole.format(c.failing)} failing`);
+  return parts.join(' · ');
 }
+
+/** "Every 6 hours" for an interval in hours. */
+export const every = (h: number) => (h < 1 ? `Every ${Math.round(h * 60)} minutes` : h === 1 ? 'Every hour' : h === 168 ? 'Every week' : h % 24 === 0 ? (h === 24 ? 'Every day' : `Every ${h / 24} days`) : `Every ${h} hours`);

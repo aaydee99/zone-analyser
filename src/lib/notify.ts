@@ -1,13 +1,14 @@
 import 'server-only';
 import { BRAND } from './brand';
 import { getMonitorConfig } from './monitor-config';
-import { logNotification, markNotified } from './monitor-store';
+import { logNotification, markNotified, unsentFindings } from './monitor-store';
 import { CHECK, SEVERITY_RANK, type Finding } from './monitor-types';
 
-// Notifications about new findings, to Slack and/or a webhook. Each batch is marked as notified
-// BEFORE it is sent and sent once per channel: a failed send is logged, never retried, so nobody
-// gets the same alert twice. Only findings at or above the configured severity, not dismissed and
-// not notified before, are sent.
+// Notifications about new findings, to Slack and/or a webhook. The worker sends what is new in one
+// batch every few minutes while checks run, and once more when the queue is empty (sendUnsent).
+// Each batch is marked as notified BEFORE it is sent and sent once per channel: a failed send is
+// logged, never retried, so nobody gets the same alert twice. Only findings at or above the
+// configured severity, not dismissed and not notified before, are sent.
 
 const MAX_LINES = 25;
 
@@ -43,6 +44,16 @@ function webhookBody(subject: string, findings: Finding[], consoleUrl: string | 
 }
 
 const consoleUrl = () => (process.env.CONSOLE_PUBLIC_URL || '').replace(/\/+$/, '') || null;
+
+/** Open findings found within this long that were never sent are sent; older ones are not (no surprise backlog). */
+const UNSENT_WINDOW_MS = 24 * 3_600_000;
+
+/** Sends every new finding worth sending that has not been sent, once. Returns how many were sent. */
+export async function sendUnsent(): Promise<number> {
+  const c = await getMonitorConfig();
+  if (!c.slack && !c.webhook) return 0;
+  return notifyFindings(await unsentFindings(SEVERITY_RANK[c.minSeverity], new Date(Date.now() - UNSENT_WINDOW_MS).toISOString()));
+}
 
 /** Sends the findings worth sending, once. Returns how many were sent. */
 export async function notifyFindings(candidates: Finding[]): Promise<number> {

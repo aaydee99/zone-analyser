@@ -3,16 +3,19 @@ import crypto from 'node:crypto';
 import { db, must } from './supabase';
 import { HttpError } from './http';
 import { openRelay, sealRelay } from './vault';
-import { SEVERITIES, type Severity } from './monitor-types';
+import { CHECKS, SEVERITIES, isCheckId, type CheckId, type Severity } from './monitor-types';
 
-// Monitoring settings, kept under `monitoring` in the settings row: how often the checks run, the
-// lowest severity that is sent, where notifications go, and the secret Cloudflare's alert webhook
-// signs with. The Slack and webhook URLs and that secret are sealed with the vault's server key;
+// Monitoring settings, kept under `monitoring` in the settings row: whether the checks run on their
+// own, how often each one runs, the lowest severity that is sent, where notifications go, and the
+// secret Cloudflare's alert webhook signs with. The Slack and webhook URLs and that secret are sealed with the vault's server key;
 // the browser only ever sees whether they are set and the end of the address.
 
 interface Sealed { iv: string; tag: string; ct: string }
 interface Stored {
+  /** Before 0011: one interval for every check; 0 meant "only by hand". */
   intervalHours?: number;
+  scheduled?: boolean;
+  intervals?: Partial<Record<CheckId, number>>;
   minSeverity?: Severity;
   slack?: Sealed | null;
   webhook?: Sealed | null;
@@ -20,18 +23,21 @@ interface Stored {
   lastRunAt?: string | null;
 }
 
-export interface MonitorConfig { intervalHours: number; minSeverity: Severity; slack: string; webhook: string; inboxSecret: string; lastRunAt: string | null }
+export interface MonitorConfig { scheduled: boolean; intervals: Record<CheckId, number>; minSeverity: Severity; slack: string; webhook: string; inboxSecret: string }
 
 /** What the browser sees. */
 export interface MonitorConfigView {
-  intervalHours: number;
+  scheduled: boolean;
+  /** Hours between runs of each check. */
+  intervals: Record<CheckId, number>;
   minSeverity: Severity;
   slack: { set: boolean; hint: string };
   webhook: { set: boolean; hint: string };
   inbox: { set: boolean };
 }
 
-export const DEFAULT_INTERVAL_HOURS = 6;
+/** Hours between runs a check may be set to. */
+export const MIN_HOURS = 0.25, MAX_HOURS = 168;
 const AAD = (k: string) => `monitoring:${k}`;
 
 async function readRow(): Promise<{ data: Record<string, unknown> }> {
@@ -46,14 +52,17 @@ const unseal = async (s: Sealed | null | undefined, k: string) => {
 
 export async function getMonitorConfig(): Promise<MonitorConfig> {
   const m = ((await readRow()).data.monitoring ?? {}) as Stored;
-  const hours = Number(m.intervalHours);
+  const intervals = Object.fromEntries(CHECKS.map((c) => {
+    const h = Number(m.intervals?.[c.id]);
+    return [c.id, Number.isFinite(h) && h >= MIN_HOURS && h <= MAX_HOURS ? h : c.every];
+  })) as Record<CheckId, number>;
   return {
-    intervalHours: Number.isFinite(hours) && hours >= 0 ? hours : DEFAULT_INTERVAL_HOURS,
+    scheduled: m.scheduled ?? m.intervalHours !== 0,
+    intervals,
     minSeverity: SEVERITIES.includes(m.minSeverity as Severity) ? m.minSeverity! : 'high',
     slack: await unseal(m.slack, 'slack'),
     webhook: await unseal(m.webhook, 'webhook'),
     inboxSecret: await unseal(m.inboxSecret, 'inbox'),
-    lastRunAt: m.lastRunAt ?? null,
   };
 }
 
@@ -61,7 +70,7 @@ const hint = (url: string) => (url ? `…${url.slice(-6)}` : '');
 
 export async function monitorConfigView(): Promise<MonitorConfigView> {
   const c = await getMonitorConfig();
-  return { intervalHours: c.intervalHours, minSeverity: c.minSeverity, slack: { set: !!c.slack, hint: hint(c.slack) }, webhook: { set: !!c.webhook, hint: hint(c.webhook) }, inbox: { set: !!c.inboxSecret } };
+  return { scheduled: c.scheduled, intervals: c.intervals, minSeverity: c.minSeverity, slack: { set: !!c.slack, hint: hint(c.slack) }, webhook: { set: !!c.webhook, hint: hint(c.webhook) }, inbox: { set: !!c.inboxSecret } };
 }
 
 async function write(change: (m: Stored) => Promise<void> | void) {
@@ -87,14 +96,25 @@ export function checkHookUrl(raw: string, label: string, slackOnly = false): str
   return v;
 }
 
-export interface MonitorConfigPatch { intervalHours?: number; minSeverity?: Severity; slack?: string | null; webhook?: string | null }
+export interface MonitorConfigPatch { scheduled?: boolean; intervals?: Partial<Record<string, number>>; minSeverity?: Severity; slack?: string | null; webhook?: string | null }
 
 export async function saveMonitorConfig(p: MonitorConfigPatch): Promise<MonitorConfigView> {
   await write(async (m) => {
-    if (p.intervalHours !== undefined) {
-      const h = Number(p.intervalHours);
-      if (!Number.isFinite(h) || h < 0 || h > 168) throw new HttpError(400, 'Run checks every 0 (off) to 168 hours');
-      m.intervalHours = Math.round(h * 4) / 4;
+    if (p.scheduled !== undefined) {
+      if (typeof p.scheduled !== 'boolean') throw new HttpError(400, 'scheduled must be true or false');
+      m.scheduled = p.scheduled;
+      delete m.intervalHours;
+    }
+    if (p.intervals !== undefined) {
+      if (!p.intervals || typeof p.intervals !== 'object') throw new HttpError(400, 'intervals must be an object of hours by check');
+      const next = { ...(m.intervals ?? {}) };
+      for (const [id, v] of Object.entries(p.intervals)) {
+        if (!isCheckId(id)) throw new HttpError(400, `Unknown check: ${id}`);
+        const h = Number(v);
+        if (!Number.isFinite(h) || h < MIN_HOURS || h > MAX_HOURS) throw new HttpError(400, `Run each check every ${MIN_HOURS * 60} minutes to ${MAX_HOURS} hours`);
+        next[id] = Math.round(h * 4) / 4;
+      }
+      m.intervals = next;
     }
     if (p.minSeverity !== undefined) {
       if (!SEVERITIES.includes(p.minSeverity)) throw new HttpError(400, 'Unknown severity');
@@ -104,10 +124,6 @@ export async function saveMonitorConfig(p: MonitorConfigPatch): Promise<MonitorC
     if (p.webhook !== undefined) m.webhook = p.webhook ? await sealRelay(Buffer.from(checkHookUrl(p.webhook, 'The webhook address')), AAD('webhook')) : null;
   });
   return monitorConfigView();
-}
-
-export async function setLastRun(at: string) {
-  await write((m) => { m.lastRunAt = at; });
 }
 
 /** The secret Cloudflare sends with each alert (cf-webhook-auth); made once, on first use. */

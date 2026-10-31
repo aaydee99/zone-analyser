@@ -103,6 +103,12 @@ export function activeRunId(): string | null {
   return null;
 }
 
+/** The Cloudflare credential the running backup uses (monitoring leaves its token alone meanwhile). */
+export function activeRunCredentialId(): string | null {
+  for (const r of live.values()) if (r.meta.status === 'running') return r.meta.config.cloudflareCredentialId ?? null;
+  return null;
+}
+
 /** A restore job (compare, plan, apply) blocks backups: one job at a time. */
 function assertNoRestore() {
   const r = activeRestore();

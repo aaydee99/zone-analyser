@@ -157,6 +157,7 @@ export function describeChange(e: AuditEntry): string {
     case 'cloudflare.action': return `Changed Cloudflare: ${str(d.result)}`;
     case 'cloudflare.action_failed': return `Cloudflare refused: ${str(e.target)} — ${str(d.error)}`;
     case 'monitoring.ran': return `Ran monitoring checks (${Array.isArray(d.checks) ? d.checks.length : 0}) — ${str(d.newFindings)} new findings`;
+    case 'monitoring.run_requested': return `Started monitoring checks (${Array.isArray(d.checks) ? d.checks.length : 0}) — ${str(d.units)} zones and accounts to read`;
     case 'monitoring.finding_dismissed': return `Dismissed a finding: ${str(e.target)}`;
     case 'monitoring.finding_restored': return `Brought back a dismissed finding: ${str(e.target)}`;
     case 'monitoring.settings_updated': return 'Changed the monitoring schedule or notifications';

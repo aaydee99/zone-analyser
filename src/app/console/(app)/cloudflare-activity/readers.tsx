@@ -33,17 +33,16 @@ export function Readers({ accounts, accountId }: { accounts: { id: string; name:
   const shown = report && report.accountId === target && report.days === days ? report : null;
   return (
     <Card className="mt-6">
-      <SectionHeader title="Who read the configuration" description="People and API tokens that viewed settings in the dashboard or through the API. Backups and the console’s own reads show up here too." aside={
-        <div className="flex flex-wrap items-center gap-2">
-          <select className="input !w-auto !py-1.5 !text-[13px]" aria-label="Account" value={target} onChange={(e) => setAccount(e.target.value)}>
+      <SectionHeader title="Who read the configuration" description="People and API tokens that viewed settings in the dashboard or through the API. Backups and the console’s own reads show up here too." />
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-3">
+          <select className="input !w-auto max-w-full min-w-0 !py-1.5 !text-[13px]" aria-label="Account" value={target} onChange={(e) => setAccount(e.target.value)}>
             {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
           <select className="input !w-auto !py-1.5 !text-[13px]" aria-label="Period" value={days} onChange={(e) => setDays(Number(e.target.value) as (typeof DAYS)[number])}>
             {DAYS.map((d) => <option key={d} value={d}>{d === 1 ? 'Last 24 hours' : `Last ${d} days`}</option>)}
           </select>
           <Button size="sm" variant={shown ? 'ghost' : 'primary'} loading={busy} disabled={!target} onClick={() => load(!!shown)} icon={<Eye className="size-3.5" />}>{shown ? 'Read again' : 'Show readers'}</Button>
-        </div>
-      } />
+      </div>
       {error ? <div className="p-5"><Alert tone="bad" title="The audit log could not be read">{error}</Alert></div>
         : busy && !shown ? <div className="p-5"><SkeletonTable rows={5} cols={5} /></div>
           : !shown ? <p className="px-5 py-6 text-[13px] text-muted">{asked ? 'Nothing read yet.' : 'Choose an account and a period, then Show readers.'}</p>

@@ -6,6 +6,7 @@ most of them delete tables and their data.
 
 | Migration | Rollback | Loses data |
 | --- | --- | --- |
+| 0011_monitor_queue | 0011_monitor_queue.down.sql | the monitoring queue, per-zone results and drift baselines (findings are kept; drift takes new baselines on its next check) |
 | 0010_monitoring | 0010_monitoring.down.sql | check results, findings, received Cloudflare alerts, the notification log |
 | 0008_indexes_and_guards | 0008_indexes_and_guards.down.sql | no |
 | 0009_worker_calls_realtime | 0009_worker_calls_realtime.down.sql | no |

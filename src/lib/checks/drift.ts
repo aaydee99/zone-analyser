@@ -1,22 +1,32 @@
 import 'server-only';
 import crypto from 'node:crypto';
-import { cfGet, cfList, cfOne, inParallel, ok, mask } from '../cf-read';
-import { db, must } from '../supabase';
+import { cfGet, cfList, cfOne, cfReason, inParallel, ok, mask, refused } from '../cf-read';
+import { db } from '../supabase';
+import { must } from '../monitor-store';
 import { SETTING_IDS } from '../zone-catalog';
 import type { NewFinding } from '../monitor-store';
 import type { Row, Severity } from '../monitor-types';
-import { Problems, notAvailable, report, type CheckRunner } from './common';
+import { notAvailable, readStat, type CheckDef, type UnitTarget } from './common';
 
-// Drift: what changed in each zone since its accepted baseline. Each run takes a small snapshot of
-// a zone — the settings that matter most for security and caching, the version of every ruleset,
-// the DNS records (Cloudflare's BIND export) and DNSSEC — about 25 calls a zone. The first snapshot
-// of a zone becomes its baseline; an admin accepts later changes as the new baseline once reviewed.
+// Drift: what changed in each zone since its accepted baseline. A zone's snapshot — the settings that
+// matter most for security and caching, the version of every ruleset, the DNS records (Cloudflare's
+// BIND export) and DNSSEC — costs about 25 calls, so it is not taken on a timer for every zone:
+// each account's audit log is read every hour (one call), and only the zones it shows a change in
+// are snapshotted again. Every zone is still read in full once a week, for changes the audit log
+// does not show. The first snapshot of a zone becomes its baseline; an admin accepts later changes
+// as the new baseline once reviewed (monitor_accept_baseline in 0011_monitor_queue.sql).
 
 /** Settings that change how a site is protected or served. */
 const WATCHED = ['ssl', 'min_tls_version', 'tls_1_3', 'always_use_https', 'automatic_https_rewrites', 'security_header', 'security_level', 'browser_check',
   'challenge_ttl', 'waf', 'hotlink_protection', 'email_obfuscation', 'opportunistic_encryption', 'ipv6', 'http3', '0rtt', 'cache_level', 'browser_cache_ttl',
   'development_mode', 'always_online', 'true_client_ip_header'].filter((id) => SETTING_IDS.includes(id));
 const SECURITY = new Set(['ssl', 'min_tls_version', 'tls_1_3', 'always_use_https', 'security_header', 'security_level', 'browser_check', 'waf', 'development_mode']);
+/** Audit-log entries read per account and run (pages of 1,000). */
+const AUDIT_PAGES = 10;
+/** Each run reads the audit log again from a little before the last one ended: entries can show up late. */
+const AUDIT_OVERLAP_MS = 15 * 60_000;
+/** Changes only (no views, reads or failed requests), as in src/lib/cf-audit.ts. */
+const CHANGES_ONLY: [string, string][] = [['action_type.not', 'view'], ['raw_method.not', 'GET'], ['raw_method.not', 'HEAD'], ['action_result.not', 'failure']];
 
 export interface ZoneSnapshot {
   takenAt: string;
@@ -29,17 +39,14 @@ export interface ZoneSnapshot {
   dns: string[];
   dnssec: string;
 }
-interface Stored { zones: Record<string, ZoneSnapshot>; acceptedAt?: Record<string, { at: string; by: string }> }
 
-const BASELINE = 'drift:baseline';
-const LATEST = 'drift:latest';
+interface SnapshotRow { zone_id: string; kind: 'baseline' | 'latest'; data: ZoneSnapshot; taken_at: string; accepted_at: string | null; accepted_by: string | null }
 
-async function load(id: string): Promise<Stored> {
-  const row = must(await db().from('monitor_reports').select('data').eq('check_id', id).maybeSingle(), 'Reading the drift baseline') as { data?: Stored } | null;
-  return { zones: row?.data?.zones ?? {}, acceptedAt: row?.data?.acceptedAt ?? {} };
+async function readSnapshot(zoneId: string, kind: 'baseline' | 'latest'): Promise<SnapshotRow | null> {
+  return must(await db().from('monitor_snapshots').select('*').eq('zone_id', zoneId).eq('kind', kind).maybeSingle(), 'Reading the drift baseline') as SnapshotRow | null;
 }
-async function store(id: string, data: Stored) {
-  must(await db().from('monitor_reports').upsert({ check_id: id, data, ran_at: new Date().toISOString(), duration_ms: 0, error: null }), 'Saving the drift baseline');
+async function saveSnapshot(row: SnapshotRow) {
+  must(await db().from('monitor_snapshots').upsert(row), 'Saving the drift baseline');
 }
 
 const show = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(mask(v)));
@@ -49,21 +56,21 @@ function dnsLines(text: string): string[] {
   return text.split(/\r?\n/).map((l) => l.replace(/;.*$/, '').trim().replace(/\s+/g, ' ')).filter((l) => l && !l.startsWith('$') && !/\bSOA\b/.test(l)).sort();
 }
 
-async function snapshot(z: { zoneId: string; zoneName: string; accountId: string; accountName: string; token: string }, signal?: AbortSignal): Promise<ZoneSnapshot> {
+async function snapshot(z: UnitTarget, signal?: AbortSignal): Promise<ZoneSnapshot> {
   const settings: Record<string, string> = {};
   await inParallel(WATCHED, 6, async (id) => {
-    const r = await cfGet<{ value?: unknown }>(z.token, `/zones/${z.zoneId}/settings/${id}`, signal);
+    const r = await cfGet<{ value?: unknown }>(z.token, `/zones/${z.id}/settings/${id}`, signal);
     if (ok(r)) settings[id] = show(r.body!.result?.value);
   });
   const rulesets: ZoneSnapshot['rulesets'] = {};
-  for (const rs of await cfList<{ id: string; name?: string; phase?: string; kind?: string; version?: string }>(z.token, `/zones/${z.zoneId}/rulesets`, { perPage: 0, signal })) {
+  for (const rs of await cfList<{ id: string; name?: string; phase?: string; kind?: string; version?: string }>(z.token, `/zones/${z.id}/rulesets`, { perPage: 0, signal })) {
     if (rs.kind === 'managed') continue; // Cloudflare's own rulesets change with every release
     rulesets[rs.id] = { name: rs.name ?? '', phase: rs.phase ?? '', version: String(rs.version ?? '') };
   }
-  const exp = await cfGet(z.token, `/zones/${z.zoneId}/dns_records/export`, signal);
+  const exp = await cfGet(z.token, `/zones/${z.id}/dns_records/export`, signal);
   const dns = exp.status === 200 && exp.text !== undefined ? dnsLines(exp.text) : [];
   let dnssec = '';
-  try { dnssec = (await cfOne<{ status?: string }>(z.token, `/zones/${z.zoneId}/dnssec`, signal)).status ?? ''; } catch (err) { if (!notAvailable(err)) throw err; }
+  try { dnssec = (await cfOne<{ status?: string }>(z.token, `/zones/${z.id}/dnssec`, signal)).status ?? ''; } catch (err) { if (!notAvailable(err)) throw err; }
   return { takenAt: new Date().toISOString(), zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName, settings, rulesets, dns, dnssec };
 }
 
@@ -90,72 +97,76 @@ function diff(base: ZoneSnapshot, now: ZoneSnapshot): Change[] {
 }
 
 const keyOf = (zoneId: string, c: Change) => `${zoneId}:${c.area}:${crypto.createHash('sha1').update(`${c.item}\n${c.after}`).digest('hex').slice(0, 16)}`;
+const SEV_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
-export const drift: CheckRunner = async (ctx) => {
-  const started = Date.now();
-  const p = new Problems();
-  const { zones, problems } = await ctx.zones();
-  p.list.push(...problems);
-  const baseline = await load(BASELINE);
-  const latest = await load(LATEST);
-  const rows: Row[] = [];
-  const zoneRows: Row[] = [];
-  const findings: NewFinding[] = [];
-  const read = new Set<string>();
-  let newBaselines = 0;
-  ctx.progress.total = zones.length;
-  await inParallel(zones, 2, async (z) => {
-    const scope = { zoneId: z.zoneId, zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName };
-    try {
+export const drift: CheckDef = {
+  id: 'drift', main: 'account', every: { zone: 168 }, stateful: ['account'],
+  units: {
+    // The account's audit log since the last look: which zones changed.
+    account: async (a, ctx) => {
+      const before = new Date();
+      const since = (ctx.state as { since?: string } | null)?.since;
+      // First look: nothing to compare with yet (the weekly read of every zone takes the baselines).
+      if (!since || !Number.isFinite(Date.parse(since))) return { rows: {}, findings: [], complete: true, state: { since: before.toISOString() } };
+      const zones = new Set<string>();
+      let cursor = '';
+      for (let page = 0; page < AUDIT_PAGES; page++) {
+        const q = new URLSearchParams([['since', since], ['before', before.toISOString()], ['limit', '1000'], ['direction', 'desc'], ...CHANGES_ONLY]);
+        if (cursor) q.set('cursor', cursor);
+        const r = await cfGet<{ zone?: { id?: string } }[]>(a.token, `/accounts/${a.accountId}/logs/audit?${q}`, ctx.signal);
+        if (!ok(r)) {
+          const why = refused(r) ? `The audit log cannot be read (${cfReason(r)}): add Account Settings Read — until then, changes show up at the weekly read of every zone` : `The audit log could not be read (${cfReason(r)})`;
+          return { rows: {}, findings: [], complete: false, problems: [why], state: { since }, ...(zones.size ? { wake: { kind: 'zone' as const, ids: [...zones] } } : {}) };
+        }
+        for (const e of Array.isArray(r.body!.result) ? r.body!.result : []) if (e?.zone?.id) zones.add(e.zone.id);
+        cursor = r.body!.result_info?.cursor ?? '';
+        if (!cursor) break;
+      }
+      return {
+        rows: {}, findings: [], complete: true, counts: { auditChanged: zones.size },
+        state: { since: new Date(before.getTime() - AUDIT_OVERLAP_MS).toISOString() },
+        ...(zones.size ? { wake: { kind: 'zone' as const, ids: [...zones] } } : {}),
+      };
+    },
+    // One zone: a new snapshot, compared with its baseline.
+    zone: async (z, ctx) => {
+      const scope = { zoneId: z.id, zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName };
       const snap = await snapshot(z, ctx.signal);
-      latest.zones[z.zoneId] = snap;
-      read.add(z.zoneId);
-      const base = baseline.zones[z.zoneId];
-      if (!base) { baseline.zones[z.zoneId] = snap; baseline.acceptedAt![z.zoneId] = { at: snap.takenAt, by: 'first check' }; newBaselines++; }
-      const changes = base ? diff(base, snap) : [];
-      for (const c of changes) {
-        rows.push({ zone: z.zoneName, area: c.area, item: c.item, before: c.before, after: c.after, severity: c.severity });
-        findings.push({ key: keyOf(z.zoneId, c), severity: c.severity, title: `${c.area} changed on ${z.zoneName}: ${c.item.length > 80 ? `${c.item.slice(0, 80)}…` : c.item}`, detail: `${c.before} → ${c.after}`, ...scope });
+      let base = await readSnapshot(z.id, 'baseline');
+      const first = !base;
+      await saveSnapshot({ zone_id: z.id, kind: 'latest', data: snap, taken_at: snap.takenAt, accepted_at: null, accepted_by: null });
+      if (!base) {
+        base = { zone_id: z.id, kind: 'baseline', data: snap, taken_at: snap.takenAt, accepted_at: snap.takenAt, accepted_by: 'first check' };
+        await saveSnapshot(base);
       }
+      const changes = first ? [] : diff(base.data, snap);
+      const rows: Row[] = changes.map((c) => ({ zone: z.zoneName, area: c.area, item: c.item, before: c.before, after: c.after, severity: c.severity, _sort: SEV_ORDER[c.severity] }));
+      const findings: NewFinding[] = changes.map((c) => ({ key: keyOf(z.id, c), severity: c.severity, title: `${c.area} changed on ${z.zoneName}: ${c.item.length > 80 ? `${c.item.slice(0, 80)}…` : c.item}`, detail: `${c.before} → ${c.after}`, ...scope }));
       if (snap.dnssec === 'error' || snap.dnssec === 'pending') {
-        findings.push({ key: `${z.zoneId}:dnssec:${snap.dnssec}`, severity: snap.dnssec === 'error' ? 'high' : 'medium', title: `DNSSEC is ${snap.dnssec} on ${z.zoneName}`, detail: snap.dnssec === 'pending' ? 'Add the DS record at your registrar to finish turning DNSSEC on.' : 'The DS record at the registrar does not match: resolvers that validate DNSSEC may fail to resolve the zone.', ...scope });
+        findings.push({ key: `${z.id}:dnssec:${snap.dnssec}`, severity: snap.dnssec === 'error' ? 'high' : 'medium', title: `DNSSEC is ${snap.dnssec} on ${z.zoneName}`, detail: snap.dnssec === 'pending' ? 'Add the DS record at your registrar to finish turning DNSSEC on.' : 'The DS record at the registrar does not match: resolvers that validate DNSSEC may fail to resolve the zone.', ...scope });
       }
-      const accepted = baseline.acceptedAt?.[z.zoneId];
-      zoneRows.push({ zoneId: z.zoneId, zone: z.zoneName, account: z.accountName, changes: changes.length, baseline: accepted?.at ?? null, acceptedBy: accepted?.by ?? '', dnssec: snap.dnssec || '—', records: snap.dns.length, _tone: changes.length ? 'warn' : 'ok' });
-    } catch (err) {
-      p.add(z.zoneName, err);
-    }
-    ctx.progress.done++;
-  });
-  await store(LATEST, latest);
-  if (newBaselines) await store(BASELINE, baseline);
-  const changed = zoneRows.filter((r) => Number(r.changes) > 0).length;
-  return {
-    report: report('drift', started, [
-      { label: 'Zones watched', value: zoneRows.length },
-      { label: 'Zones changed', value: changed, tone: changed ? 'warn' : 'ok' },
-      { label: 'Changes', value: rows.length, tone: rows.length ? 'warn' : 'ok' },
-      { label: 'New baselines', value: newBaselines },
-    ], [
-      { key: 'changes', title: 'Changes since the baseline', description: 'Accept them as the new baseline once they are reviewed, or restore the zone from a backup to undo them.',
-        columns: [{ key: 'severity', label: 'Severity', kind: 'severity' }, { key: 'zone', label: 'Zone' }, { key: 'area', label: 'Area' }, { key: 'item', label: 'What', kind: 'mono' }, { key: 'before', label: 'Was', kind: 'mono' }, { key: 'after', label: 'Now', kind: 'mono' }],
-        rows, empty: 'Nothing changed since the baseline.' },
-      { key: 'zones', title: 'Zones', columns: [{ key: 'zone', label: 'Zone' }, { key: 'account', label: 'Account' }, { key: 'changes', label: 'Changes', kind: 'number' }, { key: 'dnssec', label: 'DNSSEC', kind: 'status' }, { key: 'records', label: 'DNS records', kind: 'number' }, { key: 'baseline', label: 'Baseline from', kind: 'date' }, { key: 'acceptedBy', label: 'Accepted by' }],
-        rows: zoneRows, empty: 'No zones could be read.' },
-    ], p.list, p.partial),
-    findings, read,
-  };
+      const zoneRow: Row = { zoneId: z.id, zone: z.zoneName, account: z.accountName, changes: changes.length, baseline: base.accepted_at ?? base.taken_at, acceptedBy: base.accepted_by ?? '', dnssec: snap.dnssec || '—', records: snap.dns.length, _tone: changes.length ? 'warn' : 'ok', _sort: changes.length ? 0 : 1 };
+      return { rows: { changes: rows, zones: [zoneRow] }, findings, complete: true, counts: { zones: 1, changed: changes.length ? 1 : 0, changes: changes.length, newBaseline: first ? 1 : 0 } };
+    },
+  },
+  sections: [
+    { key: 'changes', title: 'Changes since the baseline', description: 'Accept them as the new baseline once they are reviewed, or restore the zone from a backup to undo them.',
+      columns: [{ key: 'severity', label: 'Severity', kind: 'severity' }, { key: 'zone', label: 'Zone' }, { key: 'area', label: 'Area' }, { key: 'item', label: 'What', kind: 'mono' }, { key: 'before', label: 'Was', kind: 'mono' }, { key: 'after', label: 'Now', kind: 'mono' }],
+      empty: 'Nothing changed since the baseline.' },
+    { key: 'zones', title: 'Zones', description: 'Changed zones first. A zone is read again within the hour after its audit log shows a change, and in full once a week.',
+      columns: [{ key: 'zone', label: 'Zone' }, { key: 'account', label: 'Account' }, { key: 'changes', label: 'Changes', kind: 'number' }, { key: 'dnssec', label: 'DNSSEC', kind: 'status' }, { key: 'records', label: 'DNS records', kind: 'number' }, { key: 'baseline', label: 'Baseline from', kind: 'date' }, { key: 'acceptedBy', label: 'Accepted by' }],
+      empty: 'No zones read yet.' },
+  ],
+  stats: (t) => [
+    { label: 'Zones watched', value: t.counts.zones ?? 0 },
+    { label: 'Zones changed', value: t.counts.changed ?? 0, tone: t.counts.changed ? 'warn' : 'ok' },
+    { label: 'Changes', value: t.counts.changes ?? 0, tone: t.counts.changes ? 'warn' : 'ok' },
+    readStat(t, 'Zones and audit logs read'),
+  ],
 };
 
 /** Makes the newest snapshot the baseline (one zone, or every zone with one). Returns the zones accepted. */
 export async function acceptBaseline(by: string, zoneId?: string): Promise<{ id: string; name: string }[]> {
-  const latest = await load(LATEST);
-  const baseline = await load(BASELINE);
-  const ids = zoneId ? [zoneId].filter((id) => latest.zones[id]) : Object.keys(latest.zones);
-  for (const id of ids) {
-    baseline.zones[id] = latest.zones[id];
-    baseline.acceptedAt![id] = { at: new Date().toISOString(), by };
-  }
-  if (ids.length) await store(BASELINE, baseline);
-  return ids.map((id) => ({ id, name: latest.zones[id].zoneName }));
+  const rows = must(await db().rpc('monitor_accept_baseline', { p_zone: zoneId ?? null, p_by: by }), 'Accepting the drift baseline') as { zone_id: string; zone_name: string }[] | null;
+  return (rows ?? []).map((r) => ({ id: r.zone_id, name: r.zone_name }));
 }
