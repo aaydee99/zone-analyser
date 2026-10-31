@@ -103,11 +103,13 @@ export async function searchZones(q: string, opts: SearchOptions = {}): Promise<
   if (tagged) zones = zones ? zones.filter((z) => tagged.has(z)) : [...tagged];
   if (zones && !zones.length) return empty(tagged ? 'No zone has these tags' : undefined);
   const kinds = opts.kinds?.filter(isIndexKind);
-  const rows = mustSearch(await db().rpc('zone_search_find', {
-    p_q: term, p_mode: mode, p_kinds: kinds?.length ? kinds : null, p_account: opts.accountId || null, p_zones: zones, p_offset: offset, p_limit: limit,
-  }), 'Searching zones') as { zone_id: string; zone_name: string; account_id: string | null; kind: IndexKind; path: string; subject: string; value: string; source: string; source_ref: string | null; source_at: string; total: number | string }[] | null;
-  const list = rows ?? [];
-  const total = list.length ? Number(list[0].total) : offset ? MAX_TOTAL + 1 : 0;
+  type Found = { zone_id: string; zone_name: string; account_id: string | null; kind: IndexKind; path: string; subject: string; value: string; source: string; source_ref: string | null; source_at: string; total: number | string };
+  const find = async (from: number, n: number) => (mustSearch(await db().rpc('zone_search_find', {
+    p_q: term, p_mode: mode, p_kinds: kinds?.length ? kinds : null, p_account: opts.accountId || null, p_zones: zones, p_offset: from, p_limit: n,
+  }), 'Searching zones') as Found[] | null) ?? [];
+  const list = await find(offset, limit);
+  // A page past the end: the count comes from the first row.
+  const total = list.length ? Number(list[0].total) : offset ? Number((await find(0, 1))[0]?.total ?? 0) : 0;
   const needle = term.toLowerCase();
   return {
     q: term, mode, offset, limit, ...(note ? { note } : {}),
@@ -142,9 +144,10 @@ export async function indexZone(z: ZoneRef, source: string, ref: string | null, 
   const out = rows.map((r) => ({ ...r, ip: (r.kind === 'dns' || r.kind === 'resource') ? rowIp(r) : null }));
   let n = 0;
   for (let i = 0; i === 0 || i < out.length; i += CHUNK) {
-    n = mustSearch(await db().rpc('zone_search_replace', {
+    const res = mustSearch(await db().rpc('zone_search_replace', {
       p_zone: z.zoneId, p_zone_name: z.zoneName, p_account: z.accountId, p_source: source, p_ref: ref, p_at: at, p_rows: out.slice(i, i + CHUNK), p_replace: i === 0,
-    }), 'Saving the search index') as number;
+    }), 'Saving the search index') as { kept: number }[] | null;
+    n = Number(res?.[0]?.kept ?? 0);
     if (n < 0) return n;
   }
   return n;

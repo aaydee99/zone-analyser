@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Archivo } from 'next/font/google';
-import { ArrowRight, Check, FileCode2, FileJson, Folder, Mail, Minus, Plus, Undo2 } from 'lucide-react';
+import { Activity, ArrowRight, Bell, Check, FileCode2, FileJson, Fingerprint, Folder, Gauge, GitCompare, HeartPulse, Mail, Minus, Plus, Radar, Search, ShieldAlert, Tags, Terminal, Undo2 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
+import { CHECKS } from '@/lib/monitor-types';
 import { RULE_PHASES, SETTING_IDS, ZONE_ENDPOINTS, ZONE_GROUPS } from '@/lib/zone-catalog';
 import { CATEGORIES } from '@/lib/cf-classify';
 import { ROLES, ROLE_META } from '@/lib/rbac';
@@ -48,9 +49,12 @@ const CHANGE_CATEGORIES = CATEGORIES.length;
 const DRILL_LEVELS = 4;
 /** Roles: src/lib/rbac.ts ROLES. */
 const ROLE_COUNT = ROLES.length;
+/** Monitoring checks the queue runs: src/lib/monitor-types.ts CHECKS. */
+const CHECK_COUNT = CHECKS.length;
 
 const NAV = [
   { href: '#product', label: 'Product' },
+  { href: '#tools', label: 'Daily tools' },
   { href: '#how', label: 'How it works' },
   { href: '#security', label: 'Security' },
   { href: '#plans', label: 'Plans' },
@@ -71,6 +75,7 @@ export default function Landing() {
         <Hero />
         <Facts />
         <Product />
+        <DailyTools />
         <Process />
         <BeforeAfter />
         <Compare />
@@ -153,6 +158,7 @@ function Facts() {
     { value: CHANGE_CATEGORIES, title: 'categories of Cloudflare changes', body: 'The audit log, sorted into DNS, security rules, cache, SSL/TLS, Zero Trust, API tokens and more, each with the old and new value.' },
     { value: DRILL_LEVELS, title: 'levels of traffic drill-down', body: 'Month, then day, then hour, then minute, each narrowed to its rule hits, top IPs and top paths.' },
     { value: ROLE_COUNT, title: 'roles, enforced on the server', body: ROLES.slice().reverse().map((r) => ROLE_META[r].label).join(', ') + '. Operators ask, admins approve; restores wait for a super admin.' },
+    { value: CHECK_COUNT, title: 'monitoring checks, read-only', body: `${CHECKS.map((c) => c.label).join(', ')}. Each runs on its own schedule, per zone or account, within each token’s rate limit.` },
   ];
   return (
     <section aria-labelledby="facts-title" className="border-y border-line bg-sunken/50">
@@ -161,7 +167,7 @@ function Facts() {
           <h2 id="facts-title" className="lp-h2 text-ink">What it covers, in numbers.</h2>
           <p className="lp-copy self-end">What {BRAND.name} reads, keeps and shows for every account and zone your tokens can see.</p>
         </div>
-        <ul className="mt-12 grid gap-x-8 sm:grid-cols-2 xl:grid-cols-5">
+        <ul className="mt-12 grid gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
           {facts.map((f, i) => (
             <li key={f.title} className="lp-rv border-t border-line pt-6 pb-8" style={{ '--i': i } as React.CSSProperties}>
               <p className="m-0">
@@ -185,7 +191,7 @@ function Product() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <Reveal className="grid gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-end lg:gap-16">
           <h2 id="product-title" className="lp-rv lp-h2 text-ink">Your whole Cloudflare setup, kept, readable and reversible.</h2>
-          <p className="lp-rv lp-copy" style={{ '--i': 1 } as React.CSSProperties}>Six parts of one console, sharing the same accounts, zones and roles. Each one reads Cloudflare for you, so nobody has to click through the dashboard to find out what is there.</p>
+          <p className="lp-rv lp-copy" style={{ '--i': 1 } as React.CSSProperties}>One console, sharing the same accounts, zones and roles. Each one reads Cloudflare for you, so nobody has to click through the dashboard to find out what is there.</p>
         </Reveal>
 
         <Reveal className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3" threshold={0.08}>
@@ -299,6 +305,76 @@ function Product() {
   );
 }
 
+// ── Daily tools (read-only) ─────────────────────────────────────────────────
+function DailyTools() {
+  const groups: { title: string; lede: string; items: { icon: React.ReactNode; name: string; body: string }[] }[] = [
+    {
+      title: 'Find and compare', lede: 'Answered from stored backups and snapshots, so a question about every zone costs no Cloudflare calls.',
+      items: [
+        { icon: <Search aria-hidden="true" className="size-4" />, name: 'Search every zone', body: 'An IP, a hostname, a CNAME target, a header or any text in a rule: every zone that uses it, and where.' },
+        { icon: <GitCompare aria-hidden="true" className="size-4" />, name: 'Compare', body: 'Two backups of one zone, two zones, or a zone against a template you define. The gaps are listed; nothing is applied.' },
+      ],
+    },
+    {
+      title: 'Investigate', lede: 'For the tickets that start with “why was this request blocked?”',
+      items: [
+        { icon: <Fingerprint aria-hidden="true" className="size-4" />, name: 'Ray ID lookup and URL trace', body: 'Paste a Ray ID to see the zone, the request and the rule that acted on it. Or trace a URL to see which rules it would match, phase by phase, without the request reaching your origin.' },
+        { icon: <ShieldAlert aria-hidden="true" className="size-4" />, name: 'WAF false positives', body: 'Rules blocking traffic that looks legitimate, ranked with their reasons, with an exception drafted for you to review.' },
+        { icon: <Activity aria-hidden="true" className="size-4" />, name: 'Incident timeline', body: 'Configuration changes, error and block spikes, deployments and certificate events on one time axis.' },
+      ],
+    },
+    {
+      title: 'Watch', lede: 'Runs on its own, spread over every token’s rate limit, and loads only when you press Refresh.',
+      items: [
+        { icon: <Radar aria-hidden="true" className="size-4" />, name: `${CHECK_COUNT} monitoring checks`, body: 'Including DNS hygiene (dangling CNAMEs, delegation, DNSSEC), load balancer health, IP and ASN lists, and failing Logpush jobs.' },
+        { icon: <HeartPulse aria-hidden="true" className="size-4" />, name: 'Zone health score', body: 'One score per zone from its open findings, coverage and expiring certificates, worst first.' },
+        { icon: <Bell aria-hidden="true" className="size-4" />, name: 'Reports and Slack', body: 'Daily or weekly summaries posted to Slack, and read-only commands for zones, search and Ray IDs.' },
+      ],
+    },
+    {
+      title: 'Organise and operate', lede: 'Your own labels on top of Cloudflare’s, and the tools you would otherwise script.',
+      items: [
+        { icon: <Tags aria-hidden="true" className="size-4" />, name: 'Tags and owners', body: 'Team, environment, customer and owner on every zone, as a filter everywhere. Kept in the console, never sent to Cloudflare.' },
+        { icon: <Terminal aria-hidden="true" className="size-4" />, name: 'API console and Worker logs', body: 'Any read-only API call with a stored token, and a Worker’s live logs, without handing out the token.' },
+        { icon: <Gauge aria-hidden="true" className="size-4" />, name: 'Onboarding check', body: 'A BIND file compared with the zone before you switch nameservers, then watched until the zone is active.' },
+      ],
+    },
+  ];
+  return (
+    <section id="tools" aria-labelledby="tools-title" className="scroll-mt-20 border-t border-line py-20 sm:py-28">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <Reveal className="grid gap-4 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-end lg:gap-16">
+          <h2 id="tools-title" className="lp-rv lp-h2 text-ink">The daily work of running Cloudflare, without twenty dashboard tabs.</h2>
+          <p className="lp-rv lp-copy" style={{ '--i': 1 } as React.CSSProperties}>Tools for the questions that come up every day across many accounts and zones. All of them only read.</p>
+        </Reveal>
+        <Reveal className="mt-12 grid gap-4 md:grid-cols-2" threshold={0.08}>
+          {groups.map((g, i) => (
+            <article key={g.title} className="lp-tile p-6 sm:p-7" style={{ '--i': i, '--ty': '24px' } as React.CSSProperties}>
+              <h3 className="lp-h3 text-ink">{g.title}</h3>
+              <p className="mt-2 text-[14px] leading-relaxed text-muted">{g.lede}</p>
+              <ul className="mt-5 space-y-4">
+                {g.items.map((it) => (
+                  <li key={it.name} className="grid grid-cols-[2rem_1fr] gap-x-3">
+                    <span className="mt-0.5 inline-flex size-8 items-center justify-center rounded-lg border border-line bg-sunken/70 text-signal">{it.icon}</span>
+                    <span>
+                      <span className="block text-[14.5px] font-semibold text-ink">{it.name}</span>
+                      <span className="mt-0.5 block text-[13.5px] leading-relaxed text-muted">{it.body}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </Reveal>
+        <p className="mt-8 max-w-3xl text-[13.5px] leading-relaxed text-faint">
+          The only writes to Cloudflare in the console are a restore apply, a revert, a cache purge, a Worker or Pages rollback and Logpush job changes.
+          Each is limited to the roles allowed to make it, and Logpush changes, purges and rollbacks always wait for a super admin’s approval.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 const ROLE_BLURB: Record<(typeof ROLES)[number], string> = {
   viewer: 'Runs, logs, backup files and the Zone explorer.',
   operator: 'Requests backups and uses presets.',
@@ -368,6 +444,8 @@ function Compare() {
     { task: 'Putting it back', hand: 'Writing imports by hand and hoping the plan only touches what you meant.', us: 'Compare with the live zone, read the plan field by field, apply. Or revert one change from the activity log.' },
     { task: 'Who may do what', hand: 'Whoever has the token can do everything the token can.', us: `${ROLE_COUNT} roles enforced on the server, approvals for backups and restores, and an audit log of every action.` },
     { task: 'Traffic questions', hand: 'Opening the analytics of one zone at a time.', us: 'An account or a zone for a month, down to the minute, with rule hits, top IPs and top paths.' },
+    { task: 'Where is this used?', hand: 'Opening zone after zone, or a script against the API.', us: 'One search across every zone: DNS, rules, Page Rules, redirects and Worker routes, from stored backups and snapshots.' },
+    { task: 'Why was this blocked?', hand: 'Searching security events zone by zone for one Ray ID.', us: 'Paste the Ray ID: the zone, the request and the rule that acted, plus a timeline of what changed around it.' },
   ];
   return (
     <section aria-labelledby="vs-title" className="py-20 sm:py-28">
@@ -411,7 +489,7 @@ function Security() {
   const items: { title: string; body: string }[] = [
     { title: 'Encrypted vault', body: 'Credentials are sealed with AES-256-GCM under one random 256-bit key. The copy that opens the vault is wrapped with scrypt of a separate vault password. The database only ever holds ciphertext.' },
     { title: 'Secrets stay out of logs', body: 'Backups get their secrets as environment variables, and every log line shows them as ••••••••. Only a super admin with the vault unlocked can reveal one.' },
-    { title: 'Reads unless you restore', body: 'Backups, the explorer, activity and analytics only read. During compare and plan, a guard stops any write from reaching Cloudflare. Only an apply or a revert writes.' },
+    { title: 'Reads unless you restore', body: 'Backups, the explorer, activity, analytics, monitoring, search and the investigation tools only read. During compare and plan, a guard stops any write from reaching Cloudflare. Only an apply, a revert, or an approved purge, rollback or Logpush change writes.' },
     { title: 'Keys held in memory', body: 'The Global API Key a restore or revert needs is kept in the console’s memory only: never on disk, in the database, the audit log or the request.' },
     { title: 'Roles on every request', body: 'Permissions are checked on the server for each call; the interface only hides what a role cannot use. Role changes and password resets sign people out everywhere.' },
     { title: 'Sessions and sign-in', body: 'Idle sessions sign out (30 minutes at most), the vault locks itself, and sign-in can require a Cloudflare Turnstile CAPTCHA.' },
@@ -476,7 +554,9 @@ function Plans() {
 // ── FAQ ─────────────────────────────────────────────────────────────────────
 function Faq() {
   const qa: { q: string; a: string }[] = [
-    { q: 'Does it need write access to Cloudflare?', a: 'Not for its everyday work. Backups, the Zone explorer, Cloudflare activity and analytics only read. Applying a restore or reverting a change are the only writes, and both ask for a Global API Key at that moment, which is held in memory only.' },
+    { q: 'Does it need write access to Cloudflare?', a: 'Not for its everyday work. Backups, the Zone explorer, Cloudflare activity, analytics, monitoring, search and the investigation tools only read. Applying a restore or reverting a change ask for a Global API Key at that moment, held in memory only. Cache purges, rollbacks and Logpush changes need a token that allows them, and always wait for a super admin to approve.' },
+    { q: 'Will it slow down with thousands of zones?', a: 'It is built for that. Search, comparisons, the health score and reports read what is already stored instead of calling Cloudflare. Live reads run on the worker within each token’s rate limit, lists load a page at a time, and nothing refreshes until you ask.' },
+    { q: 'Can we label zones by team or customer?', a: 'Yes. Tags, an owner and a contact can be set per zone, one by one or from a CSV, and every list can be filtered by them. They are kept in your Supabase project and never sent to Cloudflare.' },
     { q: 'What exactly is in a backup?', a: `Terraform files for each zone and the account, generated with cf-terraforming across ${TF_ZONE_TYPES + TF_ACCOUNT_TYPES} resource types, plus JSON from Cloudflare’s API for what Terraform cannot express. It is uploaded to your R2 or S3 bucket, and you can download any run as a .zip.` },
     { q: 'Can I restore one zone, or only part of it?', a: 'Restores work one zone at a time. By default only what the audit log says changed since the backup is compared; Compare everything checks the whole zone. You review the plan before anything is applied.' },
     { q: 'Who is allowed to restore?', a: 'Admins and super admins can compare and plan. An admin’s apply waits for a super admin to approve it; super admins apply directly. Reverting a single change from Cloudflare activity is for super admins.' },

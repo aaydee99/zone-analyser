@@ -10,6 +10,7 @@ import { noteDetails } from './change-note';
 import { zoneToken } from './zone-explorer';
 import crypto from 'node:crypto';
 import { openRelay, sealRelay } from './vault';
+import { db } from './supabase';
 import { editPermission, jobsPath, readRawJob, scopeToken, validateDestination, type LogpushScope } from './logpush';
 import { ChangeError, checkChanges, diffLines, fieldLines, scrubText, summarizeJob, type LogpushChanges, type RawJob } from './logpush-types';
 
@@ -188,8 +189,10 @@ async function executeLogpush(a: LogpushAction): Promise<string> {
       done = `${describeLogpush(a).title.replace(/^Turn/, 'Turned').replace(/^Change/, 'Changed')}`;
     }
   }
-  // The Logpush page shows the job as it is now after the check reads this scope again.
-  void import('./monitor-queue').then((m) => m.requestRun({ checks: ['logpush'], ...(a.scope === 'zone' ? { zoneId: a.scopeId } : { accountId: a.scopeId }) })).catch(() => {});
+  // The Logpush page shows the job as it is now after the check reads this scope again: a zone at
+  // once; an account's unit is made due (asking by account would read every zone of it too).
+  if (a.scope === 'zone') void import('./monitor-queue').then((m) => m.requestRun({ checks: ['logpush'], zoneId: a.scopeId })).catch(() => {});
+  else void db().from('monitor_targets').update({ next_due_at: new Date().toISOString(), priority: 1 }).eq('check_id', 'logpush').eq('scope_kind', 'account').eq('scope_id', a.scopeId).then(() => {}, () => {});
   return done;
 }
 

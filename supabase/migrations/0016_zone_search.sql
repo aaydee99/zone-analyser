@@ -80,7 +80,7 @@ create index if not exists zone_search_sources_account_idx on public.zone_search
 -- never replaces a newer one (a backup indexed late after a newer one): -1 then, else the rows kept.
 -- p_rows: [{kind, item, path, subject, value, ip}].
 create or replace function public.zone_search_replace(p_zone text, p_zone_name text, p_account text, p_source text, p_ref text, p_at timestamptz, p_rows jsonb, p_replace boolean)
-returns integer
+returns table (kept integer)
 language plpgsql set search_path = public as $$
 declare
   n integer;
@@ -90,7 +90,8 @@ begin
   end if;
   if p_replace then
     if exists (select 1 from public.zone_search_sources where zone_id = p_zone and source = p_source and source_at > p_at) then
-      return -1;
+      return query select -1;
+      return;
     end if;
     delete from public.zone_search where zone_id = p_zone and source = p_source;
   end if;
@@ -104,12 +105,12 @@ begin
   values (p_zone, p_source, p_zone_name, p_account, p_ref, p_at, n, now())
   on conflict (zone_id, source) do update set zone_name = excluded.zone_name, account_id = coalesce(excluded.account_id, t.account_id),
     source_ref = excluded.source_ref, source_at = excluded.source_at, rows = excluded.rows, indexed_at = excluded.indexed_at;
-  return n;
+  return query select n;
 end $$;
 
 -- Drops what a source indexed of these zones (zones the tokens no longer reach).
 create or replace function public.zone_search_forget(p_zones text[], p_source text)
-returns integer
+returns table (removed integer)
 language plpgsql set search_path = public as $$
 declare
   n integer;
@@ -117,7 +118,7 @@ begin
   delete from public.zone_search where zone_id = any(p_zones) and (p_source is null or source = p_source);
   get diagnostics n = row_count;
   delete from public.zone_search_sources where zone_id = any(p_zones) and (p_source is null or source = p_source);
-  return n;
+  return query select n;
 end $$;
 
 -- One page of matches. p_mode: 'exact' (the whole value, or what it belongs to, lower-case) or

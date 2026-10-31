@@ -31,9 +31,11 @@ const IDLE_MS = (Number(process.env.CONSOLE_WORKER_IDLE_MINUTES) || 0) * 60_000;
 const MAX_MS = (Number(process.env.CONSOLE_WORKER_MAX_MINUTES) || 0) * 60_000;
 /** A backup or restore is running, a restore session is open (its plan and held key live in memory), or monitoring checks are running or due. */
 const jobBusy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0;
-const busy = () => jobBusy() || monitoringBusy();
+const busy = () => jobBusy() || monitoringBusy() || reportsBusy();
 /** The monitoring queue's state on globalThis (src/lib/monitor-queue.ts), read without importing it. */
 const monitoringBusy = () => { const m = (globalThis as unknown as { __monitorQueue?: { running: Map<string, unknown>; due: number } }).__monitorQueue; return !!m && (m.running.size > 0 || m.due > 0); };
+/** Scheduled reports being made (src/lib/report-scheduler.ts), read the same way. */
+const reportsBusy = () => ((globalThis as unknown as { __reports?: { running: Set<string> } }).__reports?.running.size ?? 0) > 0;
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
 const g = globalThis as unknown as {
