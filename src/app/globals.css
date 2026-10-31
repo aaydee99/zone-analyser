@@ -2,14 +2,14 @@
 
 /* ── Design tokens ─────────────────────────────────────────────────────────
    Layout/type/motion rules: design-system/backup-console/MASTER.md (ui-ux-pro-max).
-   Palette: the Edgekeep brand (public/brand/). Obsidian grounds, chrome silver
+   Palette: the Castellan brand (public/brand/). Obsidian grounds, chrome silver
    for structure and text, gold for the one primary action, crimson for brand
    energy and for threats. Status colours never double as the gold accent.
    Three layers: primitives (raw values) → semantic (purpose) → components. */
 
 /* Primitives — never referenced by components directly. */
 :root {
-  /* Edgekeep brand */
+  /* Castellan brand */
   --brand-obsidian: #0b0b0e;
   --brand-chrome-hi: #f5f6f8;
   --brand-chrome: #c4c8cf;
@@ -470,9 +470,9 @@
   .lp-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; transform-origin: left; transform: scaleX(0); background: linear-gradient(90deg, var(--brand-gold-deep), var(--brand-gold-hi) 55%, var(--brand-crimson-lit)); }
   @supports (animation-timeline: scroll()) { .lp-progress { animation: lp-progress linear both; animation-timeline: scroll(root); } }
 
-  /* The logo builds itself once: the keep rises, the gold bar slides home. */
-  .ek-intro .ek-body { transform-box: fill-box; animation: ek-rise 900ms var(--lp-ease-out-expo) 150ms both; }
-  .ek-intro .ek-bar { transform-box: fill-box; animation: ek-slide 1100ms var(--lp-ease-out-expo) 600ms both; }
+  /* The logo builds itself once: the ring draws itself, then the gold key slides home. */
+  .mark-intro .mark-ring { stroke-dasharray: 1; animation: mark-draw 1100ms var(--lp-ease-in-out) 150ms both; }
+  .mark-intro .mark-key { transform-box: fill-box; animation: mark-slide 1000ms var(--lp-ease-out-expo) 900ms both; }
 
   /* The accent band */
   .lp-band {
@@ -493,8 +493,8 @@
 @keyframes lp-sweep { from { transform: translateX(-60%); } to { transform: translateX(60%); } }
 @keyframes lp-sheen { from { background-position: 100% 0; } to { background-position: -150% 0; } }
 @keyframes lp-progress { to { transform: scaleX(1); } }
-@keyframes ek-rise { from { clip-path: inset(100% 0 0 0); transform: translateY(18%); } to { clip-path: inset(0); transform: none; } }
-@keyframes ek-slide { from { opacity: 0; transform: translateX(-60%); } to { opacity: 1; transform: none; } }
+@keyframes mark-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes mark-slide { from { opacity: 0; transform: translateX(40%); } to { opacity: 1; transform: none; } }
 @keyframes lp-enter { from { opacity: 0; transform: translateY(22px); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
 @keyframes lp-enter-mock { from { opacity: 0; transform: translateY(48px) scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes lp-word-in { from { transform: translateY(105%); opacity: 0; } to { transform: none; opacity: 1; } }

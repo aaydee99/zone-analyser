@@ -1,7 +1,7 @@
 // The product's name and short descriptions, in one place: rename here (and nowhere else).
 
 export const BRAND = {
-  name: 'Edgekeep',
+  name: 'Castellan',
   /** One line under the name: what it is. */
   tagline: 'Backup, restore and visibility for your Cloudflare edge',
   /** For search results and link previews. */
