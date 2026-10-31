@@ -6,7 +6,8 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
 export const SEVERITY_RANK: Record<Severity, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
 
-export type CheckId = 'posture' | 'certificates' | 'governance' | 'drift' | 'alerts' | 'availability' | 'platform' | 'appsec' | 'pagerules';
+export type CheckId = 'posture' | 'certificates' | 'governance' | 'drift' | 'alerts' | 'availability' | 'platform' | 'appsec' | 'pagerules'
+  | 'dns' | 'loadbalancing' | 'lists';
 
 export interface CheckMeta {
   id: CheckId;
@@ -42,6 +43,12 @@ export const CHECKS: CheckMeta[] = [
     description: 'Third-party scripts and connections Page Shield sees on your pages, and the API endpoints API Shield knows.' },
   { id: 'pagerules', every: 24, unit: "each zone with Page Rules (others once a week)", label: 'Page Rules', perm: 'runs:read', needs: ['Zone: Page Rules Read'],
     description: 'Page Rules still in use, and the modern rule each one should move to before Cloudflare retires them.' },
+  { id: 'dns', every: 24, unit: "each zone’s DNS records, delegation and DNSSEC (plus public DNS lookups over 1.1.1.1)", label: 'DNS hygiene', perm: 'runs:read', needs: ['Zone: Zone Read', 'Zone: DNS Read'],
+    description: 'Dangling CNAMEs on takeover-prone services, nameserver delegation, DNSSEC against the DS at the registrar, and unproxied records that expose an origin.' },
+  { id: 'loadbalancing', every: 1, unit: "each account’s pools and their health (each zone’s load balancers every 6 hours; none: once a week)", label: 'Load balancing', perm: 'runs:read', needs: ['Account: Load Balancing: Monitors and Pools Read', 'Zone: Load Balancers Read', 'Zone: Analytics Read'],
+    description: 'Load balancers, pools and origins with their health in each region, and failovers in the last 24 hours. Read-only: nothing is drained or switched.' },
+  { id: 'lists', every: 24, unit: "each account’s lists and account rules (and the rules of its zones, when it has lists)", label: 'IP & ASN lists', perm: 'runs:read', needs: ['Account: Account Filter Lists Read', 'Account: Account Rulesets Read', 'Zone: Zone WAF / Rulesets Read'],
+    description: 'IP, ASN, hostname and redirect lists, their size, and the rules that use each one.' },
 ];
 export const CHECK: Record<CheckId, CheckMeta> = Object.fromEntries(CHECKS.map((c) => [c.id, c])) as Record<CheckId, CheckMeta>;
 export const isCheckId = (v: unknown): v is CheckId => typeof v === 'string' && v in CHECK;

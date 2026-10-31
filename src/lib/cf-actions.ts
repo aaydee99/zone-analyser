@@ -5,7 +5,8 @@ import { cfCall, cfList, cfOne, cfReason, ok, refused } from './cf-read';
 import { accountTargets } from './cf-targets';
 import { HttpError } from './http';
 import { can } from './rbac';
-import { newApproval, type Approval } from './approvals-store';
+import { newApproval, requestNote, type Approval } from './approvals-store';
+import { noteDetails } from './change-note';
 import { zoneToken } from './zone-explorer';
 
 // Changes the console makes in Cloudflare besides a restore: purging the cache, and rolling a Worker
@@ -121,18 +122,21 @@ export async function executeAction(a: CfAction): Promise<string> {
 export async function requestAction(me: Me, raw: unknown): Promise<{ done?: string; approval?: Approval }> {
   const a = await validateAction(raw);
   const d = describe(a);
-  if (can(me.role, 'restore:approve')) {
+  const direct = can(me.role, 'restore:approve');
+  // Every action kind: the body's `reason` and `ticket` go with the request (and into the audit log).
+  const note = await requestNote(raw, !direct);
+  if (direct) {
     try {
       const done = await executeAction(a);
-      await audit(me, 'cloudflare.action', d.title, { action: a.type, result: done });
+      await audit(me, 'cloudflare.action', d.title, { action: a.type, result: done, ...noteDetails(note) });
       return { done };
     } catch (err) {
-      await audit(me, 'cloudflare.action_failed', d.title, { action: a.type, error: err instanceof Error ? err.message : String(err) });
+      await audit(me, 'cloudflare.action_failed', d.title, { action: a.type, error: err instanceof Error ? err.message : String(err), ...noteDetails(note) });
       throw err;
     }
   }
-  const approval = newApproval({ kind: 'cloudflare', requestedBy: { id: me.id, email: me.email, role: me.role }, title: d.title, details: d.details, action: a });
-  await audit(me, 'approval.requested', d.title, { approvalId: approval.id, kind: 'cloudflare', action: a.type });
+  const approval = newApproval({ kind: 'cloudflare', requestedBy: { id: me.id, email: me.email, role: me.role }, title: d.title, details: d.details, action: a, ...(note.reason || note.ticket ? { note } : {}) });
+  await audit(me, 'approval.requested', d.title, { approvalId: approval.id, kind: 'cloudflare', action: a.type, ...noteDetails(note) });
   return { approval };
 }
 

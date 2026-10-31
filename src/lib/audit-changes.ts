@@ -50,6 +50,11 @@ export const CHANGE_AREA: Record<string, ChangeArea> = {
   'approval.approved': 'approvals',
   'approval.rejected': 'approvals',
   'auth.password_changed': 'account',
+  'zone_meta.updated': 'settings',
+  'zone_meta.bulk_updated': 'settings',
+  'zone_meta.tag_renamed': 'settings',
+  'zone_meta.tag_removed': 'settings',
+  'zone_meta.imported': 'settings',
 };
 
 export const CHANGE_ACTIONS = Object.keys(CHANGE_AREA);
@@ -110,6 +115,7 @@ const SETTING_LABEL: Record<string, (v: unknown) => string> = {
   vaultAutoLockMinutes: (v) => `vault auto-lock → ${str(v)} min`,
   outputDir: (v) => `default output folder → ${str(v) || 'default'}`,
   pluginCacheDir: (v) => `plugin cache folder → ${str(v) || 'default'}`,
+  requireReason: (v) => `reason required on approval requests → ${v ? 'yes' : 'no'}`,
 };
 
 /** One plain-language line for a change entry, without the actor (shown separately). */
@@ -167,6 +173,11 @@ export function describeChange(e: AuditEntry): string {
     case 'cloudflare.revert_failed': return `Cloudflare refused a revert in ${str(e.target)}: ${str(d.summary)} — ${str(d.error)}`;
     case 'security.denied': return `Was refused ${str(d.method)} ${str(e.target)} (${str(d.reason)})`;
     case 'security.rate_limited': return `Was rate limited on ${str(d.method)} ${str(e.target)}`;
+    case 'zone_meta.updated': return `Changed the tags or owner of ${str(e.target)}${Array.isArray((d.tags as { to?: unknown } | undefined)?.to) ? ` — tags ${((d.tags as { to: unknown[] }).to.map(str).join(', ')) || 'none'}` : ''}`;
+    case 'zone_meta.bulk_updated': return `Tagged ${str(d.zones)} zones${Array.isArray(d.add) && d.add.length ? ` +${d.add.map(str).join(' +')}` : ''}${Array.isArray(d.remove) && d.remove.length ? ` −${d.remove.map(str).join(' −')}` : ''}${typeof d.owner === 'string' ? ` · owner → ${q(d.owner)}` : ''}`;
+    case 'zone_meta.tag_renamed': return `Renamed the zone tag ${q(d.from)} to ${q(d.to)} on ${str(d.zones)} zones`;
+    case 'zone_meta.tag_removed': return `Removed the zone tag ${q(d.from)} from ${str(d.zones)} zones`;
+    case 'zone_meta.imported': return `Imported zone tags and owners from CSV: ${str(d.changed)} zones changed`;
     default: return `${e.action}${e.target ? ` ${e.target}` : ''}`;
   }
 }

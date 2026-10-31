@@ -6,6 +6,11 @@ most of them delete tables and their data.
 
 | Migration | Rollback | Loses data |
 | --- | --- | --- |
+| 0020_reports | 0020_reports.down.sql | **report definitions and every report made (the history)**, and the Slack command allow-list (monitoring data is kept) |
+| 0019_ops_tools | 0019_ops_tools.down.sql | **saved API console queries**; live Worker log sessions in progress (their events are only kept while a session runs) |
+| 0018_zone_health | 0018_zone_health.down.sql | no (only the zone health scores, recomputed from monitoring when 0018 is applied again) |
+| 0016_zone_search | 0016_zone_search.down.sql | **comparison templates** and their results; the search index (rebuilt from backups and monitoring with "Rebuild index" once 0016 is applied again) |
+| 0015_zone_meta | 0015_zone_meta.down.sql | **zone tags, owners, contacts and notes**, and every user's favourite zones, recent zones and saved views (export the tags as CSV from Zone tags first) |
 | 0014_rate_limits | 0014_rate_limits.down.sql | no (only the shared rate-limit counters and the list of relayed calls already run; each instance counts in memory again) |
 | 0013_worker_locks | 0013_worker_locks.down.sql | no (only the shared job locks and which approvals were carried out; each worker's own lock and approval records stay) |
 | 0012_monitor_claims | 0012_monitor_claims.down.sql | no (only which worker holds a monitoring unit, and which channel each finding was sent to) |

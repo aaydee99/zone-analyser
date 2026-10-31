@@ -62,6 +62,8 @@ export async function saveResult(k: UnitKey, r: { complete: boolean; problems: s
     return { ...keyOf(k), section, sort: typeof _sort === 'number' && Number.isFinite(_sort) ? _sort : 0, data, search: searchText(data) };
   }));
   for (const part of chunks(out, 500)) must(await db().from('monitor_rows').insert(part), 'Saving check rows');
+  // Zone search (src/lib/zone-search.ts): only queued here, indexed in the background.
+  void import('./zone-search').then((m) => m.indexMonitorUnit(k, rows)).catch(() => {});
 }
 
 /** One page of a section's rows (sorted by the check; `q` searches every shown value). */
@@ -183,11 +185,13 @@ export async function forgetUnits(check: CheckId, kind: ScopeKind, ids: string[]
   }
 }
 
-export interface FindingQuery { checks: CheckId[]; severity?: Severity; dismissed?: boolean; q?: string; offset?: number; limit?: number }
+/** `zoneIds`: only findings of these zones (a zone tag or owner filter, src/lib/zone-meta.ts); left out = every zone. */
+export interface FindingQuery { checks: CheckId[]; severity?: Severity; dismissed?: boolean; q?: string; offset?: number; limit?: number; zoneIds?: string[] }
 
 /** Open findings of the given checks, worst first, a page at a time. */
 export async function listFindings(o: FindingQuery): Promise<{ findings: Finding[]; total: number }> {
   if (!o.checks.length) return { findings: [], total: 0 };
+  if (o.zoneIds) return listZoneFindings(o, o.zoneIds);
   let q = db().from('monitor_findings').select(COLUMNS, { count: 'exact' }).in('check_id', o.checks).is('resolved_at', null);
   q = o.dismissed ? q.not('dismissed_at', 'is', null) : q.is('dismissed_at', null);
   if (o.severity) q = q.eq('severity', o.severity);
@@ -197,6 +201,24 @@ export async function listFindings(o: FindingQuery): Promise<{ findings: Finding
   const res = await q.order('severity_rank', { ascending: false }).order('last_seen', { ascending: false }).range(offset, offset + limit - 1);
   const rows = must(res, 'Reading findings') as FindingRow[];
   return { findings: rows.map(toFinding), total: res.count ?? rows.length };
+}
+
+/**
+ * The same page limited to some zones: one call to zone_meta_findings (migration 0015) with the
+ * ids in the request body — a tag can cover thousands of zones, more than a URL holds.
+ */
+async function listZoneFindings(o: FindingQuery, zoneIds: string[]): Promise<{ findings: Finding[]; total: number }> {
+  if (!zoneIds.length) return { findings: [], total: 0 };
+  const term = (o.q ?? '').replace(/[%_*,()\\]/g, ' ').trim().slice(0, 100);
+  const res = await db().rpc('zone_meta_findings', {
+    p_zone_ids: zoneIds, p_checks: o.checks, p_severity: o.severity ?? null, p_dismissed: !!o.dismissed, p_term: term,
+    p_offset: o.offset ?? 0, p_limit: Math.min(200, Math.max(1, o.limit ?? 100)),
+  });
+  if (res.error && /zone_meta_findings|could not find the function/i.test(res.error.message)) {
+    throw new HttpError(503, 'Filtering findings by zone tag needs supabase/migrations/0015_zone_meta.sql: run it in the Supabase SQL editor, then reload this page');
+  }
+  const row = (must(res, 'Reading findings') as { total: number; rows: FindingRow[] }[] | null)?.[0];
+  return { findings: (row?.rows ?? []).map(toFinding), total: Number(row?.total ?? 0) };
 }
 
 /** Open, not dismissed findings per check and severity. */

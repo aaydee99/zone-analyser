@@ -381,6 +381,9 @@ export async function startRun(me: Me, config: BackupConfig, presetName?: string
     // Tracked: a worker that stops right after the run waits for these (src/lib/worker-loop.ts).
     void trackWrite(flushLog().then(() => saveStatus(meta)));
     void releaseLocks();
+    // Zone search (src/lib/zone-search.ts): the run's zones are indexed in the background.
+    const lines = run.lines.filter((l) => l.includes('Output'));
+    void import('./zone-search').then((m) => m.indexBackupRun(meta, lines)).catch(() => {});
     for (const l of run.listeners) l({ type: 'status', meta });
     run.listeners.clear();
     // Keep the finished run in memory briefly so late subscribers still get it from RAM.

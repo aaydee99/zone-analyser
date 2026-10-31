@@ -105,10 +105,9 @@ const summarize = (r: RestoreRecord, live: boolean): RestoreSummary => fromBrief
 
 // The history page polls the list. Each record (with a log of up to 5,000 lines) is parsed again
 // only when its file changed (size or mtime); otherwise its brief comes from memory. Legacy rows
-// (audit log, before records existed) never change, so they are read once every few minutes.
+// (audit log, before records existed) are one small indexed query, so they are read each time.
 interface Cached { mtimeMs: number; size: number; brief: Brief }
-const LEGACY_TTL_MS = 5 * 60_000;
-interface HistoryCache { files: Map<string, Cached>; legacy?: { at: number; rows: RestoreRecord[] } }
+interface HistoryCache { files: Map<string, Cached> }
 const gc = globalThis as unknown as { __restoreHistory?: HistoryCache };
 const cache: HistoryCache = (gc.__restoreHistory ??= { files: new Map<string, Cached>() });
 
@@ -141,15 +140,8 @@ function recordBriefs(): Brief[] {
 
 interface AuditRow { id: number; at: string; actor_email: string | null; action: string; target: string | null; details: Record<string, unknown> | null }
 
-/** Applied or failed restores from before restore records existed (cached: they never change). */
+/** Applied or failed restores from before restore records existed. */
 async function legacyRestores(): Promise<RestoreRecord[]> {
-  if (cache.legacy && Date.now() - cache.legacy.at < LEGACY_TTL_MS) return cache.legacy.rows;
-  const rows = await readLegacy();
-  cache.legacy = { at: Date.now(), rows };
-  return rows;
-}
-
-async function readLegacy(): Promise<RestoreRecord[]> {
   const rows = must(await db().from('audit_log').select('id, at, actor_email, action, target, details').in('action', ['restore.applied', 'restore.apply_failed']).order('at', { ascending: false }).limit(200), 'Reading restore history') as AuditRow[];
   return rows.filter((r) => !r.details?.restoreId).map((r) => {
     const resources = Array.isArray(r.details?.resources) ? (r.details.resources as unknown[]).map(String) : [];

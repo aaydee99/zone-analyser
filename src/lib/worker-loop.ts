@@ -79,6 +79,8 @@ export function startWorkerLoop() {
   void keepRunning();
   // Monitoring: the queue runs what is due whenever this worker is up (src/lib/monitor-queue.ts).
   void import('./monitor-queue').then((m) => m.startQueue()).catch((err) => log(`monitoring: the queue could not start (${err instanceof Error ? err.message : String(err)})`));
+  // Scheduled reports: due ones are made and sent by one worker (src/lib/report-scheduler.ts).
+  void import('./report-scheduler').then((m) => m.startReportScheduler()).catch((err) => log(`reports: the schedule could not start (${err instanceof Error ? err.message : String(err)})`));
 }
 
 /** Runs the worker; if anything stops it, logs why and starts it again (a dead loop would leave the worker "offline" for good). */

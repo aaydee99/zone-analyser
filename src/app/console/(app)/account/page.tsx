@@ -26,6 +26,8 @@ const PERM_LABEL: Record<Permission, string> = {
   'restore:approve': 'Apply restores and Cloudflare changes without approval, and approve or reject admins’ requests',
   'monitors:manage': 'Run the monitoring checks, dismiss findings, accept drift and set up notifications',
   'cloudflare:act': 'Ask for a cache purge or a Worker / Pages rollback (a super admin approves it)',
+  'zones:tag': 'Set zone tags, owners and comparison templates',
+  'cloudflare:query': 'Use the read-only Cloudflare API console and live Worker logs',
   'vault:access': 'Open the credential vault (with the vault password)',
 };
 

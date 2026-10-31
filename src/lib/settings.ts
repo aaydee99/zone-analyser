@@ -11,6 +11,8 @@ export interface Settings {
   outputDir: string;
   /** TF_PLUGIN_CACHE_DIR; blank = <data>/plugin-cache. */
   pluginCacheDir: string;
+  /** Approval requests (backups, restore applies, Cloudflare actions) must say why (src/lib/change-note.ts). */
+  requireReason: boolean;
 }
 
 /** Sessions never stay alive longer than this without activity, whatever is stored. */
@@ -21,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vaultAutoLockMinutes: 10,
   outputDir: '',
   pluginCacheDir: '',
+  requireReason: false,
 };
 
 const CACHE_MS = 10_000;
@@ -30,7 +33,7 @@ function pick(raw: Partial<Settings> | null | undefined): Settings {
   const m = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
   const idle = Number(m.sessionIdleMinutes);
   const sessionIdleMinutes = Number.isFinite(idle) && idle >= 1 ? Math.min(idle, MAX_SESSION_IDLE_MINUTES) : MAX_SESSION_IDLE_MINUTES;
-  return { sessionIdleMinutes, vaultAutoLockMinutes: m.vaultAutoLockMinutes, outputDir: m.outputDir, pluginCacheDir: m.pluginCacheDir };
+  return { sessionIdleMinutes, vaultAutoLockMinutes: m.vaultAutoLockMinutes, outputDir: m.outputDir, pluginCacheDir: m.pluginCacheDir, requireReason: m.requireReason === true };
 }
 
 /** Up to this old, cached settings are used while they are read again in the background. */
@@ -67,6 +70,10 @@ export async function saveSettings(patch: Partial<Settings>, userId: string): Pr
   const next = { ...pick(current?.data as Partial<Settings> | undefined) };
   if (patch.sessionIdleMinutes !== undefined) next.sessionIdleMinutes = minutes(patch.sessionIdleMinutes, 'Session timeout', MAX_SESSION_IDLE_MINUTES);
   if (patch.vaultAutoLockMinutes !== undefined) next.vaultAutoLockMinutes = minutes(patch.vaultAutoLockMinutes, 'Vault auto-lock', 24 * 60);
+  if (patch.requireReason !== undefined) {
+    if (typeof patch.requireReason !== 'boolean') throw new HttpError(400, 'requireReason must be true or false');
+    next.requireReason = patch.requireReason;
+  }
   for (const k of ['outputDir', 'pluginCacheDir'] as const) {
     if (patch[k] !== undefined) {
       const v = String(patch[k]).trim();

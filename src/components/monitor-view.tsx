@@ -7,6 +7,8 @@ import { api, fmtDate, relTime } from '@/lib/client';
 import { CHECK, SEVERITIES, type CheckId, type Column, type Finding, type FindingsPage, type ReportProblem, type ReportStat, type Row, type RowsPage, type SectionView, type Severity } from '@/lib/monitor-types';
 import { Badge, Button, Card, SectionHeader, SkeletonTable, Stat, cx } from './ui';
 import { useToast } from './toast';
+import { TagChips, TagFilter } from './tag-filter';
+import { filterToParams, isFilterEmpty, type ZoneMetaFilter, type ZoneMetaLite } from '@/lib/zone-meta-types';
 
 // Shared pieces of the monitoring pages: findings, a check's tables and stats, its read problems.
 // Tables and findings come from the server a page at a time: a check can cover thousands of zones.
@@ -167,21 +169,26 @@ export function FindingList({ check, counts, canManage, version, onChange, showC
   const [busy, setBusy] = useState('');
   const [more, setMore] = useState(false);
   const [mine, setMine] = useState(0);
+  // Zone tags and owners (console data): a filter resolved by the server, and chips on each finding.
+  const [zf, setZf] = useState<ZoneMetaFilter>({});
+  const [zoneMeta, setZoneMeta] = useState<Record<string, ZoneMetaLite>>({});
+  const filtered = !isFilterEmpty(zf);
   const page = useCallback((offset: number) => {
     const p = new URLSearchParams({ offset: String(offset), limit: String(PAGE) });
     if (check) p.set('check', check);
     if (sev !== 'all') p.set('severity', sev);
     if (dismissed) p.set('dismissed', '1');
-    return api<FindingsPage>(`/api/monitors/findings?${p}`);
-  }, [check, sev, dismissed]);
+    filterToParams(zf, p);
+    return api<FindingsPage & { zoneMeta?: Record<string, ZoneMetaLite> }>(`/api/monitors/findings?${p}`);
+  }, [check, sev, dismissed, zf]);
   useEffect(() => {
     let live = true;
-    page(0).then((p) => { if (live) { setList(p.findings); setTotal(p.total); setError(''); } }).catch((e) => { if (live) setError((e as Error).message); });
+    page(0).then((p) => { if (live) { setList(p.findings); setTotal(p.total); setZoneMeta(p.zoneMeta ?? {}); setError(''); } }).catch((e) => { if (live) setError((e as Error).message); });
     return () => { live = false; };
   }, [page, version, mine]);
   const loadMore = async () => {
     setMore(true);
-    try { const p = await page(list?.length ?? 0); setList((l) => [...(l ?? []), ...p.findings]); setTotal(p.total); } catch (e) { setError((e as Error).message); } finally { setMore(false); }
+    try { const p = await page(list?.length ?? 0); setList((l) => [...(l ?? []), ...p.findings]); setTotal(p.total); setZoneMeta((m) => ({ ...m, ...p.zoneMeta })); } catch (e) { setError((e as Error).message); } finally { setMore(false); }
   };
   const act = async (f: Finding, on: boolean) => {
     setBusy(f.id);
@@ -207,9 +214,13 @@ export function FindingList({ check, counts, canManage, version, onChange, showC
           {dismissed ? 'Show open findings' : 'Show dismissed'}
         </button>
       </div>
+      <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-2.5">
+        <TagFilter value={zf} onChange={setZf} className="min-w-0 flex-1" />
+        {filtered && list && <span className="text-[12px] text-muted">{whole.format(total)} finding{total === 1 ? '' : 's'} in zones matching the filter (the counts above are for every zone)</span>}
+      </div>
       {error ? <p className="px-5 py-6 text-sm text-bad">{error}</p>
         : list === null ? <div className="p-5"><SkeletonTable rows={4} cols={3} /></div>
-          : list.length === 0 ? <p className="px-5 py-8 text-center text-sm text-muted">{dismissed ? 'Nothing dismissed.' : empty}</p> : (
+          : list.length === 0 ? <p className="px-5 py-8 text-center text-sm text-muted">{filtered ? 'No finding in zones matching the tag filter.' : dismissed ? 'Nothing dismissed.' : empty}</p> : (
             <>
               <ul className="divide-y divide-line/60">
                 {list.map((f) => (
@@ -221,6 +232,8 @@ export function FindingList({ check, counts, canManage, version, onChange, showC
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-faint">
                         {showCheck && <Link href={`/console/monitoring/${f.check}`} className="text-signal hover:underline">{CHECK[f.check]?.label ?? f.check}</Link>}
                         {(f.accountName || f.zoneName) && <span>{[f.accountName, f.zoneName].filter(Boolean).join(' › ')}</span>}
+                        {f.zoneId && zoneMeta[f.zoneId] && <TagChips tags={zoneMeta[f.zoneId].tags} owner={zoneMeta[f.zoneId].owner} max={4}
+                          onPick={(t) => setZf((cur) => ({ ...cur, tags: [...new Set([...(cur.tags ?? []), t])].sort() }))} />}
                         <span title={fmtDate(f.firstSeen)}>found {relTime(f.firstSeen)}</span>
                         {f.dismissedAt && <span>dismissed by {f.dismissedBy} {relTime(f.dismissedAt)}</span>}
                       </div>

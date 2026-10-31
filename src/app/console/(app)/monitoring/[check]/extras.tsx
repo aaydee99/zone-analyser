@@ -7,6 +7,9 @@ import { api, fmtDate, relTime } from '@/lib/client';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { Alert, Badge, Button, Card, Field, Modal, SectionHeader } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import { useMe } from '@/components/me';
+import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
+import type { ChangeNote } from '@/lib/change-note';
 
 // Actions on some check pages: accept drift, connect Cloudflare's alerts, roll a deployment back.
 
@@ -102,6 +105,10 @@ export function RollbackButton({ kind, accountId, name }: { kind: 'workers' | 'p
   const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<{ done?: string; approval?: { id: string } } | null>(null);
+  // Admins ask (a super admin approves): their request says why, and may name a ticket.
+  const direct = useMe().can('restore:approve');
+  const [note, setNote] = useState<ChangeNote>({});
+  const requireReason = useRequireReason();
   const load = async () => {
     setOpen(true); setList(null); setError(''); setPick(''); setSent(null);
     try {
@@ -115,7 +122,7 @@ export function RollbackButton({ kind, accountId, name }: { kind: 'workers' | 'p
     setBusy(true);
     try {
       const body = kind === 'workers' ? { type: 'worker-rollback', accountId, script: name, versionId: pick } : { type: 'pages-rollback', accountId, project: name, deploymentId: pick };
-      const r = await api<{ done?: string; approval?: { id: string } }>('/api/cloudflare/actions', { method: 'POST', json: body });
+      const r = await api<{ done?: string; approval?: { id: string } }>('/api/cloudflare/actions', { method: 'POST', json: { ...body, ...(direct ? {} : noteBody(note)) } });
       setSent(r);
       toast(r.done ?? 'Sent to a super admin for approval', r.done ? 'ok' : 'info');
     } catch (err) { toast((err as Error).message, 'bad'); } finally { setBusy(false); }
@@ -126,7 +133,7 @@ export function RollbackButton({ kind, accountId, name }: { kind: 'workers' | 'p
       <Button size="sm" variant="ghost" onClick={load} icon={<Undo2 className="size-3.5" />}>Roll back</Button>
       <Modal open={open} onClose={() => setOpen(false)} width="max-w-2xl" title={`Roll ${kind === 'workers' ? 'Worker' : 'Pages project'} “${name}” back`}
         description={kind === 'workers' ? 'Deploys an earlier version to all traffic. Bindings and secrets are not rolled back.' : 'Makes an earlier production deployment live again.'}
-        footer={sent ? <Button onClick={() => setOpen(false)}>Close</Button> : <><Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!chosen} loading={busy} onClick={submit}>Roll back to {chosen?.label ?? '…'}</Button></>}>
+        footer={sent ? <Button onClick={() => setOpen(false)}>Close</Button> : <><Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!chosen || (!direct && !noteReady(note, requireReason))} loading={busy} onClick={submit}>Roll back to {chosen?.label ?? '…'}</Button></>}>
         {sent ? (
           sent.done ? <Alert tone="ok" title="Done">{sent.done}</Alert>
             : <Alert tone="info" title="Waiting for approval">A super admin approves it on the <Link href="/console/approvals" className="text-signal underline">Approvals</Link> page; it runs as soon as it is approved.</Alert>
@@ -149,6 +156,7 @@ export function RollbackButton({ kind, accountId, name }: { kind: 'workers' | 'p
             ))}
           </ul>
         )}
+        {!sent && !direct && !!list?.length && <div className="mt-4"><ChangeNoteFields value={note} onChange={setNote} requireReason={requireReason} /></div>}
       </Modal>
     </>
   );

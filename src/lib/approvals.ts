@@ -7,6 +7,7 @@ import { can, type Permission } from './rbac';
 import { ApprovalGone, approveRestoreApply, dropRestoreApproval } from './restore';
 import { checkRunConfig, startRun } from './runner';
 import { executeAction } from './cf-actions';
+import { noteDetails, type ChangeNote } from './change-note';
 import { db, isConfigured } from './supabase';
 import { jobsPaused, missingFn } from './job-lock';
 import { approvalTtlMinutes, expiresAtOf, listApprovals, newApproval, readApproval, saveApproval, type Approval, type ApprovalKind, type ApprovalStatus } from './approvals-store';
@@ -25,7 +26,7 @@ export const canApprove = (me: Pick<Me, 'role'>, kind: ApprovalKind) => can(me.r
 const yesNo = (b: boolean) => (b ? 'yes' : 'no');
 
 /** An operator asks for a backup: checked like a start, then waits for an admin or super admin. */
-export async function requestBackup(me: Me, config: BackupConfig, presetName?: string): Promise<Approval> {
+export async function requestBackup(me: Me, config: BackupConfig, presetName?: string, note: ChangeNote = {}): Promise<Approval> {
   const checked = await checkRunConfig(config);
   const zones = config.zoneMode === 'all' ? 'all zones' : `${config.zoneIds.length} zone${config.zoneIds.length === 1 ? '' : 's'}`;
   const a = newApproval({
@@ -38,8 +39,9 @@ export async function requestBackup(me: Me, config: BackupConfig, presetName?: s
       `Output folder ${checked.outputDir} · audit log ${config.auditLogHours} h · import mode ${yesNo(config.importMode)}`,
     ],
     backup: { config, ...(presetName ? { presetName } : {}) },
+    ...(note.reason || note.ticket ? { note } : {}),
   });
-  await audit(me, 'approval.requested', a.title, { approvalId: a.id, kind: 'backup', preset: presetName ?? null, cloudflare: checked.cloudflare });
+  await audit(me, 'approval.requested', a.title, { approvalId: a.id, kind: 'backup', preset: presetName ?? null, cloudflare: checked.cloudflare, ...noteDetails(note) });
   return a;
 }
 
@@ -141,7 +143,7 @@ export async function decide(me: Me, id: string, decision: 'approve' | 'reject',
       Object.assign(a, { status: 'rejected', ...decided, ...(note ? { reason: note } : {}) });
       saveApproval(a);
       if (a.kind === 'restore') dropRestoreApproval(a, `Apply request rejected by ${me.email}${note ? `: ${note}` : ''}`, me.email);
-      await audit(me, 'approval.rejected', a.title, { approvalId: a.id, kind: a.kind, requestedBy: a.requestedBy.email, reason: note || null });
+      await audit(me, 'approval.rejected', a.title, { approvalId: a.id, kind: a.kind, requestedBy: a.requestedBy.email, reason: note || null, ...noteDetails(a.note) });
       return a;
     }
     // At approval: still pending and in time, and nobody else approved it first.
@@ -190,7 +192,7 @@ export async function decide(me: Me, id: string, decision: 'approve' | 'reject',
     Object.assign(a, { status: 'approved', ...decided });
     saveApproval(a);
     await settleShared(id, 'done', me.email);
-    await audit(me, 'approval.approved', a.title, { approvalId: a.id, kind: a.kind, requestedBy: a.requestedBy.email, ...(a.runId ? { runId: a.runId } : {}), ...(a.restore ? { restoreId: a.restore.restoreId } : {}) });
+    await audit(me, 'approval.approved', a.title, { approvalId: a.id, kind: a.kind, requestedBy: a.requestedBy.email, ...(a.runId ? { runId: a.runId } : {}), ...(a.restore ? { restoreId: a.restore.restoreId } : {}), ...noteDetails(a.note) });
     return a;
   } finally {
     deciding.delete(id);

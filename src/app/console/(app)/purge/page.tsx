@@ -8,6 +8,8 @@ import type { ZoneListItem } from '@/lib/zone-catalog';
 import { Alert, Button, Card, Field, Loading, Modal, PageHeader, SectionHeader, Segmented, Skeleton } from '@/components/ui';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
+import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
+import type { ChangeNote } from '@/lib/change-note';
 
 type Mode = 'files' | 'tags' | 'hosts' | 'prefixes' | 'everything';
 const MODES: { value: Mode; label: string }[] = [
@@ -34,20 +36,22 @@ export default function PurgePage() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ done?: string; approval?: { id: string } } | null>(null);
   const direct = can('restore:approve');
+  const [note, setNote] = useState<ChangeNote>({});
+  const requireReason = useRequireReason();
 
   useEffect(() => { api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((r) => setZones(r.zones.filter((z) => z.status === 'active'))).catch(() => setZones([])); }, []);
   const zone = zones?.find((z) => z.id === zoneId);
   const values = useMemo(() => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean), [text]);
-  const ready = !!zone && (mode === 'everything' || (values.length > 0 && values.length <= MAX));
+  const ready = !!zone && (mode === 'everything' || (values.length > 0 && values.length <= MAX)) && (direct || noteReady(note, requireReason));
 
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await api<{ done?: string; approval?: { id: string } }>('/api/cloudflare/actions', { method: 'POST', json: { type: 'purge', zoneId, mode, values: mode === 'everything' ? [] : values } });
+      const r = await api<{ done?: string; approval?: { id: string } }>('/api/cloudflare/actions', { method: 'POST', json: { type: 'purge', zoneId, mode, values: mode === 'everything' ? [] : values, ...(direct ? {} : noteBody(note)) } });
       setResult(r);
       setConfirm(false); setTyped('');
       toast(r.done ?? 'Sent to a super admin for approval', r.done ? 'ok' : 'info');
-      if (r.done) setText('');
+      if (r.done) setText(''); else setNote({});
     } catch (err) { toast((err as Error).message, 'bad'); } finally { setBusy(false); }
   };
 
@@ -80,6 +84,7 @@ export default function PurgePage() {
               <textarea id="purge-values" className="input min-h-[140px] font-mono !text-[12.5px]" value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} />
             </Field>
           )}
+          {!direct && <ChangeNoteFields value={note} onChange={setNote} requireReason={requireReason} />}
           <div className="flex justify-end">
             <Button variant="primary" disabled={!ready} onClick={() => (mode === 'everything' ? setConfirm(true) : submit())} loading={busy && !confirm} icon={<Eraser className="size-4" />}>
               {direct ? 'Purge' : 'Ask for approval'}

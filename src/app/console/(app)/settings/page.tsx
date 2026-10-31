@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { CheckCircle2, RefreshCw, Save, ShieldAlert, XCircle } from 'lucide-react';
 import { api } from '@/lib/client';
-import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, Switch, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { ToolsPanel } from '@/components/tools-panel';
 import { useMe } from '@/components/me';
 import type { WorkerSummary } from '@/lib/live-state';
 
-interface Settings { sessionIdleMinutes: number; vaultAutoLockMinutes: number; outputDir: string; pluginCacheDir: string }
+interface Settings { sessionIdleMinutes: number; vaultAutoLockMinutes: number; outputDir: string; pluginCacheDir: string; requireReason?: boolean }
 interface Check { ok: boolean; detail: string }
 interface PathSource { source: 'machine' | 'user' | 'login-shell' | 'process'; dirs: string[] }
 interface SystemCheck {
@@ -183,6 +183,21 @@ export default function SettingsPage() {
                 <MinutesField label="Lock the vault after inactivity" max={1440} disabled={!editable}
                   hint="Super admins must re-enter the vault password after this. Backups and presets keep working while it is locked."
                   value={s.vaultAutoLockMinutes} onChange={(v) => setS({ ...s, vaultAutoLockMinutes: v })} />
+                {editable && <div className="flex justify-end"><Button variant="primary" loading={saving} icon={<Save className="size-4" />} onClick={save}>Save settings</Button></div>}
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <SectionHeader title="Approval requests" description="What someone must say when they ask for a backup, a restore apply or a Cloudflare change." />
+            {!s && !loadError && <Loading label="Loading approval settings" className="p-5"><FieldSkeleton /></Loading>}
+            {s && (
+              <div className="space-y-4 p-5">
+                <div className="flex items-center gap-3">
+                  <Switch checked={!!s.requireReason} disabled={!editable} onChange={(v) => setS({ ...s, requireReason: v })} label="Require a reason with every approval request" />
+                  <span className="text-[13.5px] font-medium text-ink-2" aria-hidden>Require a reason with every approval request</span>
+                </div>
+                <p className="text-xs text-muted">The reason (and an optional ticket id or link) is shown to the approver and kept in the audit log. Off: both stay optional.</p>
                 {editable && <div className="flex justify-end"><Button variant="primary" loading={saving} icon={<Save className="size-4" />} onClick={save}>Save settings</Button></div>}
               </div>
             )}

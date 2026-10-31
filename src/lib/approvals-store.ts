@@ -6,6 +6,9 @@ import type { BackupConfig } from './config';
 import type { CfAction } from './cf-actions';
 import { DATA_DIR, newId } from './store';
 import { mirrorFile } from './state-mirror';
+import { checkChangeNote, type ChangeNote } from './change-note';
+import { getSettings } from './settings';
+import { HttpError } from './http';
 
 // Approval requests: an operator's backup waits for an admin or super admin; an admin's restore apply
 // waits for a super admin. One record per request in data/approvals/<id>.json. Records hold no secrets:
@@ -40,6 +43,21 @@ export interface Approval {
   action?: CfAction;
   result?: string;
   restore?: { restoreId: string; zone: string; folder: string; keyEmail: string; planAt: string; changes: { address: string; actions: string[] }[] };
+  /** Why the requester asks, and their change ticket (optional; requests saved before it have none). */
+  note?: ChangeNote;
+}
+
+/**
+ * The reason and ticket of a request, from the `reason` and `ticket` fields of the request body
+ * (every kind of request takes them the same way). `asking`: it becomes an approval request, where
+ * the Settings may require a reason; a direct action only records what was given.
+ */
+export async function requestNote(raw: unknown, asking = true): Promise<ChangeNote> {
+  try {
+    return checkChangeNote(raw, asking && (await getSettings()).requireReason);
+  } catch (err) {
+    throw new HttpError(400, (err as Error).message);
+  }
 }
 
 const file = (id: string) => path.join(DIR, `${id}.json`);

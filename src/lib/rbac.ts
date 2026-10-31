@@ -33,11 +33,15 @@ export type Permission =
   /** Run the monitoring checks now, dismiss findings, accept drift, set up notifications. */
   | 'monitors:manage'
   /** Ask for a Cloudflare change (cache purge, rollback); a super admin approves it. */
-  | 'cloudflare:act';
+  | 'cloudflare:act'
+  /** Set zone tags, owners and comparison templates (kept in the console, never sent to Cloudflare). */
+  | 'zones:tag'
+  /** Read-only Cloudflare API console and live Worker logs, with the stored tokens. */
+  | 'cloudflare:query';
 
 const BASE: Permission[] = ['runs:read'];
 const OPERATOR: Permission[] = [...BASE, 'runs:start', 'runs:cancel', 'presets:write'];
-const ADMIN: Permission[] = [...OPERATOR, 'runs:delete', 'runs:approve', 'settings:read', 'settings:write', 'tools:manage', 'users:manage', 'audit:read', 'restore:run', 'monitors:manage', 'cloudflare:act'];
+const ADMIN: Permission[] = [...OPERATOR, 'runs:delete', 'runs:approve', 'settings:read', 'settings:write', 'tools:manage', 'users:manage', 'audit:read', 'restore:run', 'monitors:manage', 'cloudflare:act', 'zones:tag', 'cloudflare:query'];
 
 export const PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   viewer: new Set(BASE),

@@ -118,3 +118,16 @@ export async function sendTest(channel: 'slack' | 'webhook'): Promise<{ ok: bool
   await logNotification({ channel, subject, findings: 0, ...r });
   return r;
 }
+
+/**
+ * A scheduled report, to one channel (src/lib/report-scheduler.ts claims the channel first, so it is
+ * sent once; a failed send is recorded, never retried). Logged like every other notification.
+ */
+export async function sendReport(channel: 'slack' | 'webhook', subject: string, slack: { text: string }, webhook: unknown): Promise<{ ok: boolean; error: string | null }> {
+  const c = await getMonitorConfig();
+  const url = channel === 'slack' ? c.slack : c.webhook;
+  if (!url) return { ok: false, error: `No ${channel === 'slack' ? 'Slack' : 'webhook'} address is set (Monitoring › Settings)` };
+  const r = await post(url, channel === 'slack' ? slack : webhook, channel);
+  await logNotification({ channel, subject, findings: 0, ...r });
+  return r;
+}

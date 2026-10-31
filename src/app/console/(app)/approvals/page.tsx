@@ -6,6 +6,7 @@ import { Check, ChevronRight, DatabaseBackup, RotateCcw, ShieldCheck, Undo2, X, 
 import { api, fmtDate, relTime } from '@/lib/client';
 import type { Approval, ApprovalKind, ApprovalStatus } from '@/lib/approvals-store';
 import { useMe } from '@/components/me';
+import { NoteView } from '@/components/change-note';
 import { useToast } from '@/components/toast';
 import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonTable } from '@/components/ui';
 
@@ -113,6 +114,7 @@ export default function ApprovalsPage() {
               <ul className="space-y-1 border-t border-line px-5 py-3 text-[13px] text-ink-2">
                 {a.details.map((d) => <li key={d}>{d}</li>)}
               </ul>
+              {a.note && <NoteView note={a.note} className="space-y-1 border-t border-line px-5 py-3 text-[13px]" />}
               {a.restore && a.restore.changes.length > 0 && (
                 <details className="border-t border-line px-5 py-3 text-[13px]">
                   <summary className="cursor-pointer text-muted">The {a.restore.changes.length} planned change{a.restore.changes.length === 1 ? '' : 's'}</summary>
@@ -153,6 +155,7 @@ export default function ApprovalsPage() {
                       <td className="px-5 py-3.5">
                         <div className="font-medium text-ink">{a.title}</div>
                         <div className="text-[11px] text-faint">{KIND[a.kind].label}{a.reason ? ` · ${a.reason}` : ''}</div>
+                        {a.note && <NoteView note={a.note} className="mt-1 space-y-0.5 text-[12px]" />}
                       </td>
                       <td className="px-5 py-3.5 text-ink-2" title={fmtDate(a.requestedAt)}>{a.requestedBy.email}<span className="block text-[11px] text-faint">{relTime(a.requestedAt)}</span></td>
                       <td className="px-5 py-3.5 text-ink-2" title={fmtDate(a.decidedAt)}>{a.decidedBy?.email ?? 'the console'}<span className="block text-[11px] text-faint">{relTime(a.decidedAt)}</span></td>
