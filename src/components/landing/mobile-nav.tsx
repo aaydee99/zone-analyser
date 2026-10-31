@@ -33,9 +33,6 @@ export function MobileNav({ links }: { links: { href: string; label: string }[] 
               <a href={l.href} onClick={() => setOpen(false)} className="flex min-h-12 items-center text-[15px] text-ink-2 hover:text-ink">{l.label}</a>
             </li>
           ))}
-          <li className="sm:hidden">
-            <a href="/console/login" className="flex min-h-12 items-center text-[15px] text-ink-2 hover:text-ink">Sign in</a>
-          </li>
         </ul>
       </div>
     </div>

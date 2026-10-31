@@ -45,12 +45,19 @@ interface State {
   recentFailures: number[];
   onEnd: Set<(sessionHash: string) => void>;
 }
-const g = globalThis as unknown as { __cfAuthState?: State };
-const state: State = (g.__cfAuthState ??= { sessions: new Map(), failures: new Map(), recentFailures: [], onEnd: new Set() });
-state.recentFailures ??= [];
+// A function declaration (hoisted), not a module-level const: vault.ts imports this module inside
+// an import cycle (auth → settings → http → vault → auth) and calls onSessionEnd while this module
+// is still loading, before any const here is initialised.
+function authState(): State {
+  const holder = globalThis as unknown as { __cfAuthState?: State };
+  const s = (holder.__cfAuthState ??= { sessions: new Map(), failures: new Map(), recentFailures: [], onEnd: new Set() });
+  s.recentFailures ??= [];
+  return s;
+}
+const state = authState();
 
-/** Lets the vault drop its unlock state when a session ends. */
-export function onSessionEnd(fn: (sessionHash: string) => void) { state.onEnd.add(fn); }
+/** Lets the vault drop its unlock state when a session ends. Safe to call while auth.ts is loading. */
+export function onSessionEnd(fn: (sessionHash: string) => void) { authState().onEnd.add(fn); }
 
 export const hashToken = (token: string) => crypto.createHash('sha256').update(token).digest('hex');
 

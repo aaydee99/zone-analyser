@@ -108,8 +108,7 @@ function Header() {
           </ul>
         </nav>
         <div className="flex items-center gap-1.5 sm:gap-2">
-          <Link href="/console/login" className="hidden min-h-11 items-center rounded-[10px] px-3 text-[14px] text-ink-2 transition-colors hover:bg-raised hover:text-ink sm:inline-flex">Sign in</Link>
-          <Link href="/console" className="lp-btn lp-btn-primary min-h-10 px-4 text-[14px]">Open console</Link>
+          <Link href="/console/login" className="lp-btn lp-btn-primary min-h-10 px-4 text-[14px]">Sign in</Link>
           <MobileNav links={NAV} />
         </div>
       </div>
@@ -129,7 +128,7 @@ function Hero() {
         <div className="mt-8 grid gap-8 lg:mt-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <p className="lp-lede lp-enter" style={{ '--lp-d': '220ms' } as React.CSSProperties}>{BRAND.description}</p>
           <div className="lp-enter flex flex-wrap gap-3" style={{ '--lp-d': '360ms' } as React.CSSProperties}>
-            <Link href="/console" className="lp-btn lp-btn-primary">Open console <ArrowRight aria-hidden="true" className="size-4" /></Link>
+            <Link href="/console/login" className="lp-btn lp-btn-primary">Sign in <ArrowRight aria-hidden="true" className="size-4" /></Link>
             <a href={SALES_HREF} className="lp-btn lp-btn-ghost">Talk to sales</a>
           </div>
         </div>
@@ -513,7 +512,7 @@ function FinalCta() {
         <Reveal>
           <h2 id="cta-title" className="lp-rv lp-display max-w-5xl text-[clamp(2.3rem,1.3rem+4.4vw,5rem)]">Keep a copy of your edge before you need one.</h2>
           <div className="lp-rv mt-10 flex flex-wrap items-center gap-3" style={{ '--i': 1 } as React.CSSProperties}>
-            <Link href="/console" className="lp-btn lp-btn-ink">Open console <ArrowRight aria-hidden="true" className="size-4" /></Link>
+            <Link href="/console/login" className="lp-btn lp-btn-ink">Sign in <ArrowRight aria-hidden="true" className="size-4" /></Link>
             <a href={SALES_HREF} className="lp-btn lp-btn-outline-ink">Contact sales</a>
           </div>
         </Reveal>
@@ -533,7 +532,6 @@ function Footer() {
         </div>
         <nav aria-label="Footer">
           <ul className="flex flex-wrap gap-x-6 gap-y-3 text-[14px]">
-            <li><Link href="/console" className="text-ink-2 hover:text-ink">Open console</Link></li>
             <li><Link href="/console/login" className="text-ink-2 hover:text-ink">Sign in</Link></li>
             <li><a href={SALES_HREF} className="text-ink-2 hover:text-ink">Contact sales</a></li>
             <li><a href="#faq" className="text-ink-2 hover:text-ink">FAQ</a></li>
