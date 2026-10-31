@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Check, ChevronRight, DatabaseBackup, RotateCcw, ShieldCheck, Undo2, X } from 'lucide-react';
+import { Check, ChevronRight, DatabaseBackup, RotateCcw, ShieldCheck, Undo2, X, Zap } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
 import type { Approval, ApprovalKind, ApprovalStatus } from '@/lib/approvals-store';
 import { useMe } from '@/components/me';
@@ -20,6 +20,7 @@ const STATUS: Record<ApprovalStatus, { label: string; tone: 'ok' | 'warn' | 'bad
 const KIND: Record<ApprovalKind, { label: string; who: string; icon: typeof DatabaseBackup }> = {
   backup: { label: 'Backup', who: 'an admin or super admin', icon: DatabaseBackup },
   restore: { label: 'Restore apply', who: 'a super admin', icon: RotateCcw },
+  cloudflare: { label: 'Cloudflare change', who: 'a super admin', icon: Zap },
 };
 
 const left = (iso?: string) => {
@@ -36,7 +37,7 @@ export default function ApprovalsPage() {
   const toast = useToast();
   const { user, refresh: refreshMe } = useMe();
   const [list, setList] = useState<Approval[] | null>(null);
-  const [mayApprove, setMayApprove] = useState<Record<ApprovalKind, boolean>>({ backup: false, restore: false });
+  const [mayApprove, setMayApprove] = useState<Record<ApprovalKind, boolean>>({ backup: false, restore: false, cloudflare: false });
   const [busy, setBusy] = useState('');
   const [rejecting, setRejecting] = useState<Approval | null>(null);
   const [reason, setReason] = useState('');
@@ -54,7 +55,7 @@ export default function ApprovalsPage() {
     try {
       const r = await api<{ approval: Approval }>(`/api/approvals/${a.id}/${what}`, { method: 'POST', json: body ?? {} });
       const l = link(r.approval);
-      toast(what === 'approve' ? (a.kind === 'backup' ? 'Approved — the backup is running' : 'Approved — the restore is applying') : what === 'reject' ? 'Request rejected' : 'Request withdrawn', what === 'approve' ? 'ok' : 'info');
+      toast(what === 'approve' ? (a.kind === 'backup' ? 'Approved — the backup is running' : a.kind === 'cloudflare' ? `Approved — ${r.approval.result ?? 'done'}` : 'Approved — the restore is applying') : what === 'reject' ? 'Request rejected' : 'Request withdrawn', what === 'approve' ? 'ok' : 'info');
       if (what === 'approve' && l) window.location.assign(l.href);
       await load();
       refreshMe();
@@ -126,7 +127,7 @@ export default function ApprovalsPage() {
                 </details>
               )}
               {!canDecide && !mine && <p className="border-t border-line px-5 py-3 text-xs text-muted">Only {k.who} can decide this request.</p>}
-              {mine && <p className="border-t border-line px-5 py-3 text-xs text-muted">Waiting for {k.who}. {a.kind === 'backup' ? 'The backup starts as soon as it is approved.' : 'The apply starts as soon as it is approved, while the plan is under 30 minutes old.'}</p>}
+              {mine && <p className="border-t border-line px-5 py-3 text-xs text-muted">Waiting for {k.who}. {a.kind === 'backup' ? 'The backup starts as soon as it is approved.' : a.kind === 'cloudflare' ? 'It runs in Cloudflare as soon as it is approved.' : 'The apply starts as soon as it is approved, while the plan is under 30 minutes old.'}</p>}
             </Card>
           );
         })}

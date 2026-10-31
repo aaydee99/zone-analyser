@@ -6,13 +6,14 @@ import { HttpError } from './http';
 import { can, type Permission } from './rbac';
 import { ApprovalGone, approveRestoreApply, dropRestoreApproval } from './restore';
 import { checkRunConfig, startRun } from './runner';
+import { executeAction } from './cf-actions';
 import { listApprovals, newApproval, readApproval, saveApproval, type Approval, type ApprovalKind } from './approvals-store';
 
 // Who approves what: an operator's backup needs an admin or super admin; an admin's restore apply needs
 // a super admin. Approving starts it at once. Every request and decision goes to the audit log.
 
 /** The permission that lets someone approve (and skip approval for) each kind of request. */
-export const APPROVER: Record<ApprovalKind, Permission> = { backup: 'runs:approve', restore: 'restore:approve' };
+export const APPROVER: Record<ApprovalKind, Permission> = { backup: 'runs:approve', restore: 'restore:approve', cloudflare: 'restore:approve' };
 export const canApprove = (me: Pick<Me, 'role'>, kind: ApprovalKind) => can(me.role, APPROVER[kind]);
 
 const yesNo = (b: boolean) => (b ? 'yes' : 'no');
@@ -66,7 +67,7 @@ const deciding = new Set<string>();
 /** Approve (starts it now) or reject a pending request. Nobody decides their own request. */
 export async function decide(me: Me, id: string, decision: 'approve' | 'reject', reason = ''): Promise<Approval> {
   const a = approvalFor(me, id);
-  if (!canApprove(me, a.kind)) throw new HttpError(403, a.kind === 'restore' ? 'Only a super admin approves restores' : 'Only an admin or super admin approves backups');
+  if (!canApprove(me, a.kind)) throw new HttpError(403, a.kind === 'backup' ? 'Only an admin or super admin approves backups' : a.kind === 'restore' ? 'Only a super admin approves restores' : 'Only a super admin approves Cloudflare changes');
   if (a.requestedBy.id === me.id) throw new HttpError(403, 'You cannot decide your own request');
   if (a.status !== 'pending') throw new HttpError(409, `This request is already ${a.status}`);
   if (deciding.has(id)) throw new HttpError(409, 'This request is being decided right now');
@@ -86,6 +87,8 @@ export async function decide(me: Me, id: string, decision: 'approve' | 'reject',
         const requester: Me = { id: a.requestedBy.id, email: a.requestedBy.email, name: '', role: a.requestedBy.role, sessionHash: '', expiresAt: 0 };
         const run = await startRun(requester, a.backup!.config, a.backup!.presetName, { id: a.id, by: me.email });
         a.runId = run.id;
+      } else if (a.kind === 'cloudflare') {
+        a.result = await executeAction(a.action!);
       } else {
         await approveRestoreApply(me, a);
       }

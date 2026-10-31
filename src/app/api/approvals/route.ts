@@ -6,5 +6,5 @@ export const dynamic = 'force-dynamic';
 /** Approval requests: approvers see the kinds they approve, everyone sees their own. */
 export const GET = route(async (_req, _ctx, me) => ({
   approvals: approvalsFor(me).slice(0, 300),
-  canApprove: { backup: canApprove(me, 'backup'), restore: canApprove(me, 'restore') },
+  canApprove: { backup: canApprove(me, 'backup'), restore: canApprove(me, 'restore'), cloudflare: canApprove(me, 'cloudflare') },
 }), { perm: 'runs:read' });

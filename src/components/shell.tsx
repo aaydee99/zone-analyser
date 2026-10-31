@@ -5,6 +5,7 @@ import { BRAND } from '@/lib/brand';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { BrandMark } from './brand-mark';
+import { Eraser, Radar } from 'lucide-react';
 import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
@@ -38,11 +39,19 @@ const NAV: { section: string; items: NavItem[] }[] = [
     ],
   },
   {
+    section: 'Monitoring',
+    items: [
+      { href: '/console/monitoring', label: 'Monitoring', icon: Radar },
+    ],
+  },
+  {
     section: 'Cloudflare',
     items: [
       { href: '/console/zone-explorer', label: 'Zone explorer', icon: Globe },
       { href: '/console/traffic', label: 'Traffic analytics', icon: BarChart3 },
+      { href: '/console/analytics', label: 'DNS & Workers', icon: Activity },
       { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
+      { href: '/console/purge', label: 'Cache purge', icon: Eraser, perm: 'cloudflare:act' },
     ],
   },
   {

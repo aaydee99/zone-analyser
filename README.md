@@ -366,6 +366,51 @@ Super admins see **Revert** on each change in Cloudflare activity. Reverting goe
 
   The page opens a zone with its details, then loads the sections four at a time, each card as soon as its endpoint answers. Downloads are built from the cached sections, so they don't call Cloudflare again. One view per person and zone is recorded every 10 minutes (`cloudflare_zone.viewed`); each download is recorded (`cloudflare_zone.exported` with its format, `cloudflare_zone.dns_exported`).
 
+## Monitoring
+
+**Monitoring** checks every Cloudflare account and zone the stored tokens can reach and lists what needs attention. Every role sees it (Tokens & members is for admins and super admins). It needs `supabase/migrations/0010_monitoring.sql`.
+
+| Check | What it finds | Token permissions it reads with |
+| --- | --- | --- |
+| Security posture | Cloudflare's Security Insights: exposed records, weak TLS, missing protections, users without MFA | Account Settings Read |
+| Certificates | Edge, custom-hostname, Origin CA, client and mTLS certificates: expired, expiring (7 days for managed ones, 30 for uploaded ones), stuck in validation | SSL and Certificates Read (zone and account) |
+| Tokens & members | API tokens expiring within 14 days, unused for 90, never used, or writing from any IP; members without 2FA; pending invitations | User › API Tokens Read, Account API Tokens Read, Account Settings Read |
+| Drift | Watched settings, ruleset versions, DNS records and DNSSEC compared with an accepted baseline (the first run is the baseline) | Zone Settings Read, DNS Read, Zone WAF / Rulesets Read |
+| Cloudflare alerts | Notification policies, recommended alert types that are off, failing webhook destinations, and alerts Cloudflare sent to the console | Notifications Read |
+| Availability | Failing health checks, tunnels down, unhealthy load-balancer pools, queueing waiting rooms | Health Checks Read, Cloudflare Tunnel Read, Load Balancing Read, Waiting Rooms Read |
+| Developer platform | Workers, Pages projects (failed deployments), R2, KV, D1 and queues | Workers Scripts Read, Pages Read, R2 / KV / D1 / Queues Read |
+| Scripts & APIs | Page Shield scripts and connections (a score under 50 is suspicious, under 20 likely malicious; 1 = malicious, 99 = not), API Shield endpoints waiting for review | Page Shield Read, API Gateway Read |
+| Page Rules | Page Rules still in use and the rule type each setting moves to | Page Rules Read |
+
+- **Findings** have a severity. The same problem keeps one finding across runs; it closes by itself once a run has read its account or zone again and the problem is gone (a failed read never closes one). Admins can dismiss a finding: it stays out of counts and notifications, also after later runs.
+- **Runs:** admins press **Run all checks** (or **Check now** on one check). The worker also runs every check on a schedule (Overview › Schedule and notifications, every 6 hours by default) whenever it is up, so add a schedule that starts it — see below. Checks run one after another and take at most `MONITOR_BUDGET` Cloudflare calls per token per 5 minutes (400 of Cloudflare's 1,200 by default), so backups and restores keep their share; a check that waits too long is marked "partly read" and the rest is read on the next run.
+- **Notifications:** a Slack incoming-webhook address and/or any HTTPS webhook (JSON). New findings at or above the chosen severity are sent once per run; each batch is marked as sent **before** it goes out, so a failure is logged (Overview › Recently sent) and never resent. The addresses are sealed with the vault server key and never shown again. Set `CONSOLE_PUBLIC_URL` (for example `https://console.example.com`) to add a link to the console in each message.
+- **Cloudflare's own alerts:** a super admin connects an account on **Monitoring › Cloudflare alerts**. That creates a webhook destination in Cloudflare (the stored token needs **Notifications Edit** for this one step) pointing at `/api/hooks/cloudflare`, with a secret only the console knows. Then choose in Cloudflare › Notifications which alerts go to it. The console must be reachable from the internet at a host in `CONSOLE_ALLOWED_HOSTS`.
+- **Drift:** after reviewing changes, accept them as the new baseline (one zone or all). To undo a change instead, restore the zone from a backup.
+
+**Run the worker on a schedule** (GitHub Actions): add a schedule to `.github/workflows/worker.yml` so the checks run even when nobody uses the console:
+
+```yaml
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'   # every 6 hours; GitHub may start it a few minutes late
+```
+
+The worker stops by itself when it has been idle for `CONSOLE_WORKER_IDLE_MINUTES`, after the checks finish.
+
+## Cache purge and rollbacks
+
+- **Cloudflare › Cache purge:** purge by URL, prefix, host name or cache tag (up to 100 at a time), or everything (type the zone name to confirm). The stored token needs **Cache Purge**.
+- **Monitoring › Developer platform › Roll back:** deploy an earlier version of a Worker to all traffic, or make an earlier production deployment of a Pages project live again. The token needs **Workers Scripts Edit** or **Cloudflare Pages Edit**. Bindings and secrets of a Worker are not rolled back.
+- Admins ask; a super admin approves on **Approvals** (a "Cloudflare change") and it runs at once. A super admin's own purge or rollback runs immediately. Every one is in the audit log.
+
+## DNS & Workers analytics
+
+**Cloudflare › DNS & Workers** shows, for the last 24 hours, 7 or 30 days, the DNS queries Cloudflare answered for a zone (per hour or day, top names, record types, response codes) and, per account, Worker requests, errors and CPU time (p99). It reads Cloudflare's GraphQL Analytics API (Account Analytics Read) and keeps each answer for 10 minutes.
+
+**Cloudflare activity › Who read the configuration** lists the people and tokens that viewed settings (Audit Logs v2 "view" entries, which the change timeline leaves out), with how often and from where.
+
 ## Cache
 
 Cloudflare reads are kept in a shared cache, so pages open without calling the API again:
@@ -418,6 +463,7 @@ Every read-only Cloudflare view is its own endpoint, and its cached copy is kept
 | `profiles` (roles), `sessions`, Supabase Auth users | `tools/`: managed terraform and cf-terraforming |
 | `vault`, `credentials` (ciphertext only) | `plugin-cache/` |
 | `presets`, `runs`, `run_logs`, `settings`, `audit_log` | `backups/`: backup output (unless a run sets another directory); `restore-history/`: one record per restore; `approvals/`: one record per approval request |
+| `monitor_reports`, `monitor_findings`, `cloudflare_alerts`, `notifications` (monitoring; notification addresses are sealed inside `settings`) | |
 
 Row-level security is enabled on every table with **no policies**, so the anon and authenticated keys can read nothing. Only the server, using the service-role key, can read or write them. The browser never talks to Supabase directly.
 
@@ -426,7 +472,7 @@ Sessions are opaque cookies set with `HttpOnly`, `Secure` and `SameSite=Strict`.
 Request protections:
 - **HTTPS**: plain HTTP is served only on loopback (`127.0.0.1`, `localhost`, `[::1]`), where traffic never leaves the machine. On any other host ([`src/proxy.ts`](src/proxy.ts)), GET requests are redirected to HTTPS and everything else is refused. HTTPS responses carry `Strict-Transport-Security: max-age=63072000; includeSubDomains`. Behind a TLS proxy, set `X-Forwarded-Proto: https`.
 - **Host check**: every request (pages and API) must use an allowed `Host`. Any host is allowed unless `CONSOLE_ALLOWED_HOSTS` lists some; set it to block DNS-rebinding pages. Mutating requests must still carry an `Origin` for the same host, and session cookies stay `SameSite=Strict` and tied to the host name you signed in on.
-- **Origin check**: requests that change data must carry a matching `Origin`.
+- **Origin check**: requests that change data must carry a matching `Origin`. The one exception is `POST /api/hooks/cloudflare` (Cloudflare's alert webhook, which sends no `Origin`): it requires the secret the console gave Cloudflare, compared in constant time, and is rate limited per address.
 - **Response headers**: pages are served with a Content-Security-Policy, `frame-ancestors 'none'` and `nosniff`.
 - **Error responses**: unexpected server errors return a generic message with a reference number. The details go to the server log only.
 

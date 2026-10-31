@@ -23,7 +23,9 @@ const PERM_LABEL: Record<Permission, string> = {
   'cloudflare:revert': 'Revert a change from Cloudflare activity (with a Global API Key)',
   'restore:run': 'Restore zone configuration from a backup (plan, then apply — a super admin approves the apply unless you can approve)',
   'runs:approve': 'Start backups without approval, and approve or reject operator backup requests',
-  'restore:approve': 'Apply restores without approval, and approve or reject admin restore requests',
+  'restore:approve': 'Apply restores and Cloudflare changes without approval, and approve or reject admins’ requests',
+  'monitors:manage': 'Run the monitoring checks, dismiss findings, accept drift and set up notifications',
+  'cloudflare:act': 'Ask for a cache purge or a Worker / Pages rollback (a super admin approves it)',
   'vault:access': 'Open the credential vault (with the vault password)',
 };
 

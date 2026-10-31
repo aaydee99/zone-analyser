@@ -1,6 +1,7 @@
 import 'server-only';
 import { cached, cacheBackend } from './cache';
 import { HttpError } from './http';
+import { mask } from './cf-read';
 import { credentialForRun, listCredentialOptions } from './vault';
 import { READ_GROUPS, RULE_PHASES, SETTING_GROUP, SETTING_IDS, SETTING_LABEL, ZONE_ENDPOINTS, type SettingGroup, type ZoneEndpoint, type ZoneGroup, type ZoneGroupReport, type ZoneListItem, type ZoneReport, type ZoneRulePhase, type ZoneSection, type ZoneSummary } from './zone-catalog';
 
@@ -30,22 +31,6 @@ async function get(token: string, path: string): Promise<{ status: number; body:
 
 const cfMessage = (r: { status: number; body: Envelope | null }) =>
   r.body?.errors?.map((x) => x.message).filter(Boolean).join('; ') || (r.status ? `HTTP ${r.status}` : 'Could not reach the Cloudflare API');
-
-// ── Masking ─────────────────────────────────────────────────────────────────
-
-const SECRET = /secret|password|passwd|private_?key|custom_?key|api_?key|client_?key|psk|authorization|signing_?key|access_?key|^token$|_token$|^auth_?key$/i;
-const URL_SECRET = /([?&](?:[^=&]*(?:secret|key|sig|token|password|auth|credential)[^=&]*)=)[^&\s"]*/gi;
-const MASK = '••••••••';
-
-/** Masks secret-looking values (by key) and credentials inside URLs (e.g. Logpush destinations). Nothing is cut short. */
-function mask(v: unknown, depth = 0): unknown {
-  if (depth > 40) return v;
-  if (Array.isArray(v)) return v.map((x) => mask(x, depth + 1));
-  if (v && typeof v === 'object') {
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === 'string' && x && SECRET.test(k) ? MASK : mask(x, depth + 1)]));
-  }
-  return typeof v === 'string' && v.includes('=') ? v.replace(URL_SECRET, `$1${MASK}`) : v;
-}
 
 // ── Zones the tokens can read ───────────────────────────────────────────────
 
@@ -157,7 +142,7 @@ async function zoneOf(zoneId: string) {
   return { hit, zone };
 }
 
-async function zoneToken(zoneId: string) {
+export async function zoneToken(zoneId: string) {
   const { hit, zone } = await zoneOf(zoneId);
   let token: string;
   try { token = (await credentialForRun(hit.id, 'cloudflare')).fields.apiToken; } catch { throw new HttpError(404, 'The stored credential for this zone is gone — read the zone list again'); }

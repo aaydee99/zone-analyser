@@ -74,7 +74,9 @@ export async function saveSettings(patch: Partial<Settings>, userId: string): Pr
       next[k] = v;
     }
   }
-  must(await db().from('settings').upsert({ id: 1, data: next, updated_by: userId, updated_at: new Date().toISOString() }), 'Saving settings');
+  // Other parts of the console keep their own keys in the same row (monitoring): kept as they are.
+  const rest = (current?.data ?? {}) as Record<string, unknown>;
+  must(await db().from('settings').upsert({ id: 1, data: { ...rest, ...next }, updated_by: userId, updated_at: new Date().toISOString() }), 'Saving settings');
   g.__cfSettings = { value: next, at: Date.now() };
   return next;
 }

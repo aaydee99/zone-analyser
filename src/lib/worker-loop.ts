@@ -24,8 +24,11 @@ const MAX_PARALLEL = 8;
 const IDLE_MS = (Number(process.env.CONSOLE_WORKER_IDLE_MINUTES) || 0) * 60_000;
 const MAX_MS = (Number(process.env.CONSOLE_WORKER_MAX_MINUTES) || 0) * 60_000;
 const PROCESS_START = Date.now();
-/** A backup or restore is running, or a restore session is open (its plan and held key live in memory). */
-const busy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0;
+/** A backup or restore is running, a restore session is open (its plan and held key live in memory), or monitoring checks run. */
+const busy = () => !!activeRunId() || !!activeRestore() || liveRestoreIds().size > 0
+  || !!(globalThis as unknown as { __monitorRun?: { running?: boolean } }).__monitorRun?.running;
+/** How often the worker asks whether the monitoring checks are due (src/lib/monitor-runner.ts). */
+const MONITOR_POLL_MS = 5 * 60_000;
 const ANSWER_HEADERS = ['content-type', 'content-disposition', 'retry-after', 'cache-control'];
 
 const g = globalThis as unknown as { __workerLoop?: boolean; __outdated?: string; __workerTimers?: { beat: ReturnType<typeof setInterval>; purge: ReturnType<typeof setInterval> } };
@@ -60,6 +63,10 @@ export function startWorkerLoop() {
   if (g.__workerLoop) return;
   g.__workerLoop = true;
   void keepRunning();
+  // Scheduled monitoring: runs whenever this worker is up and a run is due (first look after a minute).
+  const due = () => { void import('./monitor-runner').then((m) => m.runDue()).then((started) => { if (started) log('monitoring: scheduled checks started'); }).catch((err) => log(`monitoring: could not start the scheduled checks (${err instanceof Error ? err.message : String(err)})`)); };
+  setTimeout(due, 60_000).unref?.();
+  setInterval(due, MONITOR_POLL_MS).unref?.();
 }
 
 /** Runs the worker; if anything stops it, logs why and starts it again (a dead loop would leave the worker "offline" for good). */

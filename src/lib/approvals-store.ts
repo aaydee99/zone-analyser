@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Role } from './rbac';
 import type { BackupConfig } from './config';
+import type { CfAction } from './cf-actions';
 import { DATA_DIR, newId } from './store';
 import { mirrorFile } from './state-mirror';
 
@@ -13,7 +14,7 @@ import { mirrorFile } from './state-mirror';
 const DIR = path.join(DATA_DIR, 'approvals');
 export const APPROVAL_ID = /^[A-Za-z0-9_-]{8,32}$/;
 
-export type ApprovalKind = 'backup' | 'restore';
+export type ApprovalKind = 'backup' | 'restore' | 'cloudflare';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'expired' | 'failed';
 
 export interface Approval {
@@ -35,6 +36,9 @@ export interface Approval {
   backup?: { config: BackupConfig; presetName?: string };
   /** The run an approved backup started. */
   runId?: string;
+  /** A Cloudflare change (cache purge, rollback) and, once done, what happened. */
+  action?: CfAction;
+  result?: string;
   restore?: { restoreId: string; zone: string; folder: string; keyEmail: string; planAt: string; changes: { address: string; actions: string[] }[] };
 }
 

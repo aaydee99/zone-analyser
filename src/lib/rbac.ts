@@ -7,7 +7,7 @@ export const ROLES: Role[] = ['super_admin', 'admin', 'operator', 'viewer'];
 
 export const ROLE_META: Record<Role, { label: string; description: string }> = {
   super_admin: { label: 'Super admin', description: 'Everything, including the credential vault, admins and other super admins.' },
-  admin: { label: 'Admin', description: 'Operators and viewers, settings, tools, presets, runs, the audit log and restores; approves operator backups. Applying a restore needs super admin approval.' },
+  admin: { label: 'Admin', description: 'Operators and viewers, settings, tools, presets, runs, the audit log, restores and monitoring; approves operator backups. Applying a restore, purging the cache or rolling back a deployment needs super admin approval.' },
   operator: { label: 'Operator', description: 'Request backups (an admin approves them), cancel backups, use and save presets, browse backup files.' },
   viewer: { label: 'Viewer', description: 'Read-only, but sees full backup contents (the whole Cloudflare configuration) and live logs.' },
 };
@@ -29,11 +29,15 @@ export type Permission =
   | 'runs:approve'
   /** Apply a restore without approval, and approve or reject admins' restore requests. */
   | 'restore:approve'
-  | 'vault:access';
+  | 'vault:access'
+  /** Run the monitoring checks now, dismiss findings, accept drift, set up notifications. */
+  | 'monitors:manage'
+  /** Ask for a Cloudflare change (cache purge, rollback); a super admin approves it. */
+  | 'cloudflare:act';
 
 const BASE: Permission[] = ['runs:read'];
 const OPERATOR: Permission[] = [...BASE, 'runs:start', 'runs:cancel', 'presets:write'];
-const ADMIN: Permission[] = [...OPERATOR, 'runs:delete', 'runs:approve', 'settings:read', 'settings:write', 'tools:manage', 'users:manage', 'audit:read', 'restore:run'];
+const ADMIN: Permission[] = [...OPERATOR, 'runs:delete', 'runs:approve', 'settings:read', 'settings:write', 'tools:manage', 'users:manage', 'audit:read', 'restore:run', 'monitors:manage', 'cloudflare:act'];
 
 export const PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   viewer: new Set(BASE),

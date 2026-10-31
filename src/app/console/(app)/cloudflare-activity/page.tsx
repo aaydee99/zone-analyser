@@ -13,6 +13,7 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHead
 import type { CfRevertPlan } from '@/lib/cf-revert';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
+import { Readers } from './readers';
 
 type View = 'category' | 'zone' | 'timeline';
 const VIEWS: { value: View; label: string }[] = [
@@ -483,6 +484,7 @@ export default function CloudflareActivityPage() {
           )}
         </>
       )}
+      {accountOptions.length > 0 && <Readers accounts={accountOptions} accountId={accountId} />}
     </div>
   );
 }

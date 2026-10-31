@@ -6,6 +6,7 @@ most of them delete tables and their data.
 
 | Migration | Rollback | Loses data |
 | --- | --- | --- |
+| 0010_monitoring | 0010_monitoring.down.sql | check results, findings, received Cloudflare alerts, the notification log |
 | 0008_indexes_and_guards | 0008_indexes_and_guards.down.sql | no |
 | 0009_worker_calls_realtime | 0009_worker_calls_realtime.down.sql | no |
 | 0007_worker_versions | 0007_worker_versions.down.sql | the version list (rebuilt on use) |
