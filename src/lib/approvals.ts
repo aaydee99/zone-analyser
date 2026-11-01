@@ -11,6 +11,7 @@ import { noteDetails, type ChangeNote } from './change-note';
 import { db, isConfigured } from './supabase';
 import { jobsPaused, missingFn } from './job-lock';
 import { approvalTtlMinutes, expiresAtOf, listApprovals, newApproval, readApproval, saveApproval, type Approval, type ApprovalKind, type ApprovalStatus } from './approvals-store';
+import { compactNum } from '@/lib/num';
 
 // Who approves what: an operator's backup needs an admin or super admin; an admin's restore apply needs
 // a super admin. Approving starts it at once. Every request and decision goes to the audit log.
@@ -28,7 +29,7 @@ const yesNo = (b: boolean) => (b ? 'yes' : 'no');
 /** An operator asks for a backup: checked like a start, then waits for an admin or super admin. */
 export async function requestBackup(me: Me, config: BackupConfig, presetName?: string, note: ChangeNote = {}): Promise<Approval> {
   const checked = await checkRunConfig(config);
-  const zones = config.zoneMode === 'all' ? 'all zones' : `${config.zoneIds.length} zone${config.zoneIds.length === 1 ? '' : 's'}`;
+  const zones = config.zoneMode === 'all' ? 'all zones' : `${compactNum(config.zoneIds.length)} zone${config.zoneIds.length === 1 ? '' : 's'}`;
   const a = newApproval({
     kind: 'backup', requestedBy: { id: me.id, email: me.email, role: me.role },
     title: `Backup ${presetName ? `“${presetName}”` : checked.cloudflare} · ${zones}`,

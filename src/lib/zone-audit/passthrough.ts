@@ -15,6 +15,7 @@
 import { isBrowserUa, isChallenge, isHostingAsn, isSolved, normAction, PASSIVE_ACTIONS, ruleString } from '../waf-fp-score';
 import { sensitivePaths } from './expr';
 import type { EventData, PassKind, PassThrough, Recommendation, RuleKind } from './types';
+import { compactNum } from '@/lib/num';
 
 /** Below this many passed requests in the window, nothing is concluded. */
 export const PASS_MIN = 100;
@@ -147,11 +148,11 @@ function recommend(r: PassRule, p: Omit<PassThrough, 'recommendation'>, fingerpr
   const name = `“${r.name}”`;
   // Bots and malicious requests overlap (a scanner is both): never more than what passed.
   const impact = p.verdict === 'bots' || p.verdict === 'malicious' ? Math.min(p.passed, p.bots + p.malicious) : 0;
-  const what = p.verdict === 'malicious' ? `${p.malicious} malicious requests (${p.maliciousBasis === 'attack_score' ? 'WAF attack score 1–20' : 'threat-like paths or clients other rules stopped'})`
-    : `${p.bots} automated requests (${pct(p.botShare)}; ${p.botBasis === 'score' ? 'bot score 1–29' : 'non-browser user agents'})`;
-  if (p.verdict === 'too_few') return { action: 'no_conclusion', impact: 0, title: `${name}: too few requests to judge`, steps: [`It let ${p.passed} requests through in the window — fewer than ${PASS_MIN}, the minimum the audit concludes from. Look again with the 30-day window.`] };
+  const what = p.verdict === 'malicious' ? `${compactNum(p.malicious)} malicious requests (${p.maliciousBasis === 'attack_score' ? 'WAF attack score 1–20' : 'threat-like paths or clients other rules stopped'})`
+    : `${compactNum(p.bots)} automated requests (${pct(p.botShare)}; ${p.botBasis === 'score' ? 'bot score 1–29' : 'non-browser user agents'})`;
+  if (p.verdict === 'too_few') return { action: 'no_conclusion', impact: 0, title: `${name}: too few requests to judge`, steps: [`It let ${compactNum(p.passed)} requests through in the window — fewer than ${PASS_MIN}, the minimum the audit concludes from. Look again with the 30-day window.`] };
   if (p.verdict === 'clean') return { action: 'keep', impact: 0, title: `${name}: no action needed`,
-    steps: [`It let ${p.passed} requests through; ${pct(p.botShare)} automated (${p.botBasis === 'score' ? 'bot score' : 'user agents'}) and ${p.malicious} malicious (${p.maliciousBasis === 'attack_score' ? 'attack score' : 'threat paths / repeat offenders'}) — under the thresholds (bots ≥ ${pct(BOT_SHARE)} and ≥ ${BOT_MIN}; malicious ≥ ${pct(MAL_SHARE)} and ≥ ${MAL_MIN}). Keep it as is.`] };
+    steps: [`It let ${compactNum(p.passed)} requests through; ${pct(p.botShare)} automated (${p.botBasis === 'score' ? 'bot score' : 'user agents'}) and ${compactNum(p.malicious)} malicious (${p.maliciousBasis === 'attack_score' ? 'attack score' : 'threat paths / repeat offenders'}) — under the thresholds (bots ≥ ${pct(BOT_SHARE)} and ≥ ${BOT_MIN}; malicious ≥ ${pct(MAL_SHARE)} and ≥ ${MAL_MIN}). Keep it as is.`] };
   const ex = exclusion(p);
   const rateLimit = p.sensitiveHits || p.topPaths.length
     ? `Add a rate limiting rule on the paths it let bots reach: \`(http.request.uri.path in {${p.topPaths.slice(0, 3).map((x) => ruleString(x.path)).join(' ')}})\`, counting by IP, e.g. 30 requests per minute, action Managed Challenge — start with Log.`

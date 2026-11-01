@@ -39,7 +39,7 @@ async function zonesTagged(tags: string[]): Promise<string[]> {
 export async function resolveScope(d: Pick<ReportDefinition, 'scope' | 'accounts' | 'tags'>, accountNames?: Map<string, string>): Promise<ResolvedScope> {
   if (d.scope === 'accounts') {
     const names = d.accounts.map((a) => accountNames?.get(a) || a);
-    return { label: d.accounts.length === 1 ? `Account ${names[0]}` : `${d.accounts.length} accounts: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`, accounts: d.accounts, zones: null };
+    return { label: d.accounts.length === 1 ? `Account ${names[0]}` : `${compactNum(d.accounts.length)} accounts: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`, accounts: d.accounts, zones: null };
   }
   if (d.scope === 'tag') {
     const zones = await zonesTagged(d.tags);

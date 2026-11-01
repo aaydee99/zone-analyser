@@ -12,6 +12,7 @@ import { ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonSt
 import { RunTable } from '@/components/run-table';
 import { QuickZones } from '@/components/quick-zones';
 import { HealthCard } from '@/components/health-card';
+import { compactNum } from '@/lib/num';
 
 interface Preset { id: string; name: string; config: BackupConfig; updatedAt: string }
 interface Check { ok: boolean; detail: string }
@@ -76,7 +77,7 @@ export default function Overview() {
         <Loading label="Loading backup stats" className="mb-6"><SkeletonStats className="!grid-cols-1 !gap-4 sm:!grid-cols-2 lg:!grid-cols-4" /></Loading>
       ) : <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Last successful" value={stats.lastOk ? relTime(stats.lastOk.endedAt ?? stats.lastOk.startedAt) : '—'} sub={stats.lastOk ? stats.lastOk.summary.account ?? stats.lastOk.credentialNames.cloudflare : 'No successful run yet'} tone={stats.lastOk ? undefined : 'warn'} />
-        <Stat label="Success rate" value={stats.rate === null ? '—' : `${stats.rate}%`} sub={`${runs.length} run${runs.length === 1 ? '' : 's'} total`} tone={stats.rate === null ? undefined : stats.rate >= 90 ? 'ok' : stats.rate >= 60 ? 'warn' : 'bad'} />
+        <Stat label="Success rate" value={stats.rate === null ? '—' : `${stats.rate}%`} sub={`${compactNum(runs.length)} run${runs.length === 1 ? '' : 's'} total`} tone={stats.rate === null ? undefined : stats.rate >= 90 ? 'ok' : stats.rate >= 60 ? 'warn' : 'bad'} />
         <Stat label="Clean backups" value={stats.clean} sub={`of ${stats.okCount} successful — no integrity gaps`} />
         <Stat label="Zones in last backup" value={stats.lastOk?.summary.zonesDone ?? '—'} sub={stats.lastOk ? `${stats.week} run${stats.week === 1 ? '' : 's'} in the last 7 days` : 'Run a backup to see coverage'} />
       </div>}
@@ -177,7 +178,7 @@ export default function Overview() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13.5px] font-medium">{p.name}</div>
                       <div className="text-xs text-muted">
-                        {p.config.zoneMode === 'all' ? 'All zones' : `${p.config.zoneIds.length} zones`}
+                        {p.config.zoneMode === 'all' ? 'All zones' : `${compactNum(p.config.zoneIds.length)} zones`}
                         {p.config.importMode ? ' · import' : ''}{p.config.r2.enabled ? ' · R2' : ''}{p.config.aws.enabled ? ' · S3' : ''}
                       </div>
                     </div>

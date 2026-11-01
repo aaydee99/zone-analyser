@@ -100,7 +100,7 @@ export function TagFilter({ value, onChange, showOwner = true, className }: { va
             onChange={(e) => onChange({ ...value, owner: e.target.value })}>
             <option value="">Any owner</option>
             {value.owner && !data?.owners.some((o) => o.owner.toLowerCase() === value.owner!.toLowerCase()) && <option value={value.owner}>{value.owner}</option>}
-            {(data?.owners ?? []).map((o) => <option key={o.owner} value={o.owner}>{o.owner} ({o.count})</option>)}
+            {(data?.owners ?? []).map((o) => <option key={o.owner} value={o.owner}>{o.owner} ({compactNum(o.count)})</option>)}
           </select>
         </>
       )}

@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react';
 import { duration, fmtDate, relTime } from '@/lib/client';
 import type { RunMeta } from '@/lib/run-types';
 import { Badge, StatusBadge } from './ui';
+import { compactNum } from '@/lib/num';
 
 export function RunTable({ runs }: { runs: RunMeta[] }) {
   return (
@@ -29,7 +30,7 @@ export function RunTable({ runs }: { runs: RunMeta[] }) {
                 </td>
                 <td className="px-5 py-3.5 text-ink-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {r.config.zoneMode === 'all' ? 'All zones' : `${r.config.zoneIds.length} zone${r.config.zoneIds.length === 1 ? '' : 's'}`}
+                    {r.config.zoneMode === 'all' ? 'All zones' : `${compactNum(r.config.zoneIds.length)} zone${r.config.zoneIds.length === 1 ? '' : 's'}`}
                     {r.config.importMode && <Badge>import</Badge>}
                     {r.config.r2.enabled && <Badge className="!border-cyan/25 !bg-cyan/10 !text-cyan">R2</Badge>}
                     {r.config.aws.enabled && <Badge tone="info">S3</Badge>}
@@ -44,7 +45,7 @@ export function RunTable({ runs }: { runs: RunMeta[] }) {
                   {r.status === 'running' ? <span className="text-muted">{s.zonesTotal ? `zone ${s.zonesDone ?? 0}/${s.zonesTotal}` : 'starting…'}</span>
                     : s.gaps === false ? <Badge tone="ok">Clean</Badge>
                       : s.gaps ? <Badge tone="warn">{(s.apiErrors ?? 0) + (s.quarantined ?? 0) + (s.generateFailures ?? 0)} gaps</Badge>
-                        : s.errors ? <Badge tone="bad">{s.errors} errors</Badge> : <span className="text-faint">—</span>}
+                        : s.errors ? <Badge tone="bad">{compactNum(s.errors)} errors</Badge> : <span className="text-faint">—</span>}
                 </td>
                 <td className="px-3 py-3.5 text-right">
                   <Link href={`/console/runs/${r.id}`} className="inline-flex rounded-md p-1.5 text-faint group-hover:text-ink" aria-label="Open run"><ChevronRight className="size-4" /></Link>

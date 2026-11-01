@@ -8,6 +8,7 @@ import { ACTIVITY, AREA_LABEL, CHANGE_AREA, describeChange, reportText, type Cha
 import { Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
+import { compactNum } from '@/lib/num';
 
 const RANGES = [
   { days: 1, label: 'Last 24 hours' },
@@ -105,7 +106,7 @@ export default function ChangesPage() {
           <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Area">
             <button onClick={() => setArea('')} aria-pressed={area === ''}
               className={cx('rounded-lg border px-2.5 py-1 text-[12.5px] transition-colors', area === '' ? 'border-line-strong bg-raised text-ink' : 'border-transparent text-muted hover:text-ink-2')}>
-              All {report ? <span className="tabular-nums text-faint">{report.changes.length}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}
+              All {report ? <span className="tabular-nums text-faint">{compactNum(report.changes.length)}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}
             </button>
             {(Object.keys(AREA_LABEL) as ChangeArea[]).filter((k) => areaCounts.get(k)).map((k) => (
               <button key={k} onClick={() => setArea(k)} aria-pressed={area === k}
@@ -167,7 +168,7 @@ export default function ChangesPage() {
                 {report.people.map((p) => (
                   <li key={p.email} className="flex items-center justify-between gap-3">
                     <span className="truncate text-ink-2" title={p.email}>{p.email}</span>
-                    <span className="font-mono tabular-nums text-muted">{p.changes}</span>
+                    <span className="font-mono tabular-nums text-muted">{compactNum(p.changes)}</span>
                   </li>
                 ))}
               </ul>

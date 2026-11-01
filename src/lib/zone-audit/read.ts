@@ -76,9 +76,9 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
     reads.zone = { state: 'ok', value: { id: zoneId, name: v.name ?? zoneName, status: v.status ?? '', type: v.type ?? 'full', plan: (v.plan?.legacy_id ?? v.plan?.name ?? '').toLowerCase() } satisfies ZoneInfo };
   }
 
-  // API Shield endpoints: only the count (one item asked for, total_count read).
+  // API Shield endpoints: only the count (the smallest page Cloudflare allows, 5, and total_count read).
   try {
-    const r = await get(`${base}/api_gateway/operations?per_page=1`);
+    const r = await get(`${base}/api_gateway/operations?per_page=5`);
     const g = classify(r);
     reads.api_operations = g.state === 'ok' ? { state: 'ok', value: { total: Number(r.body?.result_info?.total_count ?? (Array.isArray(g.value) ? g.value.length : 0)) } } : g;
   } catch (err) { signal?.throwIfAborted(); reads.api_operations = fromError(err); }

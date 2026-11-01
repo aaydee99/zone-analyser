@@ -18,7 +18,7 @@ interface SearchPage { zones: ZoneRow[]; meta: Record<string, ZoneMetaLite>; tot
 interface ImportResult { rows: number; matched: number; changed: number; unknown: string[]; unknownCount: number; errors: string[]; dryRun: boolean }
 
 const PAGE = 50;
-import { whole } from '@/lib/num';
+import { compactNum, whole } from '@/lib/num';
 const zoneHref = (f: ZoneMetaFilter) => `/console/zone-explorer?${filterToParams(f)}`;
 
 /** Waits until `value` has stopped changing for `ms`. */
@@ -42,7 +42,7 @@ function TagList({ tags, owners, editable, onChanged, onFilter }: { tags: TagCou
     setBusy(true);
     try {
       const r = await api<{ changed: number }>('/api/zones/tags/rename', { method: 'POST', json: { from, to: next } });
-      toast(next ? `${from} → ${next} on ${r.changed} zone${r.changed === 1 ? '' : 's'}` : `${from} removed from ${r.changed} zone${r.changed === 1 ? '' : 's'}`);
+      toast(next ? `${from} → ${next} on ${compactNum(r.changed)} zone${r.changed === 1 ? '' : 's'}` : `${from} removed from ${compactNum(r.changed)} zone${r.changed === 1 ? '' : 's'}`);
       setRenaming(null); setRemoving(null);
       onChanged();
     } catch (e) { toast((e as Error).message, 'bad'); } finally { setBusy(false); }

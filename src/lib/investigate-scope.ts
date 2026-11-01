@@ -4,6 +4,7 @@ import { HttpError } from './http';
 import { trafficMonths } from './traffic';
 import type { ZoneListItem } from './zone-catalog';
 import { listZones, type ZoneList } from './zone-explorer';
+import { compactNum } from '@/lib/num';
 
 // Which zones an investigation reads, from the cached zone list (no Cloudflare call): one zone, the
 // zone a host name belongs to, an account's zones, or every zone. Busiest first when the monthly
@@ -91,6 +92,6 @@ export async function rankZones(zones: ZoneListItem[]): Promise<{ zones: ZoneLis
     || Number(b.status === 'active') - Number(a.status === 'active') || a.name.localeCompare(b.name));
   return {
     zones: sorted,
-    ranking: known ? `busiest first by this month's cached traffic (${known} of ${zones.length} zones known; the rest by name)` : 'active zones first, then by name (no traffic is cached yet — opening Traffic analytics for an account ranks its zones by traffic)',
+    ranking: known ? `busiest first by this month's cached traffic (${known} of ${compactNum(zones.length)} zones known; the rest by name)` : 'active zones first, then by name (no traffic is cached yet — opening Traffic analytics for an account ranks its zones by traffic)',
   };
 }

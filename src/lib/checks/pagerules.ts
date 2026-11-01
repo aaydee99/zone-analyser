@@ -3,6 +3,7 @@ import { cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { notAvailable, readStat, type CheckDef } from './common';
+import { compactNum } from '@/lib/num';
 
 // Page Rules are being replaced by Cache, Configuration, Redirect, Origin and Transform Rules
 // (developers.cloudflare.com/rules/reference/page-rules-migration). For every Page Rule still in
@@ -51,7 +52,7 @@ export const pagerules: CheckDef = {
         }
       }
       const active = rules.filter((r) => r.status !== 'disabled').length;
-      if (active) findings.push({ key: `${z.id}:migrate`, severity: blocked ? 'medium' : 'low', title: `${active} Page Rule${active === 1 ? '' : 's'} on ${z.zoneName} to migrate`, detail: blocked ? `${blocked} setting${blocked === 1 ? ' has' : 's have'} no direct replacement and need a decision.` : 'Each setting has a modern rule to move to.', ...scope });
+      if (active) findings.push({ key: `${z.id}:migrate`, severity: blocked ? 'medium' : 'low', title: `${active} Page Rule${active === 1 ? '' : 's'} on ${z.zoneName} to migrate`, detail: blocked ? `${compactNum(blocked)} setting${blocked === 1 ? ' has' : 's have'} no direct replacement and need a decision.` : 'Each setting has a modern rule to move to.', ...scope });
       return { rows: { rules: rows }, findings, complete: true, idle: !rules.length, counts: { zonesWith: rules.length ? 1 : 0, settings: rows.length, decide: blocked } };
     },
   },

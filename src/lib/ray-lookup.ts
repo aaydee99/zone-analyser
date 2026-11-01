@@ -9,6 +9,7 @@ import { MANAGED_RULESETS } from './traffic-types';
 import type { ZoneListItem } from './zone-catalog';
 import { inParallel } from './cf-read';
 import { rulesetNames } from './zone-explorer';
+import { compactNum } from '@/lib/num';
 
 // Ray ID lookup: which zone a Ray ID belongs to, and what happened to that request — who sent it,
 // what it asked for, what it got, and which security rule acted on it. From Cloudflare's GraphQL
@@ -192,7 +193,7 @@ const clean = (o: Record<string, unknown>): Fields => Object.fromEntries(Object.
 
 /** One line per fact, for a chat message (the Slack command). */
 export function rayText(r: RayResult): string {
-  if (!r.found) return `Ray ${r.ray}: not found in ${r.search.searched} of ${r.search.zones} zones (${r.search.since.slice(0, 16)}–${r.search.until.slice(0, 16)} UTC)${r.search.capped ? ' — the search stopped at its query cap; give a zone, host or account' : ''}`;
+  if (!r.found) return `Ray ${r.ray}: not found in ${r.search.searched} of ${compactNum(r.search.zones)} zones (${r.search.since.slice(0, 16)}–${r.search.until.slice(0, 16)} UTC)${r.search.capped ? ' — the search stopped at its query cap; give a zone, host or account' : ''}`;
   const q = r.request ?? {};
   const e = r.events.find((x) => x.action !== 'log') ?? r.events[0];
   return [

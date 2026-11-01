@@ -141,7 +141,7 @@ export async function zoneTraffic(zoneIds: string[], cur: Window, prev: Window):
       for (const z of d.viewer?.zones ?? []) { addSum(t1, z.cur); addSum(t0, z.prev); }
       read += j.ids.length;
     } catch (err) {
-      problems.push({ scope: `${j.ids.length} zone${j.ids.length === 1 ? '' : 's'}`, error: `traffic: ${err instanceof Error ? err.message : String(err)}` });
+      problems.push({ scope: `${compactNum(j.ids.length)} zone${j.ids.length === 1 ? '' : 's'}`, error: `traffic: ${err instanceof Error ? err.message : String(err)}` });
       return;
     }
     try {
@@ -149,7 +149,7 @@ export async function zoneTraffic(zoneIds: string[], cur: Window, prev: Window):
       for (const z of d.viewer?.zones ?? []) { addSec(s1, z.cur); addSec(s0, z.prev); }
       secRead += j.ids.length;
     } catch (err) {
-      problems.push({ scope: `${j.ids.length} zone${j.ids.length === 1 ? '' : 's'}`, error: `security events: ${err instanceof Error ? err.message : String(err)}` });
+      problems.push({ scope: `${compactNum(j.ids.length)} zone${j.ids.length === 1 ? '' : 's'}`, error: `security events: ${err instanceof Error ? err.message : String(err)}` });
     }
   }));
   return finish(read, secRead, zoneIds.length, 'zones', t1, t0, s1, s0, problems);

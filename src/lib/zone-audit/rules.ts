@@ -17,6 +17,7 @@ import {
   type AuditFinding, type AuditSummary, type BotConfig, type CertPack, type CnameLookups, type CoverageEntry, type DnsRec, type Evidence, type PageRule,
   type RuleGroup, type RulesetRule, type Severity, type Snapshot, type SourceKey, type Verdict, type WorkerRoute, type ZoneInfo,
 } from './types';
+import { compactNum } from '@/lib/num';
 
 export const WEB = 'WEB-PROTOCOL-AND-AUTH.md';
 export const CLOUD = 'CLOUD-AND-DEPLOYMENT.md';
@@ -84,7 +85,7 @@ export const ruleName = (r: RulesetRule) => r.description?.trim() || r.ref || r.
 export const ap = (r: RulesetRule) => (r.action_parameters ?? {}) as Record<string, unknown>;
 export const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
 export const lower = (s: string) => s.trim().toLowerCase().replace(/\.$/, '');
-export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+export const plural = (n: number, w: string) => `${compactNum(n)} ${w}${n === 1 ? '' : 's'}`;
 export const proxiedWeb = (recs: DnsRec[]) => recs.filter((r) => (r.type === 'A' || r.type === 'AAAA' || r.type === 'CNAME') && r.proxied);
 const daysBetween = (a: string, b: string) => Math.floor((Date.parse(a) - Date.parse(b)) / 86_400_000);
 /** Cut a list of drafts to PER_RULE_MAX, adding one that counts the rest. */
@@ -261,7 +262,7 @@ const ORIGIN: RuleDef[] = [
         rootCause: 'An unproxied DNS record carries the address (or target) a proxied record hides.', intendedBehavior: 'Origin addresses are not published in public DNS; records for proxied services are proxied.',
         evidence: [ev('GET /zones/{id}/dns_records', `${l.record.name} ${l.record.type}`, `${l.record.content} (proxied: false)`), ev('GET /zones/{id}/dns_records', `${l.proxied.name} ${l.proxied.type}`, `${l.proxied.content} (proxied: true)`)],
         fix: [`DNS › Records: proxy ${l.record.name} (orange cloud) if it serves HTTP(S); if it must stay unproxied (mail, SSH), move that service to another address.`, 'Then change the origin\'s address (the old one is now public) and allow only Cloudflare IP ranges or authenticated origin pulls on it.'],
-      })), (n) => ({ resource: 'more', verdict: 'confirmed', severity: 'high', title: `${n} more unproxied records reveal proxied origins`, description: `Only the first ${PER_RULE_MAX} are listed one by one.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('GET /zones/{id}/dns_records', 'records not listed', n)], fix: ['Export the DNS records (Zone explorer › DNS CSV) and review every unproxied A/AAAA/CNAME.'] }));
+      })), (n) => ({ resource: 'more', verdict: 'confirmed', severity: 'high', title: `${compactNum(n)} more unproxied records reveal proxied origins`, description: `Only the first ${PER_RULE_MAX} are listed one by one.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('GET /zones/{id}/dns_records', 'records not listed', n)], fix: ['Export the DNS records (Zone explorer › DNS CSV) and review every unproxied A/AAAA/CNAME.'] }));
     },
   },
   {
@@ -280,7 +281,7 @@ const ORIGIN: RuleDef[] = [
           fix: [`If ${r.name} must be reachable: proxy it and protect it with Cloudflare Access (Zero Trust › Access › Applications).`, 'If it is internal: delete the public record and reach it over a VPN or Tunnel.'],
           validation: `Run \`curl -skI https://${r.name}/\` and \`curl -sI http://${r.name}/\` from outside your network: a login page, dashboard or directory listing means it is exposed; a timeout or refusal settles it. Also check which other ports answer on ${r.content} from the hosting firewall rules.` });
       }
-      return capped(out, (n) => ({ resource: 'more', verdict: 'needs_validation', severity: 'medium', title: `${n} more unproxied hosts with sensitive names`, description: `Only the first ${PER_RULE_MAX} are listed.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('GET /zones/{id}/dns_records', 'records not listed', n)], fix: ['Review the remaining records in DNS › Records.'], validation: 'As above, for each record.' }));
+      return capped(out, (n) => ({ resource: 'more', verdict: 'needs_validation', severity: 'medium', title: `${compactNum(n)} more unproxied hosts with sensitive names`, description: `Only the first ${PER_RULE_MAX} are listed.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('GET /zones/{id}/dns_records', 'records not listed', n)], fix: ['Review the remaining records in DNS › Records.'], validation: 'As above, for each record.' }));
     },
   },
   {
@@ -307,7 +308,7 @@ const ORIGIN: RuleDef[] = [
           fix: [`DNS › Records: delete the CNAME ${r.name} if it is not used.`],
           validation: svc ? `Check in your ${svc.service} account whether a resource named ${t} exists; if not, the name can be claimed.` : `Check whether the registered domain of ${t} is still registered (whois); if it is free, anyone can take ${r.name}.` });
       }
-      return capped(out, (n) => ({ resource: 'more', verdict: 'needs_validation', severity: 'medium', title: `${n} more CNAMEs point at names that do not exist`, description: `Only the first ${PER_RULE_MAX} are listed.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('DNS-over-HTTPS', 'records not listed', n)], fix: ['Review the remaining CNAMEs in DNS › Records.'], validation: 'As above.' }));
+      return capped(out, (n) => ({ resource: 'more', verdict: 'needs_validation', severity: 'medium', title: `${compactNum(n)} more CNAMEs point at names that do not exist`, description: `Only the first ${PER_RULE_MAX} are listed.`, rootCause: 'As above.', intendedBehavior: 'As above.', evidence: [ev('DNS-over-HTTPS', 'records not listed', n)], fix: ['Review the remaining CNAMEs in DNS › Records.'], validation: 'As above.' }));
     },
   },
   {

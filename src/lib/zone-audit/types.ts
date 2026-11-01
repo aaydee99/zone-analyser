@@ -218,7 +218,7 @@ export const SOURCES: Record<SourceKey, { label: string; path: string; permissio
   universal_ssl: { label: 'Universal SSL', path: 'GET /zones/{id}/ssl/universal/settings', permission: 'SSL and Certificates Read' },
   leaked_credentials: { label: 'Leaked credentials detection', path: 'GET /zones/{id}/leaked-credential-checks', permission: 'Zone WAF Read' },
   schema_validation: { label: 'API Shield schema validation settings', path: 'GET /zones/{id}/schema_validation/settings', permission: 'Domain API Gateway Read' },
-  api_operations: { label: 'API Shield endpoints (count)', path: 'GET /zones/{id}/api_gateway/operations?per_page=1', permission: 'Domain API Gateway Read' },
+  api_operations: { label: 'API Shield endpoints (count)', path: 'GET /zones/{id}/api_gateway/operations?per_page=5', permission: 'Domain API Gateway Read' },
   dns: { label: 'DNS records', path: 'GET /zones/{id}/dns_records', permission: 'DNS Read' },
   dnssec: { label: 'DNSSEC', path: 'GET /zones/{id}/dnssec', permission: 'DNS Read' },
   certificates: { label: 'Edge certificate packs', path: 'GET /zones/{id}/ssl/certificate_packs?status=all', permission: 'SSL and Certificates Read' },

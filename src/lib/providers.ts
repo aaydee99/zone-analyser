@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { cached, tag } from './cache';
 import type { Credential } from './vault';
 import { BUCKET_PATTERN, R2_ENDPOINT_PATTERN, STORAGE_LABEL, storageFields, type TestResult } from './kinds';
+import { compactNum } from '@/lib/num';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
@@ -83,7 +84,7 @@ async function testCloudflare(c: Credential): Promise<string> {
     const zones = await cf<unknown[]>(apiToken, '/zones?per_page=1');
     const count = zones.body?.result_info?.total_count ?? 0;
     const names = accounts.map((a) => `"${a.name || a.id}"`);
-    return `Token active · ${accounts.length} account${accounts.length === 1 ? '' : 's'} (${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}) · ${count} zone${count === 1 ? '' : 's'} visible`;
+    return `Token active · ${compactNum(accounts.length)} account${accounts.length === 1 ? '' : 's'} (${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}) · ${compactNum(count)} zone${count === 1 ? '' : 's'} visible`;
   }
   // User-owned tokens verify at /user/tokens/verify, account-owned ones under the account.
   let v = await cf<{ status: string }>(apiToken, '/user/tokens/verify');
@@ -100,7 +101,7 @@ async function testCloudflare(c: Credential): Promise<string> {
   }
   const zones = await cf<unknown[]>(apiToken, `/zones?account.id=${accountId}&per_page=1`);
   const count = zones.body?.result_info?.total_count ?? 0;
-  return `Token active · account "${name}" · ${count} zone${count === 1 ? '' : 's'} visible`;
+  return `Token active · account "${name}" · ${compactNum(count)} zone${count === 1 ? '' : 's'} visible`;
 }
 
 // Minimal SigV4 for a HEAD Bucket request.

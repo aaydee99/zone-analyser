@@ -12,6 +12,7 @@ import { useToast } from '@/components/toast';
 import { useSnapshot } from '../../monitoring/use-run';
 import { ReportEditor } from '../editor';
 import { RunState } from '../run-state';
+import { compactNum } from '@/lib/num';
 
 interface DetailView { definition: ReportDefinition; runs: ReportRunSummary[]; total: number; offset: number; generatedAt: string }
 
@@ -50,7 +51,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
     <div className="space-y-6">
       <Link href="/console/reports" className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink"><ArrowLeft className="size-3.5" />All reports</Link>
       <PageHeader eyebrow="Report" title={d?.name ?? 'Report'}
-        description={d ? `${scheduleLabel(d)} · ${d.scope === 'all' ? 'Everything' : d.scope === 'accounts' ? `${d.accounts.length} account${d.accounts.length === 1 ? '' : 's'}` : `Zones tagged ${d.tags.join(' + ')}`} · ${d.sections.map((s) => SECTION_LABEL[s]).join(', ')}` : undefined}
+        description={d ? `${scheduleLabel(d)} · ${d.scope === 'all' ? 'Everything' : d.scope === 'accounts' ? `${compactNum(d.accounts.length)} account${d.accounts.length === 1 ? '' : 's'}` : `Zones tagged ${d.tags.join(' + ')}`} · ${d.sections.map((s) => SECTION_LABEL[s]).join(', ')}` : undefined}
         actions={<>
           <Button variant="ghost" loading={loading && !!data} onClick={reload} icon={<RefreshCw className="size-4" />}>Refresh</Button>
           {manage && d && <>

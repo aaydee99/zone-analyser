@@ -115,7 +115,7 @@ function RulePages({ pages, names, find, zone }: { pages: ZoneRulePhase[]; names
               <span className="text-[13px] font-medium">{p.label}</span>
               <span className="font-mono text-[11px] text-faint">{p.phase}</span>
               <span className="ml-auto">
-                {p.status === 'ok' ? <Badge tone="signal">{p.rules.length} rule{p.rules.length === 1 ? '' : 's'}</Badge>
+                {p.status === 'ok' ? <Badge tone="signal">{compactNum(p.rules.length)} rule{p.rules.length === 1 ? '' : 's'}</Badge>
                   : p.status === 'empty' ? <Badge>none</Badge> : <Badge tone="warn">not readable</Badge>}
               </span>
             </summary>
@@ -201,7 +201,7 @@ function HostGroup({ title, note, badges, rules, open }: { title: ReactNode; not
         <ChevronRight className="size-4 shrink-0 text-faint transition-transform group-open/s:rotate-90" aria-hidden />
         <span className="font-mono text-[13px] font-medium break-all">{title}</span>
         <span className="text-[11px] text-faint">{note}</span>
-        <span className="ml-auto flex flex-wrap items-center gap-2">{badges}<Badge tone="signal">{rules.length} rule{rules.length === 1 ? '' : 's'}</Badge></span>
+        <span className="ml-auto flex flex-wrap items-center gap-2">{badges}<Badge tone="signal">{compactNum(rules.length)} rule{rules.length === 1 ? '' : 's'}</Badge></span>
       </summary>
       <div className="px-5 pb-4">
         <Table head={['Rule page', '#', 'Name', 'Match', 'Action', 'What it does', 'Enabled']}
@@ -230,10 +230,10 @@ function RulesByHost({ zone, pages, sections, names, find }: { zone: string; pag
         <span className="text-xs font-normal text-muted">which rules run on every host of {zone}, and which only on one hostname</span>
       </h2>
       <div className="flex flex-wrap gap-2 border-b border-line/50 px-5 py-3 text-[12px]">
-        <span className="rounded-md border border-line px-2 py-1"><span className="text-muted">Whole zone</span> <b className="tabular-nums">{all.zoneWide.length}</b></span>
-        {all.apex.length > 0 && <span className="rounded-md border border-line px-2 py-1"><span className="text-muted">{zone} only</span> <b className="tabular-nums">{all.apex.length}</b></span>}
-        {all.hosts.map((h) => <span key={h.host} className="rounded-md border border-signal/40 bg-signal/5 px-2 py-1 font-mono"><span className="text-ink-2">{h.host}</span> <b className="tabular-nums">{h.rules.length}</b></span>)}
-        {all.patterns.map((p) => <span key={p.pattern} className="rounded-md border border-warn/40 px-2 py-1 font-mono"><span className="text-ink-2">host {p.pattern}</span> <b className="tabular-nums">{p.rules.length}</b></span>)}
+        <span className="rounded-md border border-line px-2 py-1"><span className="text-muted">Whole zone</span> <b className="tabular-nums">{compactNum(all.zoneWide.length)}</b></span>
+        {all.apex.length > 0 && <span className="rounded-md border border-line px-2 py-1"><span className="text-muted">{zone} only</span> <b className="tabular-nums">{compactNum(all.apex.length)}</b></span>}
+        {all.hosts.map((h) => <span key={h.host} className="rounded-md border border-signal/40 bg-signal/5 px-2 py-1 font-mono"><span className="text-ink-2">{h.host}</span> <b className="tabular-nums">{compactNum(h.rules.length)}</b></span>)}
+        {all.patterns.map((p) => <span key={p.pattern} className="rounded-md border border-warn/40 px-2 py-1 font-mono"><span className="text-ink-2">host {p.pattern}</span> <b className="tabular-nums">{compactNum(p.rules.length)}</b></span>)}
       </div>
       {wide.length > 0 && <HostGroup title="Whole zone" note={`no host condition: runs on ${zone} and every subdomain`} rules={wide} open={!!q} />}
       {apex.length > 0 && <HostGroup title={zone} note="limited to the zone apex" badges={<Badge tone="info">apex only</Badge>} rules={apex} open={!!q} />}
@@ -466,20 +466,20 @@ export default function ZoneExplorerPage() {
             <label className="relative block border-b border-line p-3">
               <span className="sr-only">Find a zone</span>
               <Search className="pointer-events-none absolute top-1/2 left-6 size-4 -translate-y-1/2 text-faint" aria-hidden />
-              <input className="input !pl-9" placeholder={zones ? `Find among ${zones.length} zones…` : 'Loading zones…'} value={q} onChange={(e) => setQ(e.target.value)} />
+              <input className="input !pl-9" placeholder={zones ? `Find among ${compactNum(zones.length)} zones…` : 'Loading zones…'} value={q} onChange={(e) => setQ(e.target.value)} />
             </label>
             <div className="space-y-2 border-b border-line px-3 py-2.5">
               <TagFilter value={zf} onChange={setZf} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <SavedViews path="/console/zone-explorer" query={viewQuery} onApply={applyQuery} />
-                {matching && zones && <span className="text-[11px] text-muted">{shownZones.length} of {zones.length} zones</span>}
+                {matching && zones && <span className="text-[11px] text-muted">{compactNum(shownZones.length)} of {compactNum(zones.length)} zones</span>}
               </div>
               {metaError && <p className="text-[11px] text-warn">{metaError}</p>}
             </div>
             <div className="max-h-[60vh] overflow-y-auto lg:max-h-[calc(100vh-12rem)]">
               {byAccount.length > 1 && !filtering && (
                 <div className="flex items-center justify-between border-b border-line/60 px-4 py-2 text-[11px] text-muted">
-                  <span>{byAccount.length} accounts</span>
+                  <span>{compactNum(byAccount.length)} accounts</span>
                   <button type="button" className="hover:text-ink" onClick={() => setAccountsOpen(Object.fromEntries(byAccount.map((g) => [g.id, !allOpen])))}>
                     {allOpen ? 'Collapse all' : 'Expand all'}
                   </button>
@@ -499,7 +499,7 @@ export default function ZoneExplorerPage() {
                         {g.name !== g.id && /^[0-9a-f]{32}$/.test(g.id) && <span className="block truncate font-mono text-[10.5px] text-faint">{g.id}</span>}
                       </span>
                       {inactive > 0 && <Badge tone="warn">{inactive} not active</Badge>}
-                      <Badge>{g.zones.length}</Badge>
+                      <Badge>{compactNum(g.zones.length)}</Badge>
                     </button>
                     {expanded && (
                       <div id={`zx-acct-${g.id}`} className="pb-1">
@@ -651,7 +651,7 @@ export default function ZoneExplorerPage() {
                   <Card className="mb-4">
                     <details>
                       <summary className="cursor-pointer px-5 py-3 text-[13px] font-medium">
-                        Empty or not readable: {empty.length} empty, {missing.length} not readable with this token or plan
+                        Empty or not readable: {compactNum(empty.length)} empty, {compactNum(missing.length)} not readable with this token or plan
                       </summary>
                       <ul className="border-t border-line px-5 py-2 text-[12.5px]">
                         {[...missing, ...empty].map((s) => (

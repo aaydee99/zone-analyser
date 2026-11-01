@@ -49,7 +49,7 @@ const passes = (a: string) => ['log', 'skip', 'bypass', 'allow', 'whitelist'].in
 /** Same impact: the stronger change first. */
 const ORDER: Record<string, number> = { block_or_challenge: 0, narrow: 1, replace_allow: 2, rate_limit: 3, keep: 4, no_conclusion: 5 };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
-import { whole as n } from '@/lib/num';
+import { compactNum, whole as n } from '@/lib/num';
 const top = <T extends { count: number }>(xs: T[], k = 5) => [...xs].sort((a, b) => b.count - a.count).slice(0, k);
 
 interface Configured { phase: 'http_request_firewall_custom' | 'http_ratelimit'; rule: RulesetRule }
@@ -186,7 +186,7 @@ function mergeAsns(as: { asn: string; name: string; count: number }[]) {
 const winText = (s: Snapshot) => `in the last ${windowLabel(s.hours ?? 0)}`;
 const evSrc = 'GraphQL firewallEventsAdaptiveGroups';
 const rqSrc = 'GraphQL httpRequestsAdaptiveGroups';
-const ev = (source: string, field: string, value: string | number) => ({ source, field, value: String(value) });
+const ev = (source: string, field: string, value: string | number) => ({ source, field, value: typeof value === 'number' ? compactNum(value) : value });
 const eff = (c: Ctx) => effectivenessOf(c.s)!;
 const reqs = (c: Ctx) => c.v<RequestData>('requests');
 const mitigatedOnPath = (c: Ctx, host: string, path: string) => (c.v<EventData>('events').paths ?? []).filter((p) => p.path === path && (!host || !p.host || p.host === host) && mitigating(p.action)).reduce((a, p) => a + p.count, 0);
@@ -218,9 +218,9 @@ export const TRAFFIC_RULES: RuleDef[] = [
           ? (p.maliciousBasis === 'attack_score' ? `${n.format(p.malicious)} had a WAF attack score of 1–20 (attack).` : `${n.format(p.threatPathHits)} went to threat-like paths and ${n.format(p.repeatOffenderHits)} came from clients other rules blocked or challenged.`)
           : (p.botBasis === 'score' ? `${n.format(p.bots)} had a bot score of 1–29 (verified bots left out).` : `${pct(1 - p.browserShare)} came with a user agent that is not an ordinary browser; ${pct(p.hostingShare)} from hosting networks.`)}${p.sensitiveHits ? ` ${n.format(p.sensitiveHits)} reached login, account, admin or API paths.` : ''}`,
         rootCause: 'The rule lets matched requests through without telling bots and attacks from the traffic it was written for.', intendedBehavior: 'Rules that let traffic through match only the clients they are meant for; bots and attacks among them are challenged or blocked.',
-        evidence: [ev(evSrc, 'passed requests', p.passed), ev(evSrc, `automated (${p.botBasis})`, `${p.bots} (${pct(p.botShare)})`), ev(evSrc, `malicious (${p.maliciousBasis})`, `${p.malicious} (${pct(p.maliciousShare)})`),
+        evidence: [ev(evSrc, 'passed requests', p.passed), ev(evSrc, `automated (${p.botBasis})`, `${compactNum(p.bots)} (${pct(p.botShare)})`), ev(evSrc, `malicious (${p.maliciousBasis})`, `${compactNum(p.malicious)} (${pct(p.maliciousShare)})`),
           ev(evSrc, 'from hosting networks', pct(p.hostingShare)), ev(evSrc, 'with a browser user agent', pct(p.browserShare)), ...(p.statuses ? [ev(evSrc, 'responses 2xx / 4xx / 5xx', `${p.statuses.s2xx} / ${p.statuses.s4xx} / ${p.statuses.s5xx}`)] : []),
-          ...(p.peakPerHour !== null ? [ev(evSrc, 'busiest hour', p.peakPerHour)] : []), ...p.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${a.count}`)), ...p.topPaths.slice(0, 3).map((x) => ev(evSrc, `path ${x.path}`, x.count)), ev('window', 'hours', c.s.hours ?? 0)],
+          ...(p.peakPerHour !== null ? [ev(evSrc, 'busiest hour', p.peakPerHour)] : []), ...p.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${compactNum(a.count)}`)), ...p.topPaths.slice(0, 3).map((x) => ev(evSrc, `path ${x.path}`, x.count)), ev('window', 'hours', c.s.hours ?? 0)],
         fix: [p.recommendation.title, ...p.recommendation.steps, ...(p.recommendation.expression ? [`Expression: ${p.recommendation.expression}`] : [])],
         validation: byScore ? undefined : 'Open Security › Events filtered to this rule and look at a sample: scripted user agents, hosting networks and probe paths confirm it; a known partner or monitor means it is fine (exclude it by IP instead).' };
     }),
@@ -264,7 +264,7 @@ export const TRAFFIC_RULES: RuleDef[] = [
         out.push({ resource: `${st.source}:${st.ruleId}`, verdict: 'needs_validation', severity: 'medium', title: `${KIND_LABEL[st.kind]} “${name}” looks like it stops real visitors (score ${sc.score}/100)`,
           description: `${winText(c.s)} it blocked or challenged ${n.format(sc.mitigated)} requests. Signals: ${sc.signals.filter((x) => x.points > 0).map((x) => `${x.label} (${x.detail})`).join('; ')}.`,
           rootCause: 'The rule matches traffic that has the marks of ordinary visitors.', intendedBehavior: 'Rules stop attackers and let real visitors through.',
-          evidence: [ev(evSrc, 'mitigated', sc.mitigated), ev(evSrc, 'challenges issued / solved', `${sc.challenged} / ${sc.solved}`), ev(evSrc, 'residential share', pct(sc.residentialShare)), ev(evSrc, 'browser share', pct(sc.browserShare)),
+          evidence: [ev(evSrc, 'mitigated', sc.mitigated), ev(evSrc, 'challenges issued / solved', `${compactNum(sc.challenged)} / ${sc.solved}`), ev(evSrc, 'residential share', pct(sc.residentialShare)), ev(evSrc, 'browser share', pct(sc.browserShare)),
             ...(okShare !== null ? [ev(rqSrc, `2xx/3xx share on ${main!.path}`, pct(okShare))] : []), ev('window', 'hours', c.s.hours ?? 0)],
           fix: [`${draft.where}.`, `Expression: ${draft.expression}`, `Action: ${draft.action}${Object.keys(draft.actionParameters).length ? ` ${JSON.stringify(draft.actionParameters)}` : ''}`, ...draft.notes],
           validation: 'Look at a sample of the rule\'s events in Security › Events: real browsers on real pages (and solved challenges) mean false positives; one client or scripted user agents mean the rule is right.' });

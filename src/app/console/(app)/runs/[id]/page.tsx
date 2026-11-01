@@ -11,6 +11,7 @@ import { Terminal } from '@/components/terminal';
 import { BackupFiles } from '@/components/backup-files';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
+import { compactNum } from '@/lib/num';
 
 function Metric({ label, value, tone, pending }: { label: string; value: React.ReactNode; tone?: 'ok' | 'bad' | 'warn'; pending?: boolean }) {
   return (
@@ -133,7 +134,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           />
         </div>
         <div className="grid grid-cols-2 divide-line sm:grid-cols-3 lg:grid-cols-6 lg:divide-x">
-          <Metric pending={pending} label="Zones" value={total ? `${done}/${total}` : '—'} />
+          <Metric pending={pending} label="Zones" value={total ? `${compactNum(done)}/${compactNum(total)}` : '—'} />
           <Metric pending={pending} label="Warnings" value={s?.warnings ?? 0} tone={s?.warnings ? 'warn' : undefined} />
           <Metric pending={pending} label="Errors" value={s?.errors ?? 0} tone={s?.errors ? 'bad' : undefined} />
           <Metric pending={pending} label="API failures" value={s?.apiErrors ?? '—'} tone={s?.apiErrors ? 'warn' : s?.apiErrors === 0 ? 'ok' : undefined} />
@@ -165,7 +166,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             <dl className={cx('space-y-2.5 px-5 py-4 text-[13px]', !meta && 'hidden')}>
               {meta && ([
                 ['Source', meta.credentialNames.cloudflare ?? '—'],
-                ['Zones', meta.config.zoneMode === 'all' ? 'All zones' : `${meta.config.zoneIds.length} selected`],
+                ['Zones', meta.config.zoneMode === 'all' ? 'All zones' : `${compactNum(meta.config.zoneIds.length)} selected`],
                 ['Mode', meta.config.importMode ? 'Generate + import' : 'Generate only'],
                 ['Account policy', meta.config.accountScope + (meta.config.withAccount ? ' · --with-account' : '')],
                 ['Audit logs', `${meta.config.auditLogHours}h`],

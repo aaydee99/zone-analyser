@@ -176,7 +176,7 @@ function ZoneOnboarding({ events, accountsWithoutList }: { events: CfZoneEvent[]
         <span className="flex gap-1.5">
           {(['added', 'activated', 'removed'] as const).map((k) => {
             const n = events.filter((e) => e.event === k).length;
-            return n ? <Badge key={k} tone={EVENT_TONE[k]}>{n} {EVENT_LABEL[k].toLowerCase()}</Badge> : null;
+            return n ? <Badge key={k} tone={EVENT_TONE[k]}>{compactNum(n)} {EVENT_LABEL[k].toLowerCase()}</Badge> : null;
           })}
         </span>
       </div>
@@ -390,16 +390,16 @@ export default function CloudflareActivityPage() {
             <Loading label="Loading Cloudflare activity stats" className="mb-6"><SkeletonStats className="sm:!gap-4 md:!grid-cols-2 lg:!grid-cols-4" /></Loading>
           ) : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <Stat label="Changes" value={report ? compactNum(t.total) : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
-            <Stat label="Zones changed" value={report ? t.zones : '—'} sub={report ? `in ${t.accounts} account${t.accounts === 1 ? '' : 's'}` : ' '} />
+            <Stat label="Zones changed" value={report ? compactNum(t.zones) : '—'} sub={report ? `in ${compactNum(t.accounts)} account${t.accounts === 1 ? '' : 's'}` : ' '} />
             <Stat label="Categories" value={report ? t.categories : '—'} sub={groups[0] ? `${groups.map((x) => x.label).slice(0, 2).join(', ')}${groups.length > 2 ? '…' : ''}` : report ? 'nothing changed' : ' '} />
-            <Stat label="Zones onboarded" value={report ? onboarded : '—'} sub={report ? (removed ? `${removed} removed` : 'none removed') : ' '} tone={onboarded ? 'ok' : undefined} />
+            <Stat label="Zones onboarded" value={report ? compactNum(onboarded) : '—'} sub={report ? (removed ? `${compactNum(removed)} removed` : 'none removed') : ' '} tone={onboarded ? 'ok' : undefined} />
           </div>}
 
           {report && <ZoneOnboarding events={report.zoneEvents} accountsWithoutList={noZoneList} />}
 
           <Card>
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Category">
-              <Chip active={category === ''} onClick={() => setCategory('')}>All {report || error ? <span className="tabular-nums text-faint">{searched.length}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}</Chip>
+              <Chip active={category === ''} onClick={() => setCategory('')}>All {report || error ? <span className="tabular-nums text-faint">{compactNum(searched.length)}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}</Chip>
               {CATEGORIES.filter((c) => categoryCounts.get(c.key)).map((c) => (
                 <Chip key={c.key} active={category === c.key} onClick={() => setCategory(c.key)}>
                   <span title={c.description}>{c.label}</span> <span className="tabular-nums text-faint">{categoryCounts.get(c.key)}</span>

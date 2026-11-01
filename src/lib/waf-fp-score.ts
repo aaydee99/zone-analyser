@@ -6,6 +6,7 @@
 // what to look at first; it does not prove a false positive.
 
 import type { WafSignal, WafSuspect } from './investigate-types';
+import { compactNum } from '@/lib/num';
 
 /** "managed_challenge", "managedChallenge" and "managedchallenge" are the same action. */
 export const normAction = (a: string) => a.toLowerCase().replace(/[_\s-]/g, '');
@@ -86,7 +87,7 @@ export function scoreRule(s: RuleStats, okShare: number | null): { score: number
   if (okShare !== null) add('ok-path', 'The path normally works', okShare >= 0.9 ? 15 : okShare >= 0.7 ? 8 : 0, `${pct(okShare)} of the other requests to that path answered 2xx/3xx`);
   if (challenged >= MIN_EVENTS) {
     const rate = solved / challenged;
-    add('solved', 'Challenges are solved', rate >= 0.5 ? 20 : rate >= 0.2 ? 10 : 0, `${pct(rate)} of ${challenged} challenges were solved (a person or a real browser passed)`);
+    add('solved', 'Challenges are solved', rate >= 0.5 ? 20 : rate >= 0.2 ? 10 : 0, `${pct(rate)} of ${compactNum(challenged)} challenges were solved (a person or a real browser passed)`);
   }
   add('one-path', 'One rule, one path', pathShare >= 0.8 && mitigated >= 50 ? 10 : 0, `${pct(pathShare)} of its mitigations hit one path`);
   const score = Math.max(0, Math.min(100, signals.reduce((n, x) => n + x.points, 0)));

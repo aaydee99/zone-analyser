@@ -7,6 +7,7 @@ import { api, fmtDate } from '@/lib/client';
 import { RAY_WINDOWS, type Cell, type RayResult } from '@/lib/investigate-types';
 import { Alert, Badge, Button, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
 import { RefreshBar, Reading, ZonePicker, useAccounts, useJob, whole, type PickedZone } from '../shared';
+import { compactNum } from '@/lib/num';
 
 type Scope = 'zone' | 'host' | 'account' | 'all';
 const SCOPES: { value: Scope; label: string; hint: string }[] = [
@@ -89,7 +90,7 @@ function Result({ r }: { r: RayResult }) {
           <Facts title="Security" rows={r.events.length ? [
             ['Final action', <Badge key="a" tone={ACTION_TONE(String(q.securityAction ?? r.events.at(-1)?.action ?? ''))}>{show(q.securityAction ?? r.events.at(-1)?.action)}</Badge>],
             ['Source', show(q.securitySource ?? r.events.at(-1)?.source)],
-            ['Events', `${r.events.length} logged`],
+            ['Events', `${compactNum(r.events.length)} logged`],
           ] : [['Security', 'No rule acted on this request (no security event)']]} />
         </Card>
       )}

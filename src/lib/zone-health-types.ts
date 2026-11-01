@@ -1,6 +1,7 @@
 // Zone health: what the Health page and the Overview card get. Shared by server and client — no Node imports.
 
 import type { Severity } from './monitor-types';
+import { compactNum } from '@/lib/num';
 
 export type HealthSort = 'score' | 'best' | 'name' | 'findings';
 export const HEALTH_SORTS: { value: HealthSort; label: string }[] = [
@@ -39,10 +40,10 @@ export function explain(b: HealthBreakdown, label: (check: string) => string = (
     out.push(`Open findings (${sev}): −${f.penalty}${checks ? ` — ${checks}` : ''}`);
   }
   const c = b.coverage;
-  if (c && c.penalty > 0) out.push(`Coverage: ${[c.failing ? `${c.failing} check${c.failing === 1 ? '' : 's'} failing` : '', c.never ? `${c.never} never read` : ''].filter(Boolean).join(', ')} of ${c.units}: −${c.penalty}`);
+  if (c && c.penalty > 0) out.push(`Coverage: ${[c.failing ? `${compactNum(c.failing)} check${c.failing === 1 ? '' : 's'} failing` : '', c.never ? `${c.never} never read` : ''].filter(Boolean).join(', ')} of ${compactNum(c.units)}: −${c.penalty}`);
   const cert = b.certificates;
   if (cert && cert.penalty > 0) out.push(`Certificate ${cert.minDays !== null && cert.minDays < 0 ? 'expired' : `expires in ${cert.minDays} days`}: −${cert.penalty}`);
   const d = b.drift;
-  if (d && d.penalty > 0) out.push(`${d.changes} change${d.changes === 1 ? '' : 's'} since the drift baseline: −${d.penalty}`);
+  if (d && d.penalty > 0) out.push(`${compactNum(d.changes)} change${d.changes === 1 ? '' : 's'} since the drift baseline: −${d.penalty}`);
   return out;
 }

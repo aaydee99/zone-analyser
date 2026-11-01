@@ -10,6 +10,7 @@ import { NoteView } from '@/components/change-note';
 import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useToast } from '@/components/toast';
 import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonTable } from '@/components/ui';
+import { compactNum } from '@/lib/num';
 
 const STATUS: Record<ApprovalStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'info' | 'neutral' | 'signal' }> = {
   pending: { label: 'Waiting', tone: 'signal' },
@@ -123,7 +124,7 @@ export default function ApprovalsPage() {
               {a.note && <NoteView note={a.note} className="space-y-1 border-t border-line px-5 py-3 text-[13px]" />}
               {a.restore && a.restore.changes.length > 0 && (
                 <details className="border-t border-line px-5 py-3 text-[13px]">
-                  <summary className="cursor-pointer text-muted">The {a.restore.changes.length} planned change{a.restore.changes.length === 1 ? '' : 's'}</summary>
+                  <summary className="cursor-pointer text-muted">The {compactNum(a.restore.changes.length)} planned change{a.restore.changes.length === 1 ? '' : 's'}</summary>
                   <ul className="mt-2 space-y-1">
                     {a.restore.changes.map((c) => (
                       <li key={c.address} className="flex flex-wrap items-center gap-2">

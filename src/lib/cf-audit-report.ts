@@ -1,5 +1,6 @@
 // Cloudflare audit-log report: types, periods and grouping. Shared by server and client — no Node imports.
 import { CATEGORIES, CATEGORY_LABEL, type CategoryKey, type FieldChange } from './cf-classify';
+import { compactNum } from '@/lib/num';
 
 export { CATEGORIES, CATEGORY_LABEL, type CategoryKey, type FieldChange };
 
@@ -259,7 +260,7 @@ export function summaryText(r: CfAuditReport): string {
   const t = totals(r.changes);
   const lines = [
     `Cloudflare changes ${d(r.since)} → ${d(r.before)}`,
-    `${t.total} changes · ${t.accounts} account(s) · ${t.zones} zone(s) · ${t.categories} categor${t.categories === 1 ? 'y' : 'ies'} · ${t.people} actor(s)`,
+    `${compactNum(t.total)} changes · ${compactNum(t.accounts)} account(s) · ${compactNum(t.zones)} zone(s) · ${t.categories} categor${t.categories === 1 ? 'y' : 'ies'} · ${t.people} actor(s)`,
     '',
   ];
   if (r.zoneEvents.length) {
@@ -268,9 +269,9 @@ export function summaryText(r: CfAuditReport): string {
     lines.push('');
   } else lines.push('Zone onboarding: no zones added or removed.', '');
   for (const g of byCategory(r.changes)) {
-    lines.push(`${g.label}: ${g.tally.total} (${g.tally.create} created, ${g.tally.update} updated, ${g.tally.delete} deleted${g.tally.failed ? `, ${g.tally.failed} failed` : ''})`);
+    lines.push(`${g.label}: ${compactNum(g.tally.total)} (${g.tally.create} created, ${g.tally.update} updated, ${g.tally.delete} deleted${g.tally.failed ? `, ${g.tally.failed} failed` : ''})`);
     for (const s of g.scopes) {
-      lines.push(`  ${s.zone} [${s.account}]: ${s.tally.total}`);
+      lines.push(`  ${s.zone} [${s.account}]: ${compactNum(s.tally.total)}`);
       for (const c of s.changes.slice(0, 5)) {
         const sum = changeSummary(c, 2);
         lines.push(`    ${d(c.time)} ${changeTitle(c)}${sum ? ` — ${sum}` : ''} (${actorLabel(c)})`);
@@ -280,7 +281,7 @@ export function summaryText(r: CfAuditReport): string {
   }
   for (const a of r.accounts) {
     if (a.error) lines.push('', `Not read — ${a.credentialName}: ${a.error}`);
-    else if (a.truncated) lines.push('', `${a.accountName}: only the newest ${a.count} changes were read.`);
+    else if (a.truncated) lines.push('', `${a.accountName}: only the newest ${compactNum(a.count)} changes were read.`);
     if (a.zonesError) lines.push('', `${a.accountName || a.credentialName}: zone list not read — ${a.zonesError}`);
   }
   return lines.join('\n');

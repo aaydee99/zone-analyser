@@ -69,7 +69,7 @@ async function zoneAnswer(me: Me, arg: string): Promise<string> {
   if (cov?.length) {
     const failing = cov.filter((x) => Number(x.failing) > 0).map((x) => CHECK[x.check_id]?.label ?? x.check_id);
     const never = cov.filter((x) => Number(x.never) > 0).length;
-    lines.push(`Monitoring: ${cov.length} check${cov.length === 1 ? '' : 's'} on this zone${failing.length ? ` — failing: ${failing.map(esc).join(', ')}` : ', all read'}${never ? ` (${never} not read yet)` : ''}`);
+    lines.push(`Monitoring: ${whole(cov.length)} check${cov.length === 1 ? '' : 's'} on this zone${failing.length ? ` — failing: ${failing.map(esc).join(', ')}` : ', all read'}${never ? ` (${never} not read yet)` : ''}`);
   } else lines.push('Monitoring: this zone has not been checked yet');
   return lines.join('\n');
 }
@@ -84,7 +84,7 @@ async function findingsAnswer(me: Me, arg: string): Promise<string> {
   if (!rows?.length) return `*${esc(zone.name)}*: no open findings.`;
   const c = await counts(me, zone.id);
   const total = Object.values(c).reduce((a, b) => a + b, 0);
-  return [`*${esc(zone.name)}* — ${whole(total)} open finding${total === 1 ? '' : 's'}${total > rows.length ? ` (the ${rows.length} worst)` : ''}`,
+  return [`*${esc(zone.name)}* — ${whole(total)} open finding${total === 1 ? '' : 's'}${total > rows.length ? ` (the ${whole(rows.length)} worst)` : ''}`,
     ...rows.map((f) => `• [${f.severity.toUpperCase()}] ${esc(CHECK[f.check_id]?.label ?? f.check_id)}: ${esc(f.title)} (since ${f.first_seen.slice(0, 10)})`)].join('\n');
 }
 
@@ -95,7 +95,7 @@ async function searchAnswer(arg: string): Promise<string> {
   if (mod?.searchZones) {
     const r = await mod.searchZones(arg, { limit: 10 });
     if (!r.hits.length) return `Nothing in the stored configuration matches “${esc(arg)}”.${r.note ? ` (${esc(r.note)})` : ''}`;
-    return [`${whole(r.total)}${r.capped ? '+' : ''} match${r.total === 1 ? '' : 'es'} for “${esc(arg)}”${r.total > r.hits.length ? ` (first ${r.hits.length})` : ''}:`,
+    return [`${whole(r.total)}${r.capped ? '+' : ''} match${r.total === 1 ? '' : 'es'} for “${esc(arg)}”${r.total > r.hits.length ? ` (first ${whole(r.hits.length)})` : ''}:`,
       ...r.hits.map((h) => `• *${esc(h.zoneName)}* — ${esc(h.where)}: ${esc(h.snippet.before)}*${esc(h.snippet.match)}*${esc(h.snippet.after)}`)].join('\n');
   }
   // Without the search index: zone names only.

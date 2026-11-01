@@ -2,6 +2,7 @@
 // Stored in supabase/migrations/0020_reports.sql; made by the worker (src/lib/report-scheduler.ts).
 
 import type { Severity } from './monitor-types';
+import { compactNum } from '@/lib/num';
 
 export type ReportScope = 'all' | 'accounts' | 'tag';
 export type Cadence = 'daily' | 'weekly';
@@ -275,8 +276,8 @@ export function headlineOf(c: ReportContent | null): string | null {
   if (!c) return null;
   const parts: string[] = [];
   const s = c.sections;
-  if (s.changes?.status === 'ok') parts.push(`${s.changes.total} change${s.changes.total === 1 ? '' : 's'}`);
+  if (s.changes?.status === 'ok') parts.push(`${compactNum(s.changes.total)} change${s.changes.total === 1 ? '' : 's'}`);
   if (s.findings?.status === 'ok' || s.findings?.status === 'nothing') parts.push(`${sumCounts(s.findings.open)} open findings (${sumCounts(s.findings.fresh)} new)`);
-  if (s.certificates && s.certificates.status !== 'unavailable') parts.push(`${s.certificates.total} expiring certificate${s.certificates.total === 1 ? '' : 's'}`);
+  if (s.certificates && s.certificates.status !== 'unavailable') parts.push(`${compactNum(s.certificates.total)} expiring certificate${s.certificates.total === 1 ? '' : 's'}`);
   return parts.join(' · ') || null;
 }

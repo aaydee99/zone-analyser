@@ -4,6 +4,7 @@ import { listAlerts } from '../monitor-store';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { Problems, daysSince, readStat, type CheckDef } from './common';
+import { compactNum } from '@/lib/num';
 
 // Cloudflare's own notifications, per account: the policies that are on, the alert types the account
 // could turn on but has not (from Cloudflare's catalog, so the list fits each account's plan), webhook
@@ -54,7 +55,7 @@ export const alerts: CheckDef = {
         }
       }
       if (missing.length) {
-        findings.push({ key: `${a.accountId}:missing`, severity: 'low', title: `${missing.length} recommended Cloudflare alert${missing.length === 1 ? ' is' : 's are'} off in ${scope.accountName}`, detail: missing.slice(0, 12).join(', ') + (missing.length > 12 ? '…' : ''), ...scope });
+        findings.push({ key: `${a.accountId}:missing`, severity: 'low', title: `${compactNum(missing.length)} recommended Cloudflare alert${missing.length === 1 ? ' is' : 's are'} off in ${scope.accountName}`, detail: missing.slice(0, 12).join(', ') + (missing.length > 12 ? '…' : ''), ...scope });
       }
       let failing = 0;
       for (const h of hooks) {

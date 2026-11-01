@@ -25,8 +25,8 @@ export function sectionLines(c: ReportContent, key: SectionKey): string[] {
       const no = why(x); if (no) return no;
       if (!x.total && !x.zoneEvents.added && !x.zoneEvents.removed) return ['Nothing changed.', ...x.problems.map((p) => `Not read: ${p.account} (${p.error})`)];
       return [
-        `${whole(x.total)} change${x.total === 1 ? '' : 's'}: ${x.byCategory.map((g) => `${g.label} ${g.total}`).join(', ') || '—'}`,
-        ...(x.zoneEvents.added || x.zoneEvents.activated || x.zoneEvents.removed ? [`Zones: ${x.zoneEvents.added} added, ${x.zoneEvents.activated} activated, ${x.zoneEvents.removed} removed`] : []),
+        `${whole(x.total)} change${x.total === 1 ? '' : 's'}: ${x.byCategory.map((g) => `${g.label} ${whole(g.total)}`).join(', ') || '—'}`,
+        ...(x.zoneEvents.added || x.zoneEvents.activated || x.zoneEvents.removed ? [`Zones: ${whole(x.zoneEvents.added)} added, ${x.zoneEvents.activated} activated, ${whole(x.zoneEvents.removed)} removed`] : []),
         ...x.problems.slice(0, 5).map((p) => `Not read: ${p.account} (${p.error})`),
       ];
     }
@@ -51,7 +51,7 @@ export function sectionLines(c: ReportContent, key: SectionKey): string[] {
         `Bandwidth ${bytesLabel(t.bytes)} (${changeLabel(t.bytes, p?.bytes) || 'no earlier period'})`,
       ];
       if (x.security) lines.push(`Security events ${whole(x.security.events)} (${changeLabel(x.security.events, x.securityPrevious?.events) || 'no earlier period'})${x.security.byAction.length ? `: ${x.security.byAction.slice(0, 4).map((a) => `${a.action} ${whole(a.count)}`).join(', ')}` : ''}`);
-      lines.push(`${x.read} of ${x.of} ${x.unit} read${x.problems.length ? ` · ${x.problems.length} not read` : ''}`);
+      lines.push(`${whole(x.read)} of ${x.of} ${x.unit} read${x.problems.length ? ` · ${whole(x.problems.length)} not read` : ''}`);
       return lines;
     }
     case 'certificates': {
@@ -59,7 +59,7 @@ export function sectionLines(c: ReportContent, key: SectionKey): string[] {
       if (!x) return [];
       const no = why(x); if (no) return no;
       if (!x.total) return ['Nothing expires within 30 days.'];
-      return [`${x.total} certificate${x.total === 1 ? '' : 's'} expired or expiring within 30 days`, ...x.rows.slice(0, 5).map((r) => `${r.days !== null && r.days < 0 ? 'Expired' : `${r.days} days`}: ${r.name} (${r.where})`)];
+      return [`${whole(x.total)} certificate${x.total === 1 ? '' : 's'} expired or expiring within 30 days`, ...x.rows.slice(0, 5).map((r) => `${r.days !== null && r.days < 0 ? 'Expired' : `${r.days} days`}: ${r.name} (${r.where})`)];
     }
     case 'coverage': {
       const x = s.coverage;
@@ -67,7 +67,7 @@ export function sectionLines(c: ReportContent, key: SectionKey): string[] {
       const no = why(x); if (no) return no;
       const bad = x.checks.filter((k) => k.failing || k.never);
       if (!bad.length) return ['Nothing: every unit was read.'];
-      return bad.map((k) => `${k.label}: ${k.failing} failing, ${k.never} never read (of ${whole(k.targets)})`);
+      return bad.map((k) => `${k.label}: ${whole(k.failing)} failing, ${k.never} never read (of ${whole(k.targets)})`);
     }
   }
 }

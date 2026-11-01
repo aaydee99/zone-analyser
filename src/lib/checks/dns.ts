@@ -6,6 +6,7 @@ import { compareDelegation, compareDnssec, inZone, nsSet, originLeaks, takeoverS
 import type { NewFinding } from '../monitor-store';
 import type { Row, Severity } from '../monitor-types';
 import { DAY, Problems, SEV_SORT, daysSince, notAvailable, readStat, type CheckDef } from './common';
+import { compactNum } from '@/lib/num';
 
 // DNS hygiene, once a day per zone: CNAMEs pointing at names that no longer exist (on services where
 // someone else could claim them), whether public DNS delegates the zone to the nameservers Cloudflare
@@ -158,7 +159,7 @@ export const dns: CheckDef = {
         const ex = leaks.filter((l) => l.why === why).slice(0, 3).map((l) => `${l.record.name} → ${l.record.content}`).join('; ');
         findings.push({
           key: `dns:${z.id}:leak:${why}`, severity: why === 'same-target' ? 'low' : 'medium', ...scope,
-          title: why === 'same-name' ? `${n} unproxied record${n === 1 ? '' : 's'} on proxied names in ${z.zoneName}` : `${n} unproxied record${n === 1 ? '' : 's'} expose${n === 1 ? 's' : ''} the origin of proxied names in ${z.zoneName}`,
+          title: why === 'same-name' ? `${compactNum(n)} unproxied record${n === 1 ? '' : 's'} on proxied names in ${z.zoneName}` : `${compactNum(n)} unproxied record${n === 1 ? '' : 's'} expose${n === 1 ? 's' : ''} the origin of proxied names in ${z.zoneName}`,
           detail: `Anyone can look these up and reach the origin without going through Cloudflare (WAF, DDoS protection). Proxy them, or move the origin to an address not in DNS. ${ex}${n > 3 ? ' …' : ''}`,
         });
       }

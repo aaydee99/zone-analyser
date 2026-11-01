@@ -4,6 +4,7 @@ import { getMonitorConfig } from './monitor-config';
 import { claimForSending, logNotification, releaseClaim, saveDelivered, unsentFindings } from './monitor-store';
 import { CHECK, SEVERITY_RANK, type Finding } from './monitor-types';
 import { safePost } from './safe-url';
+import { compactNum } from '@/lib/num';
 
 // Notifications about new findings, to Slack and/or a webhook. The worker sends what is new in one
 // batch every few minutes while checks run, and once more when the queue is empty (sendUnsent).
@@ -93,7 +94,7 @@ export async function notifyFindings(candidates: Finding[]): Promise<{ sent: num
     // Only what this channel has not had yet (an earlier round may have reached the other one).
     const due = findings.filter((f) => !won.get(f.id)!.includes(channel));
     if (!due.length) continue;
-    const subject = `${BRAND.name}: ${due.length} new finding${due.length === 1 ? '' : 's'}`;
+    const subject = `${BRAND.name}: ${compactNum(due.length)} new finding${due.length === 1 ? '' : 's'}`;
     const r = await post(url, channel === 'slack' ? slackBody(subject, due, consoleUrl()) : webhookBody(subject, due, consoleUrl()), channel);
     await logNotification({ channel, subject, findings: due.length, ...r });
     if (r.ok) for (const f of due) won.get(f.id)!.push(channel);

@@ -4,6 +4,7 @@
 
 import { actionItems } from './actions';
 import { GROUP_LABEL, COVERAGE_LABEL, KIND_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditReport } from './types';
+import { compactNum } from '@/lib/num';
 
 /** findings.json: the records, worst first, as stored. */
 export const findingsJson = (r: AuditReport) => `${JSON.stringify(r.findings, null, 2)}\n`;
@@ -22,13 +23,13 @@ export const isCsvPart = (v: string): v is CsvPart => v === 'findings' || v === 
 export function auditCsv(r: AuditReport, part: CsvPart): string {
   if (part === 'managed') return csv(['ruleset', 'id', 'state', 'reason', 'scope', 'ruleset_action', 'overrides', 'paranoia', 'threshold', 'events', 'by_action', 'top_rules'],
     (r.managed?.rulesets ?? []).map((x) => [x.name, x.id, x.state, x.reason ?? '', x.scope ?? '', x.action ?? '', x.overrides.map((o) => `${o.kind} ${o.id}: ${o.change}`).join('; '), x.paranoia ?? '', x.threshold ?? '',
-      x.events?.total ?? '', x.events?.byAction ?? '', (x.events?.topRules ?? []).map((t) => `${t.ruleId} ${t.total}${t.logOnly ? ' (log only)' : ''}`).join('; ')]));
+      x.events?.total ?? '', x.events?.byAction ?? '', (x.events?.topRules ?? []).map((t) => `${t.ruleId} ${compactNum(t.total)}${t.logOnly ? ' (log only)' : ''}`).join('; ')]));
   if (part === 'coverage') return csv(['rule', 'title', 'group', 'state', 'findings', 'reason', 'permission', 'attack_class', 'skill_ref'],
     r.coverage.map((c) => [c.ruleId, c.title, GROUP_LABEL[c.group], c.state, c.findings, c.reason ?? '', c.permission ?? '', c.attackClass, c.skillRef]));
   if (part === 'effectiveness') return csv(['kind', 'rule', 'ruleset', 'source', 'name', 'configured', 'config_action', 'events', 'by_action', 'challenged', 'solved', 'solve_rate', 'previous', 'trend', 'top_paths', 'top_countries', 'top_networks', 'passed', 'passed_bots', 'bot_basis', 'passed_malicious', 'malicious_basis', 'verdict', 'recommendation'],
     (r.effectiveness?.rules ?? []).map((x) => [KIND_LABEL[x.kind], x.ruleId, x.rulesetId, x.source, x.name, x.configured, x.configAction ?? '', x.events, x.byAction, x.challenged, x.solved,
       x.solveRate === null ? '' : x.solveRate.toFixed(3), x.previous ?? '', x.trend === null ? '' : x.trend.toFixed(3),
-      x.topPaths.map((p) => `${p.path} (${p.count})`).join('; '), x.topCountries.map((p) => `${p.country} (${p.count})`).join('; '), x.topAsns.map((p) => `AS${p.asn} ${p.name} (${p.count})`).join('; '),
+      x.topPaths.map((p) => `${p.path} (${compactNum(p.count)})`).join('; '), x.topCountries.map((p) => `${p.country} (${compactNum(p.count)})`).join('; '), x.topAsns.map((p) => `AS${p.asn} ${p.name} (${compactNum(p.count)})`).join('; '),
       x.passthrough?.passed ?? '', x.passthrough?.bots ?? '', x.passthrough?.botBasis ?? '', x.passthrough?.malicious ?? '', x.passthrough?.maliciousBasis ?? '', x.passthrough?.verdict ?? '', x.passthrough?.recommendation.title ?? '']));
   return csv(['severity', 'verdict', 'rule', 'group', 'title', 'attack_class', 'skill_ref', 'description', 'root_cause', 'evidence', 'fix', 'validation', 'fingerprint'],
     r.findings.map((f) => [f.severity, f.verdict, f.ruleId, GROUP_LABEL[f.group], f.title, f.attackClass, f.skillRef, f.description, f.rootCause,
@@ -47,7 +48,7 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   L.push('Read-only: the audit read the zone\'s configuration and traffic analytics and changed nothing. Each rule is a fixed condition; `Confirmed` means the configuration or the numbers prove the outcome, `Needs validation` means the outcome depends on something they cannot show — the finding says what to check.', '');
   L.push('## Summary', '');
   L.push('| Severity | Findings |', '| --- | --- |', ...SEVERITIES.map((v) => `| ${SEVERITY_LABEL[v]} | ${s.bySeverity[v]} |`), '');
-  L.push(`${s.byVerdict.confirmed} confirmed, ${s.byVerdict.needs_validation} need validation. Coverage: ${s.rules} rules — ${s.coverage.passed} passed, ${s.coverage.finding} with findings, ${s.coverage.not_applicable} not applicable, ${s.coverage.not_read} not read.`, '');
+  L.push(`${s.byVerdict.confirmed} confirmed, ${s.byVerdict.needs_validation} need validation. Coverage: ${compactNum(s.rules)} rules — ${s.coverage.passed} passed, ${s.coverage.finding} with findings, ${s.coverage.not_applicable} not applicable, ${s.coverage.not_read} not read.`, '');
   if (s.coverage.not_read) L.push(`**${s.coverage.not_read} rules could not be checked** (see the coverage ledger): a clean result does not cover them.`, '');
 
   L.push('## Findings', '');
@@ -81,9 +82,9 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
     L.push('| Kind | Rule | Events | By action | Solve rate | Trend | Let through | Recommendation |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const x of e.rules) {
       const p = x.passthrough;
-      L.push(`| ${KIND_LABEL[x.kind]} | ${md(x.name)} | ${x.events} | ${md(Object.entries(x.byAction).map(([a, n]) => `${a} ${n}`).join(', '))} | ${x.solveRate === null ? '' : `${Math.round(x.solveRate * 100)}%`} | ${x.trend === null ? '' : `${x.trend >= 0 ? '+' : ''}${Math.round(x.trend * 100)}%`} | ${p ? `${p.passed}: ${p.bots} automated, ${p.malicious} malicious` : ''} | ${p ? md(p.recommendation.title) : ''} |`);
+      L.push(`| ${KIND_LABEL[x.kind]} | ${md(x.name)} | ${compactNum(x.events)} | ${md(Object.entries(x.byAction).map(([a, n]) => `${a} ${compactNum(n)}`).join(', '))} | ${x.solveRate === null ? '' : `${Math.round(x.solveRate * 100)}%`} | ${x.trend === null ? '' : `${x.trend >= 0 ? '+' : ''}${Math.round(x.trend * 100)}%`} | ${p ? `${compactNum(p.passed)}: ${compactNum(p.bots)} automated, ${compactNum(p.malicious)} malicious` : ''} | ${p ? md(p.recommendation.title) : ''} |`);
     }
-    if (e.notAnalysed.length) L.push('', `Not analysed: ${e.notAnalysed.map((x) => `${x.ruleName} (${x.passed})`).join(', ')} — ${e.notAnalysed[0].reason}.`);
+    if (e.notAnalysed.length) L.push('', `Not analysed: ${e.notAnalysed.map((x) => `${x.ruleName} (${compactNum(x.passed)})`).join(', ')} — ${e.notAnalysed[0].reason}.`);
     L.push('');
   }
 
@@ -92,10 +93,10 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   if (!m) L.push('Not in this report (made before the managed ruleset overview existed).', '');
   else {
     L.push(`Leaked credentials detection: ${m.leakedCredentials}.`, '', '| Ruleset | State | Scope | Overrides | OWASP tuning | Events |', '| --- | --- | --- | --- | --- | --- |');
-    for (const x of m.rulesets) L.push(`| ${x.name} | ${x.state}${x.reason ? ` (${md(x.reason)})` : ''} | ${md(x.scope ?? '')} | ${md([x.action ? `ruleset action ${x.action}` : '', ...x.overrides.map((o) => `${o.kind} ${o.id}: ${o.change}`)].filter(Boolean).join('; '))} | ${x.threshold !== undefined ? `PL${x.paranoia ?? '1 (default)'}, threshold ${x.threshold}` : ''} | ${x.events ? `${x.events.total}${x.events.total ? ` (${md(Object.entries(x.events.byAction).map(([a, n]) => `${a} ${n}`).join(', '))})` : ''}` : 'not read'} |`);
+    for (const x of m.rulesets) L.push(`| ${x.name} | ${x.state}${x.reason ? ` (${md(x.reason)})` : ''} | ${md(x.scope ?? '')} | ${md([x.action ? `ruleset action ${x.action}` : '', ...x.overrides.map((o) => `${o.kind} ${o.id}: ${o.change}`)].filter(Boolean).join('; '))} | ${x.threshold !== undefined ? `PL${x.paranoia ?? '1 (default)'}, threshold ${x.threshold}` : ''} | ${x.events ? `${compactNum(x.events.total)}${x.events.total ? ` (${md(Object.entries(x.events.byAction).map(([a, n]) => `${a} ${compactNum(n)}`).join(', '))})` : ''}` : 'not read'} |`);
     L.push('', 'Exceptions (skip rules), in order:', '');
     if (!m.exceptions.length) L.push('- None.');
-    for (const x of m.exceptions) L.push(`- **${x.name}**${x.enabled ? '' : ' (disabled)'} — skips ${x.skips}; ${x.position === 'after' ? 'placed after the deploy rules (no effect); ' : ''}expression ${tick(x.expression || '(none)')}; ${x.skipped === null ? 'traffic not read' : `${x.skipped} requests skipped${x.verdict ? ` (${x.verdict})` : ''}`}.`);
+    for (const x of m.exceptions) L.push(`- **${x.name}**${x.enabled ? '' : ' (disabled)'} — skips ${x.skips}; ${x.position === 'after' ? 'placed after the deploy rules (no effect); ' : ''}expression ${tick(x.expression || '(none)')}; ${x.skipped === null ? 'traffic not read' : `${compactNum(x.skipped)} requests skipped${x.verdict ? ` (${x.verdict})` : ''}`}.`);
     L.push('');
   }
 

@@ -21,6 +21,7 @@ import {
   type Draft, type RuleDef,
 } from './rules';
 import type { AccessRule, BotConfig, CertPack, LegacyRule, PageRule, RequestData, RulesetRule } from './types';
+import { compactNum } from '@/lib/num';
 
 export const FREE_MANAGED = '77454fe2d30c4220b5701f6fdfb893ba';
 export const EXPOSED_CREDENTIALS = 'c2e184081120413c86c3ab7e14069605';
@@ -435,9 +436,9 @@ const API: RuleDef[] = [
       const action = String(c.v<{ validation_default_mitigation_action?: string }>('schema_validation')?.validation_default_mitigation_action ?? 'none');
       if (ops > 0 && action !== 'none') return [];
       return [{ verdict: 'needs_validation', severity: 'info', title: `API paths are ${Math.round((api / all) * 100)}% of requests, without schema validation${ops ? '' : ' or saved endpoints'}`,
-        description: 'Requests that do not match the API\'s schema (unexpected fields, types, methods) reach the origin unchecked.', rootCause: `${ops} saved endpoints; schema validation default action ${action}.`,
+        description: 'Requests that do not match the API\'s schema (unexpected fields, types, methods) reach the origin unchecked.', rootCause: `${compactNum(ops)} saved endpoints; schema validation default action ${action}.`,
         intendedBehavior: 'Endpoints saved in API Shield, a schema uploaded, and validation set to log, then block.',
-        evidence: [ev('GraphQL httpRequestsAdaptiveGroups', 'requests to API-like paths', `${api} of ${all}`), ev('GET /zones/{id}/api_gateway/operations', 'saved endpoints', ops), ev('GET /zones/{id}/schema_validation/settings', 'validation_default_mitigation_action', action)],
+        evidence: [ev('GraphQL httpRequestsAdaptiveGroups', 'requests to API-like paths', `${compactNum(api)} of ${compactNum(all)}`), ev('GET /zones/{id}/api_gateway/operations', 'saved endpoints', ops), ev('GET /zones/{id}/schema_validation/settings', 'validation_default_mitigation_action', action)],
         fix: ['Security › API Shield: save the discovered endpoints, upload the OpenAPI schema, set schema validation to Log, then Block.'],
         validation: 'API Shield needs an add-on on most plans; check the subscription, and whether the API already validates input itself.' }];
     },

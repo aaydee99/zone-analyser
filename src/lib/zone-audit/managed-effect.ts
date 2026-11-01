@@ -15,6 +15,7 @@ import { norm } from './expr';
 import { CF_MANAGED, CLOUD, DDOS_L7, ATTACK, PAID, active, ap, ev, executes, obj, phasePath, ruleName, rulesOf, type Draft, type RuleDef } from './rules';
 import { EXPOSED_CREDENTIALS, FREE_MANAGED, OWASP_DEFAULT_THRESHOLD, SENSITIVE_DATA } from './rules-extra';
 import { windowLabel, type EventData, type ManagedException, type ManagedOverview, type ManagedRulesetState, type RulesetRule, type Snapshot, type ZoneInfo } from './types';
+import { compactNum } from '@/lib/num';
 
 /** The managed rulesets the overview lists: id, name, phase and the plans that offer it (null: every plan). */
 export const MANAGED_SETS: { id: string; name: string; phase: 'http_request_firewall_managed' | 'http_response_firewall_managed' | 'ddos_l7'; plans: string[] | null }[] = [
@@ -131,7 +132,7 @@ export const MANAGED_TRAFFIC_RULES: RuleDef[] = [
         const logOnly = m.events.topRules.filter((r) => r.logOnly && r.total >= LOG_ONLY_MIN && r.ruleId !== OWASP_ANOMALY_RULE);
         if (logOnly.length) out.push({ resource: `${m.id}:log`, verdict: 'confirmed', severity: 'low', title: `${logOnly.length} ${m.name} rule${logOnly.length === 1 ? '' : 's'} matched only in log (${n.format(logOnly.reduce((a, r) => a + r.total, 0))} requests)`,
           description: `These rules are overridden to log, so what they matched reached the origin: ${logOnly.map((r) => `${r.ruleId}${r.description ? ` (${r.description})` : ''}: ${n.format(r.total)}`).join('; ')}. Each one's traffic is broken down in Effectiveness.`,
-          rootCause: 'Rule or category overrides set to Log.', intendedBehavior: 'Managed rules act with their default action unless they cause false positives.', evidence: logOnly.map((r) => ev(evSrc, `rule ${r.ruleId}`, `${r.total} logged`)),
+          rootCause: 'Rule or category overrides set to Log.', intendedBehavior: 'Managed rules act with their default action unless they cause false positives.', evidence: logOnly.map((r) => ev(evSrc, `rule ${r.ruleId}`, `${compactNum(r.total)} logged`)),
           fix: ['Security › WAF › Managed rules › the ruleset › Browse rules: for each rule above, remove the Log override (back to Default) — unless Effectiveness shows its matches are legitimate traffic, then keep it and add a narrow exception instead.'] });
       }
       return out;
@@ -148,7 +149,7 @@ export const MANAGED_TRAFFIC_RULES: RuleDef[] = [
       const out: Draft[] = [];
       const logged = Object.entries(st?.actions ?? {}).filter(([a]) => normAction(a) === 'log').reduce((t, [, v]) => t + v, 0);
       const acted = Object.entries(st?.actions ?? {}).filter(([a]) => !['log', 'skip', 'allow'].includes(normAction(a))).reduce((t, [, v]) => t + v, 0);
-      const ev949 = ev(evSrc, 'rule 949110 (Inbound Anomaly Score Exceeded)', `${acted} blocked or challenged, ${logged} logged`);
+      const ev949 = ev(evSrc, 'rule 949110 (Inbound Anomaly Score Exceeded)', `${compactNum(acted)} blocked or challenged, ${compactNum(logged)} logged`);
       if (logged >= OWASP_LOG_MIN && !acted) out.push({ resource: 'log-only', verdict: 'confirmed', severity: 'medium', title: `OWASP flagged ${n.format(logged)} requests ${win(c.s)} and blocked none`,
         description: 'Requests over the anomaly threshold were only logged, so they reached the origin. Effectiveness breaks down what they were (bots, attack scores, threat paths).', rootCause: 'The OWASP deploy rule (or rule 949110) is overridden to Log.',
         intendedBehavior: 'Requests over the threshold are blocked.', evidence: [ev949, ev('window', 'hours', c.s.hours ?? 0)],

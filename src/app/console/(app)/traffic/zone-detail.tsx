@@ -6,6 +6,7 @@ import { api, fmtDate } from '@/lib/client';
 import { CACHED_STATUSES, MANAGED_RULESETS, MITIGATING_ACTIONS, OWASP_ANOMALY_RULE, OWASP_RULESET, SECURITY_VIEWS, type DatasetDetail, type DetailView, type DetailFilter, type DetailRow, type FirewallEvent, type ZoneDetail, type ZoneDetailPending } from '@/lib/traffic-types';
 import { Alert, Badge, Button, Card, Loading, Modal, SectionHeader, Skeleton, SkeletonChart, SkeletonTable, cx } from '@/components/ui';
 import { bytes, dayLabel, num, pct, whole } from './format';
+import { compactNum } from '@/lib/num';
 
 // One zone's (or account's) security events and requests (see src/lib/traffic-security.ts). Any card, bar, IP,
 // rule or ruleset opens the details window, narrowed to it; days open per hour, hours per minute.
@@ -280,7 +281,7 @@ function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'N
         </ul>
       )}
       {rows.length > 10 && (
-        <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${rows.length}`}</button>
+        <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${compactNum(rows.length)}`}</button>
       )}
     </div>
   );
@@ -319,7 +320,7 @@ function RulesTable({ rows, names, total, onPick }: { rows: DetailRow[]; names: 
           </tbody>
         </table>
       </div>
-      {rows.length > 15 && <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${rows.length} rules`}</button>}
+      {rows.length > 15 && <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${compactNum(rows.length)} rules`}</button>}
     </div>
   );
 }
@@ -347,7 +348,7 @@ function IpTable({ rows, total, withBytes, onPick, what }: { rows: DetailRow[]; 
           </tbody>
         </table>
       </div>
-      {rows.length > 15 && <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${rows.length} IPs`}</button>}
+      {rows.length > 15 && <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${compactNum(rows.length)} IPs`}</button>}
     </div>
   );
 }
@@ -629,9 +630,9 @@ function ZonesRead({ d }: { d: ZoneDetail }) {
   const read = by('read'), quiet = by('no traffic'), out = by('left out'), bad = by('unavailable');
   return (
     <div className="text-[11.5px] text-muted">
-      Added up from {read.length} zone{read.length === 1 ? '' : 's'}{read.length ? `: ${read.map((z) => z.name).join(', ')}` : ''}.
-      {quiet.length > 0 && <> {quiet.length} without traffic this month.</>}
-      {out.length > 0 && <> {out.length} quieter zone{out.length === 1 ? '' : 's'} left out — choose one as the zone to see it.</>}
+      Added up from {compactNum(read.length)} zone{read.length === 1 ? '' : 's'}{read.length ? `: ${read.map((z) => z.name).join(', ')}` : ''}.
+      {quiet.length > 0 && <> {compactNum(quiet.length)} without traffic this month.</>}
+      {out.length > 0 && <> {compactNum(out.length)} quieter zone{out.length === 1 ? '' : 's'} left out — choose one as the zone to see it.</>}
       {bad.length > 0 && <span className="text-warn"> Not readable: {bad.map((z) => `${z.name} (${z.message ?? 'no access'})`).join('; ')}.</span>}
     </div>
   );

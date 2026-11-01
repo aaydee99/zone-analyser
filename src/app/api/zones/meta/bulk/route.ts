@@ -2,6 +2,7 @@ import { readBody, route } from '@/lib/http';
 import { audit } from '@/lib/audit';
 import { bulkTag, resolveZones } from '@/lib/zone-meta';
 import { parseTags, type ZoneMetaFilter } from '@/lib/zone-meta-types';
+import { compactNum } from '@/lib/num';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ export const POST = route(async (req, _ctx, me) => {
   if (b.dryRun) return { zones: zones.length };
   const r = await bulkTag(zones, b.add, b.remove, b.owner, me.email);
   if (r.changed) {
-    await audit(me, 'zone_meta.bulk_updated', `${r.zones} zone${r.zones === 1 ? '' : 's'}`, {
+    await audit(me, 'zone_meta.bulk_updated', `${compactNum(r.zones)} zone${r.zones === 1 ? '' : 's'}`, {
       zones: r.zones, changed: r.changed, add: r.add, remove: r.remove, ...(typeof b.owner === 'string' ? { owner: b.owner } : {}),
       selection: Array.isArray(b.zoneIds) ? 'listed' : { filter, search: b.search ?? '' }, sample: zones.slice(0, 20).map((z) => z.name),
     });

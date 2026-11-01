@@ -11,6 +11,7 @@ import { zoneList as loadZoneList } from '@/lib/zone-list-client';
 import { bytes, dayLabel, num, pct, whole } from './format';
 import { DetailHost, EventsChart, ZoneDetailView, useLoadedDetail, useOpenDetail, type Target } from './zone-detail';
 import { MITIGATING_ACTIONS } from '@/lib/traffic-types';
+import { compactNum } from '@/lib/num';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -408,7 +409,7 @@ export default function TrafficPage() {
             <span className="mb-1.5 block text-xs font-medium text-ink-2">Zone <span className="font-normal text-faint">(optional)</span></span>
             <select id="traffic-zone" className="input w-full" value={form.zone} disabled={!form.account}
               onChange={(e) => setForm({ ...form, zone: e.target.value })}>
-              <option value="">{form.account ? `Whole account (${zonesOfAccount.length} zone${zonesOfAccount.length === 1 ? '' : 's'})` : 'Choose an account first'}</option>
+              <option value="">{form.account ? `Whole account (${compactNum(zonesOfAccount.length)} zone${zonesOfAccount.length === 1 ? '' : 's'})` : 'Choose an account first'}</option>
               {zonesOfAccount.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
             </select>
           </label>
@@ -455,7 +456,7 @@ export default function TrafficPage() {
         <div className="space-y-5">
           {shown.problems.map((p) => <Alert key={p.credential} tone="warn" title={p.credential}>{p.error}</Alert>)}
           {shown.unavailable > 0 && (
-            <Alert tone="warn" title={shown.scope.zoneId ? 'This zone has no analytics here' : `${shown.unavailable} of ${shown.zones.length} zones have no analytics here`}>
+            <Alert tone="warn" title={shown.scope.zoneId ? 'This zone has no analytics here' : `${shown.unavailable} of ${compactNum(shown.zones.length)} zones have no analytics here`}>
               The stored token cannot read analytics. Give it <span className="font-mono">Zone › Analytics › Read</span> in the Cloudflare dashboard.
             </Alert>
           )}
@@ -464,7 +465,7 @@ export default function TrafficPage() {
           <Card>
             <SectionHeader
               title={shown.scope.zoneName ?? shown.scope.accountName}
-              description={`${shown.scope.zoneId ? `Zone in ${shown.scope.accountName}` : `Account · ${shown.zones.length} zone${shown.zones.length === 1 ? '' : 's'}`} · ${dayLabel(shown.since)} – ${dayLabel(lastDay)} ${shown.since.slice(0, 4)}${shown.partial ? ' (so far, compared with the same days of last month)' : ''}`}
+              description={`${shown.scope.zoneId ? `Zone in ${shown.scope.accountName}` : `Account · ${compactNum(shown.zones.length)} zone${shown.zones.length === 1 ? '' : 's'}`} · ${dayLabel(shown.since)} – ${dayLabel(lastDay)} ${shown.since.slice(0, 4)}${shown.partial ? ' (so far, compared with the same days of last month)' : ''}`}
               aside={(
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" onClick={() => load(applied, true)} disabled={busy} icon={<RefreshCw className="size-3.5" />}>Refresh</Button>

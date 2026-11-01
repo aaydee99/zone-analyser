@@ -3,6 +3,7 @@ import { cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { Problems, daysSince, readStat, type CheckDef } from './common';
+import { compactNum } from '@/lib/num';
 
 // What runs in your visitors' browsers and which APIs you expose: Page Shield's script and connection
 // inventory (all plans; scores need Cloudflare's client-side security add-on) and API Shield's saved
@@ -56,7 +57,7 @@ export const appsec: CheckDef = {
       for (const o of saved) apis.push({ method: o.method ?? '', endpoint: `${o.host ?? ''}${o.endpoint ?? ''}`, zone: z.zoneName, state: 'saved', updated: o.last_updated ?? null, _tone: 'ok', _sort: 1 });
       const review = found.filter((o) => (o.state ?? 'review') === 'review');
       for (const o of found) apis.push({ method: o.method ?? '', endpoint: `${o.host ?? ''}${o.endpoint ?? ''}`, zone: z.zoneName, state: o.state ?? 'review', updated: o.last_updated ?? null, _tone: (o.state ?? 'review') === 'review' ? 'warn' : null, _sort: (o.state ?? 'review') === 'review' ? 0 : 1 });
-      if (review.length) findings.push({ key: `api:${z.id}:review`, severity: 'low', title: `${review.length} discovered API endpoint${review.length === 1 ? '' : 's'} on ${z.zoneName} not reviewed`, detail: 'Save them to protect them with schema validation and rate limits, or ignore them in API Shield.', ...scope });
+      if (review.length) findings.push({ key: `api:${z.id}:review`, severity: 'low', title: `${compactNum(review.length)} discovered API endpoint${review.length === 1 ? '' : 's'} on ${z.zoneName} not reviewed`, detail: 'Save them to protect them with schema validation and rate limits, or ignore them in API Shield.', ...scope });
       const empty = !sc.length && !co.length && !saved.length && !found.length;
       return {
         rows: { scripts, connections, apis }, findings, complete: p.complete, problems: p.list, idle: p.complete && empty,

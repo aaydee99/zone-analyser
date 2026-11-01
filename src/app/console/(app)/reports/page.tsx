@@ -52,7 +52,7 @@ export default function ReportsPage() {
                 <tr key={d.id}>
                   <td className="px-5 py-3 align-top">
                     <Link href={`/console/reports/${d.id}`} className="font-medium text-ink hover:text-signal">{d.name}</Link>
-                    <div className="mt-0.5 text-xs text-muted">{d.scope === 'all' ? 'Everything' : d.scope === 'accounts' ? `${d.accounts.length} account${d.accounts.length === 1 ? '' : 's'}` : `Tags: ${d.tags.join(' + ')}`} · {d.sections.map((s) => SECTION_LABEL[s]).join(', ')}</div>
+                    <div className="mt-0.5 text-xs text-muted">{d.scope === 'all' ? 'Everything' : d.scope === 'accounts' ? `${compactNum(d.accounts.length)} account${d.accounts.length === 1 ? '' : 's'}` : `Tags: ${d.tags.join(' + ')}`} · {d.sections.map((s) => SECTION_LABEL[s]).join(', ')}</div>
                   </td>
                   <td className="px-3 py-3 align-top text-ink-2">{scheduleLabel(d)}<div className="text-xs text-muted">{d.channels.length ? `To ${d.channels.map((c) => (c === 'slack' ? 'Slack' : 'webhook')).join(' and ')}` : 'Kept in the console'}</div></td>
                   <td className="px-3 py-3 align-top"><RunState run={d.latest} />{d.latest && <div className="mt-0.5 text-xs text-faint" title={fmtDate(d.latest.startedAt)}>{relTime(d.latest.startedAt)}</div>}</td>
