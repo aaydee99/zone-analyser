@@ -7,25 +7,26 @@ import { HttpError } from './http';
 import { can } from './rbac';
 import { newApproval, requestNote, type Approval } from './approvals-store';
 import { noteDetails } from './change-note';
-import { zoneToken } from './zone-explorer';
+import { zoneOf } from './zone-explorer';
 import crypto from 'node:crypto';
 import { openRelay, sealRelay } from './vault';
 import { db } from './supabase';
 import { jobsPath, readRawJob, runtimeOk, runtimeRefusal, scopeToken, validateDestination, type LogpushScope } from './logpush';
-import { NEED_CREDENTIAL, authKind, cfRuntime, parseRuntimeCredential, runtimeCredential, withRuntimeCredential } from './cf-runtime-credential';
+import { NEED_CREDENTIAL, NEED_PURGE_CREDENTIAL, authKind, cfRuntime, credentialRefused, parseRuntimeCredential, runtimeCredential, withRuntimeCredential } from './cf-runtime-credential';
 import { ChangeError, checkChanges, diffLines, fieldLines, summarizeJob, type LogpushChanges, type RawJob } from './logpush-types';
 
 // Changes the console makes in Cloudflare besides a restore: purging the cache, rolling a Worker
 // or a Pages project back to an earlier deployment, and creating, changing or deleting a Logpush
-// job. An admin asks; a super admin approves (or acts directly). A purge or rollback runs with the
-// stored token for that zone or account, so the token needs the matching write permission;
-// Cloudflare's refusal is shown as it is. A Logpush change runs only with an API token or Global
-// API Key the super admin types in when it runs (cf-runtime-credential.ts), never a stored token.
+// job. An admin asks; a super admin approves (or acts directly). A rollback runs with the stored
+// token for that account, so the token needs the matching write permission; Cloudflare's refusal is
+// shown as it is. A cache purge and a Logpush change run only with an API token or Global API Key
+// the super admin types in when it runs (cf-runtime-credential.ts), never a stored token.
 
 type Sealed = Awaited<ReturnType<typeof sealRelay>>;
 
 export type CfAction =
-  | { type: 'purge'; zoneId: string; zoneName: string; mode: 'everything' | 'files' | 'tags' | 'hosts' | 'prefixes'; values: string[] }
+  // accountId/accountName: the account the zone was picked from (absent on requests made before it was asked).
+  | { type: 'purge'; accountId?: string; accountName?: string; zoneId: string; zoneName: string; mode: 'everything' | 'files' | 'tags' | 'hosts' | 'prefixes'; values: string[] }
   | { type: 'worker-rollback'; accountId: string; accountName: string; script: string; versionId: string; versionLabel: string }
   | { type: 'pages-rollback'; accountId: string; accountName: string; project: string; deploymentId: string; deploymentLabel: string }
   | LogpushAction;
@@ -58,10 +59,12 @@ const str = (v: unknown, label: string, max = 200) => {
 export async function validateAction(raw: unknown): Promise<CfAction> {
   const a = (raw ?? {}) as Record<string, unknown>;
   if (a.type === 'purge') {
+    const accountId = str(a.accountId, 'Account');
     const zoneId = str(a.zoneId, 'Zone');
     const mode = PURGE_MODES.find((m) => m === a.mode);
     if (!mode) throw new HttpError(400, 'Choose what to purge');
-    const { zone } = await zoneToken(zoneId);
+    const { zone } = await zoneOf(zoneId);
+    if (zone.accountId !== accountId) throw new HttpError(400, `${zone.name} is not in the chosen account: choose the account again`);
     let values: string[] = [];
     if (mode !== 'everything') {
       values = (Array.isArray(a.values) ? a.values : []).map((v) => String(v).trim()).filter(Boolean);
@@ -74,7 +77,7 @@ export async function validateAction(raw: unknown): Promise<CfAction> {
         if (mode === 'prefixes' && /^https?:\/\//i.test(v)) throw new HttpError(400, `Write a prefix without http:// or https://: ${v}`);
       }
     }
-    return { type: 'purge', zoneId, zoneName: zone.name, mode, values };
+    return { type: 'purge', accountId, accountName: zone.accountName, zoneId, zoneName: zone.name, mode, values };
   }
   if (a.type === 'worker-rollback' || a.type === 'pages-rollback') {
     const accountId = str(a.accountId, 'Account');
@@ -206,7 +209,8 @@ async function executeLogpush(a: LogpushAction): Promise<string> {
 export function describe(a: CfAction): { title: string; details: string[] } {
   if (a.type === 'purge') {
     const what = a.mode === 'everything' ? 'everything' : `${a.values.length} ${a.mode === 'files' ? 'URL' : a.mode.replace(/es$|s$/, '')}${a.values.length === 1 ? '' : 's'}`;
-    return { title: `Purge ${what} from the cache of ${a.zoneName}`, details: a.mode === 'everything' ? ['Every cached file of the zone is dropped; the origin serves them again until they are cached anew.'] : [`Purge by ${a.mode}:`, ...a.values.slice(0, 20), ...(a.values.length > 20 ? [`…and ${a.values.length - 20} more`] : [])] };
+    const account = a.accountId ? [`Account ${a.accountName || a.accountId} › zone ${a.zoneName}`] : [];
+    return { title: `Purge ${what} from the cache of ${a.zoneName}`, details: [...account, ...(a.mode === 'everything' ? ['Every cached file of the zone is dropped; the origin serves them again until they are cached anew.'] : [`Purge by ${a.mode}:`, ...a.values.slice(0, 20), ...(a.values.length > 20 ? [`…and ${a.values.length - 20} more`] : [])])] };
   }
   if (a.type === 'logpush') return describeLogpush(a);
   if (a.type === 'worker-rollback') return { title: `Roll Worker “${a.script}” back`, details: [`Account ${a.accountName || a.accountId}`, `Deploy version ${a.versionLabel} to 100% of traffic. Bindings and secrets are not rolled back.`] };
@@ -225,10 +229,15 @@ const refusal = (r: { status: number; body: { errors?: { message?: string }[] } 
 /** Does it. Returns one line on what happened. */
 export async function executeAction(a: CfAction): Promise<string> {
   if (a.type === 'purge') {
-    const { token } = await zoneToken(a.zoneId);
+    // Only with the credential typed in for this purge; a stored token is never used to purge.
+    const cred = runtimeCredential(NEED_PURGE_CREDENTIAL);
+    const { zone } = await zoneOf(a.zoneId);
+    // Checked again when it runs (an approved request may be applied later): the zone must still be in that account.
+    if (a.accountId && zone.accountId !== a.accountId) throw new HttpError(409, `${zone.name} is no longer in account ${a.accountName || a.accountId}: nothing was purged`);
     const body = a.mode === 'everything' ? { purge_everything: true } : { [a.mode]: a.values };
-    const r = await cfCall(token, 'POST', `/zones/${a.zoneId}/purge_cache`, body);
-    if (!ok(r)) throw refusal(r, 'Zone › Cache Purge › Purge');
+    const r = await cfRuntime(cred, 'POST', `/zones/${a.zoneId}/purge_cache`, body);
+    if (credentialRefused(r)) throw new HttpError(409, `Cloudflare refused the credential you entered: it needs “Zone › Cache Purge › Purge” on ${zone.name}, or use a Global API Key of a member who may purge it (${cfReason(r)})`);
+    if (!ok(r)) throw new HttpError(502, `Cloudflare: ${cfReason(r)}`);
     return describe(a).title.replace(/^Purge/, 'Purged');
   }
   if (a.type === 'logpush') return executeLogpush(a);
@@ -253,9 +262,10 @@ export async function requestAction(me: Me, raw: unknown): Promise<{ done?: stri
   // Every action kind: the body's `reason` and `ticket` go with the request (and into the audit log).
   const note = await requestNote(raw, !direct);
   if (direct) {
-    // A Logpush change runs with the credential typed in with it (`cloudflare` in the body), never a stored token.
-    const cred = a.type === 'logpush' ? parseRuntimeCredential((raw as { cloudflare?: unknown } | null)?.cloudflare) : null;
-    if (a.type === 'logpush' && !cred) throw new HttpError(400, NEED_CREDENTIAL);
+    // A Logpush change or a purge runs with the credential typed in with it (`cloudflare` in the body), never a stored token.
+    const typed = a.type === 'logpush' || a.type === 'purge';
+    const cred = typed ? parseRuntimeCredential((raw as { cloudflare?: unknown } | null)?.cloudflare) : null;
+    if (typed && !cred) throw new HttpError(400, a.type === 'purge' ? NEED_PURGE_CREDENTIAL : NEED_CREDENTIAL);
     const auth = cred ? { auth: authKind(cred) } : {};
     try {
       const done = await withRuntimeCredential(cred, () => executeAction(a));

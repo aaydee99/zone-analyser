@@ -4,7 +4,7 @@ import { requestAction } from '@/lib/cf-actions';
 export const dynamic = 'force-dynamic';
 
 /**
- * A change in Cloudflare: { type: 'purge', zoneId, mode, values } or a rollback
+ * A change in Cloudflare: { type: 'purge', accountId, zoneId, mode, values } or a rollback
  * ({ type: 'worker-rollback', accountId, script, versionId } / { type: 'pages-rollback', accountId, project, deploymentId }).
  * A super admin's runs at once; an admin's waits for a super admin on the Approvals page.
  */

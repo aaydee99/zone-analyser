@@ -1205,7 +1205,7 @@ that is a hosting decision.
 
 ## Cache purge and rollbacks
 
-- **Cloudflare › Cache purge:** purge by URL, prefix, host name or cache tag (up to 100 at a time), or everything (type the zone name to confirm). The stored token needs **Cache Purge**.
+- **Cloudflare › Cache purge:** choose the **account** first, then a zone of that account (the same zone name can exist in two accounts; a name filter appears above 50 zones). Then purge by URL, prefix, host name or cache tag (up to 100 at a time), or everything (type the zone name to confirm). The server refuses a zone that is not in the chosen account, and checks it again when an approved purge runs. **Stored tokens never purge:** the purge runs only with a credential typed in at that moment — an **API token with Zone › Cache Purge › Purge**, or a **Global API Key** with its email — held in memory for that one request, never stored, logged or audited. A super admin enters it on the purge page; for an admin's request, the approving super admin enters it on **Approvals** (without one, or if Cloudflare refuses it, the request stays waiting).
 - **Monitoring › Developer platform › Roll back:** deploy an earlier version of a Worker to all traffic, or make an earlier production deployment of a Pages project live again. The token needs **Workers Scripts Edit** or **Cloudflare Pages Edit**. Bindings and secrets of a Worker are not rolled back.
 - Admins ask; a super admin approves on **Approvals** (a "Cloudflare change") and it runs at once. A super admin's own purge or rollback runs immediately. Every one is in the audit log.
 

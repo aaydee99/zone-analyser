@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { HttpError } from './http';
 
 // Cloudflare credentials typed in at run time, for the changes that must not use a stored token
-// (Logpush job management). Either an API token or a Global API Key with its email. Held only in
+// (Logpush job management, cache purges). Either an API token or a Global API Key with its email. Held only in
 // memory for the one request that carries it: never stored, returned, logged or audited, and the
 // reference is dropped once the change has run. The calls go straight to the Cloudflare API with it
 // (a handful per change, like the activity revert), not through the stored tokens' budget.
@@ -16,6 +16,7 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{30,200}$/;
 export type RuntimeCredential = { kind: 'token'; token: string } | { kind: 'global'; email: string; apiKey: string };
 
 export const NEED_CREDENTIAL = 'Enter an API token with Logs Edit, or a Global API Key and its email — they are used for this change only and never stored';
+export const NEED_PURGE_CREDENTIAL = 'Enter an API token with Zone › Cache Purge › Purge, or a Global API Key and its email — they are used for this purge only and never stored';
 
 /** The credential in a request body (`{ kind: 'token', token }` or `{ kind: 'global', email, apiKey }`), or null when none was sent. */
 export function parseRuntimeCredential(raw: unknown): RuntimeCredential | null {
@@ -44,9 +45,9 @@ export async function withRuntimeCredential<T>(cred: RuntimeCredential | null, f
 }
 
 /** The credential of the request being run; a 409 (an approval stays pending) when there is none. */
-export function runtimeCredential(): RuntimeCredential {
+export function runtimeCredential(need = NEED_CREDENTIAL): RuntimeCredential {
   const c = store.getStore()?.cred;
-  if (!c) throw new HttpError(409, NEED_CREDENTIAL);
+  if (!c) throw new HttpError(409, need);
   return c;
 }
 

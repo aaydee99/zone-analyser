@@ -45,11 +45,11 @@ export default function ApprovalsPage() {
   const [busy, setBusy] = useState('');
   const [rejecting, setRejecting] = useState<Approval | null>(null);
   const [reason, setReason] = useState('');
-  // A Logpush change runs with a credential the approver types in: kept in this dialog only, cleared on close.
+  // A Logpush change or a cache purge runs with a credential the approver types in: kept in this dialog only, cleared on close.
   const [approving, setApproving] = useState<Approval | null>(null);
   const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
   const closeApproving = () => { setApproving(null); setCred(EMPTY_CREDENTIAL); };
-  const needsCredential = (a: Approval) => a.kind === 'cloudflare' && a.action?.type === 'logpush';
+  const needsCredential = (a: Approval) => a.kind === 'cloudflare' && (a.action?.type === 'logpush' || a.action?.type === 'purge');
 
   const load = useCallback((signal?: AbortSignal) => api<{ approvals: Approval[]; canApprove: Record<ApprovalKind, boolean> }>('/api/approvals', { signal })
     .then((r) => { setList(r.approvals); setMayApprove(r.canApprove); }).catch(() => {}), []);
@@ -177,7 +177,7 @@ export default function ApprovalsPage() {
         description={approving ? `${approving.title} — asked by ${approving.requestedBy.email}` : ''}
         footer={<><Button variant="ghost" onClick={closeApproving}>Cancel</Button><Button variant="primary" disabled={!credentialReady(cred)} loading={!!approving && busy === `approve:${approving.id}`}
           onClick={async () => { const a = approving!; const body = { cloudflare: credentialBody(cred) }; setCred(EMPTY_CREDENTIAL); await act(a, 'approve', body); setApproving(null); }}>Approve and run</Button></>}>
-        {approving && <RuntimeCredentialFields value={cred} onChange={setCred} scope={approving.action?.type === 'logpush' ? approving.action.scope : undefined} />}
+        {approving && <RuntimeCredentialFields value={cred} onChange={setCred} scope={approving.action?.type === 'logpush' ? approving.action.scope : undefined} purpose={approving.action?.type === 'purge' ? 'purge' : 'logpush'} />}
         <p className="mt-3 text-xs text-muted">If Cloudflare refuses the credential, the request stays waiting and you can try again with another one.</p>
       </Modal>
 

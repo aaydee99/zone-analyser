@@ -146,7 +146,7 @@ async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>)
 }
 
 /** The zone and the credential that reads it (from the zone list; no token needed). */
-async function zoneOf(zoneId: string) {
+export async function zoneOf(zoneId: string) {
   let list = await listZones();
   if (!list.credentialOf[zoneId]) list = await listZones(true);
   const hit = list.credentialOf[zoneId];
