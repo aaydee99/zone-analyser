@@ -61,10 +61,10 @@ export interface CoverageEntry {
   permission?: string;
 }
 
-export type RuleGroup = 'transport' | 'origin' | 'email' | 'waf' | 'availability' | 'cache' | 'host' | 'client' | 'edge' | 'traffic';
+export type RuleGroup = 'transport' | 'origin' | 'email' | 'managed' | 'waf' | 'bypass' | 'bots' | 'availability' | 'cache' | 'host' | 'client' | 'api' | 'edge' | 'traffic';
 export const GROUP_LABEL: Record<RuleGroup, string> = {
   transport: 'Transport and session', origin: 'Origin exposure and reachability', email: 'Email spoofing and certificate issuance',
-  waf: 'WAF and application rules', availability: 'Availability', cache: 'Cache poisoning and deception', host: 'Host and forwarded-header trust',
+  managed: 'Managed rules', waf: 'WAF and application rules', bypass: 'Rules that switch security off', bots: 'Bots', api: 'API protection', availability: 'Availability', cache: 'Cache poisoning and deception', host: 'Host and forwarded-header trust',
   client: 'Client-side protections', edge: 'Edge runtime boundary', traffic: 'Rule effectiveness (traffic)',
 };
 
@@ -126,18 +126,20 @@ export type Got<T> = { state: 'ok'; value: T } | { state: 'absent'; reason: stri
 export const AUDIT_SETTINGS = [
   'ssl', 'min_tls_version', 'tls_1_3', 'always_use_https', 'automatic_https_rewrites', 'security_header',
   'security_level', 'browser_check', 'development_mode', 'true_client_ip_header', 'cache_level',
+  '0rtt', 'opportunistic_encryption', 'email_obfuscation', 'hotlink_protection', 'server_side_exclude', 'challenge_ttl', 'websockets', 'ip_geolocation', 'ssl_automatic_mode',
 ] as const;
 export type AuditSetting = (typeof AUDIT_SETTINGS)[number];
 
 /** The ruleset phases the rules read (GET /rulesets/phases/{phase}/entrypoint; 404 = no rules). */
 export const AUDIT_PHASES = [
   'http_request_firewall_custom', 'http_request_firewall_managed', 'http_ratelimit', 'ddos_l7',
-  'http_request_cache_settings', 'http_request_origin', 'http_response_headers_transform',
+  'http_request_cache_settings', 'http_request_origin', 'http_response_headers_transform', 'http_response_firewall_managed', 'http_config_settings',
 ] as const;
 export type AuditPhase = (typeof AUDIT_PHASES)[number];
 
 export type SourceKey = 'zone' | `setting:${AuditSetting}` | `phase:${AuditPhase}` | 'dns' | 'dnssec' | 'certificates' | 'aop' | 'bot' | 'page_shield'
-  | 'page_rules' | 'worker_routes' | 'managed_headers' | 'cname_lookups' | 'events' | 'events_previous' | 'requests';
+  | 'page_rules' | 'worker_routes' | 'managed_headers' | 'cname_lookups' | 'events' | 'events_previous' | 'requests'
+  | 'access_rules' | 'account_access_rules' | 'lockdowns' | 'ua_rules' | 'universal_ssl' | 'leaked_credentials' | 'schema_validation' | 'api_operations';
 
 /** Each source: what it is, where it is read and the token permission that reads it (Cloudflare's names). */
 export const SOURCES: Record<SourceKey, { label: string; path: string; permission: string }> = {
@@ -150,6 +152,16 @@ export const SOURCES: Record<SourceKey, { label: string; path: string; permissio
   'phase:http_request_cache_settings': { label: 'Cache rules', path: 'GET /zones/{id}/rulesets/phases/http_request_cache_settings/entrypoint', permission: 'Cache Settings Read' },
   'phase:http_request_origin': { label: 'Origin rules', path: 'GET /zones/{id}/rulesets/phases/http_request_origin/entrypoint', permission: 'Origin Read' },
   'phase:http_response_headers_transform': { label: 'Response header transform rules', path: 'GET /zones/{id}/rulesets/phases/http_response_headers_transform/entrypoint', permission: 'Transform Rules Read' },
+  'phase:http_response_firewall_managed': { label: 'Managed rules on responses (sensitive data detection)', path: 'GET /zones/{id}/rulesets/phases/http_response_firewall_managed/entrypoint', permission: 'Zone WAF Read' },
+  'phase:http_config_settings': { label: 'Configuration rules', path: 'GET /zones/{id}/rulesets/phases/http_config_settings/entrypoint', permission: 'Config Settings Read' },
+  access_rules: { label: 'IP Access rules (zone)', path: 'GET /zones/{id}/firewall/access_rules/rules', permission: 'Firewall Services Read' },
+  account_access_rules: { label: 'IP Access rules (account, apply to every zone)', path: 'GET /accounts/{account}/firewall/access_rules/rules', permission: 'Account Firewall Access Rules Read' },
+  lockdowns: { label: 'Zone Lockdown rules (legacy)', path: 'GET /zones/{id}/firewall/lockdowns', permission: 'Firewall Services Read' },
+  ua_rules: { label: 'User Agent Blocking rules (legacy)', path: 'GET /zones/{id}/firewall/ua_rules', permission: 'Firewall Services Read' },
+  universal_ssl: { label: 'Universal SSL', path: 'GET /zones/{id}/ssl/universal/settings', permission: 'SSL and Certificates Read' },
+  leaked_credentials: { label: 'Leaked credentials detection', path: 'GET /zones/{id}/leaked-credential-checks', permission: 'Zone WAF Read' },
+  schema_validation: { label: 'API Shield schema validation settings', path: 'GET /zones/{id}/schema_validation/settings', permission: 'Domain API Gateway Read' },
+  api_operations: { label: 'API Shield endpoints (count)', path: 'GET /zones/{id}/api_gateway/operations?per_page=1', permission: 'Domain API Gateway Read' },
   dns: { label: 'DNS records', path: 'GET /zones/{id}/dns_records', permission: 'DNS Read' },
   dnssec: { label: 'DNSSEC', path: 'GET /zones/{id}/dnssec', permission: 'DNS Read' },
   certificates: { label: 'Edge certificate packs', path: 'GET /zones/{id}/ssl/certificate_packs?status=all', permission: 'SSL and Certificates Read' },
@@ -167,11 +179,20 @@ export const SOURCES: Record<SourceKey, { label: string; path: string; permissio
 
 export interface ZoneInfo { id: string; name: string; status: string; type: string; plan: string }
 export interface DnsRec { id?: string; name: string; type: string; content: string; proxied?: boolean }
-export interface RulesetRule { id?: string; ref?: string; description?: string; expression?: string; action?: string; enabled?: boolean; action_parameters?: Record<string, unknown>; logging?: { enabled?: boolean } }
+export interface RulesetRule { id?: string; ref?: string; description?: string; expression?: string; action?: string; enabled?: boolean; action_parameters?: Record<string, unknown>; logging?: { enabled?: boolean };
+  /** Rate limiting rules: the counting settings (a rule-level field, not an action parameter). */
+  ratelimit?: { characteristics?: string[]; period?: number; requests_per_period?: number; mitigation_timeout?: number; counting_expression?: string } }
 export interface CertPack { id: string; type?: string; status?: string; hosts?: string[]; certificates?: { expires_on?: string; status?: string }[] }
 export interface PageRule { id: string; status?: string; targets?: { constraint?: { value?: string } }[]; actions?: { id: string; value?: unknown }[] }
 export interface WorkerRoute { id: string; pattern: string; script?: string | null }
-export interface BotConfig { fight_mode?: boolean; sbfm_definitely_automated?: string; sbfm_likely_automated?: string; using_latest_model?: boolean; enable_js?: boolean }
+export interface BotConfig {
+  fight_mode?: boolean; sbfm_definitely_automated?: string; sbfm_likely_automated?: string; sbfm_verified_bots?: string; sbfm_static_resource_protection?: boolean;
+  using_latest_model?: boolean; auto_update_model?: boolean; enable_js?: boolean; ai_bots_protection?: string;
+}
+/** An IP Access rule (zone or account). mode whitelist = allow. */
+export interface AccessRule { id: string; mode?: string; paused?: boolean; notes?: string; configuration?: { target?: string; value?: string }; scope?: { type?: string } }
+/** A legacy Zone Lockdown or User Agent Blocking rule. */
+export interface LegacyRule { id: string; paused?: boolean; description?: string; mode?: string; urls?: string[] }
 /** RCODE per CNAME target (0 resolves, 3 NXDOMAIN, 2 SERVFAIL), and how many targets were not looked up (cap). */
 export interface CnameLookups { answers: Record<string, number>; skipped: number }
 
@@ -190,12 +211,64 @@ export interface EventData {
   rules: EventRow[];
   /** Per rule and action: the paths, countries, networks, client IPs and user agents it acted on (top rows only). */
   paths: { ruleId: string; source: string; action: string; path: string; host: string; count: number }[];
-  countries: { ruleId: string; source: string; country: string; count: number }[];
+  countries: { ruleId: string; source: string; action: string; country: string; count: number }[];
   asns: { ruleId: string; source: string; action: string; asn: string; name: string; count: number }[];
   ips: { ruleId: string; source: string; action: string; ip: string; count: number }[];
-  uas: { ruleId: string; source: string; ua: string; count: number }[];
+  uas: { ruleId: string; source: string; action: string; ua: string; count: number }[];
+  /** Per rule and action: response status, hour (rate peaks), bot score and WAF attack score — each only when the plan offers the field (null: not offered or not read). */
+  statuses: { ruleId: string; source: string; action: string; status: number; count: number }[] | null;
+  hours: { ruleId: string; source: string; action: string; hour: string; count: number }[] | null;
+  bots: { ruleId: string; source: string; action: string; score: number; verified: string; count: number }[] | null;
+  attacks: { ruleId: string; source: string; action: string; score: number; count: number }[] | null;
   /** Notes: a part of the window not read, the window clamped to the plan's retention… */
   notes: string[];
+}
+
+/** How a rule lets matched traffic through. */
+export type PassKind = 'log' | 'skip' | 'allow' | 'solved';
+export const PASS_LABEL: Record<PassKind, string> = { log: 'Logged and let through', skip: 'Skipped other security', allow: 'Allowed (IP Access allow)', solved: 'Passed by solving a challenge' };
+
+export type RecommendationAction = 'block_or_challenge' | 'narrow' | 'rate_limit' | 'replace_allow' | 'keep' | 'no_conclusion';
+/** What to do about one rule, from the traffic it let through. Never applied. */
+export interface Recommendation {
+  action: RecommendationAction;
+  title: string;
+  steps: string[];
+  /** A drafted expression to paste in the dashboard, when there is one. */
+  expression?: string;
+  /** Requests in the window the change would have stopped (bots + malicious passed); orders the list. */
+  impact: number;
+  /** The finding with the evidence, when the rule made one. */
+  fingerprint?: string;
+}
+
+/** The traffic one rule let through, and what it consists of. */
+export interface PassThrough {
+  kinds: PassKind[];
+  passed: number;
+  /** Automated requests: by Bot Management score (1–29, verified bots left out) when the plan scores them, otherwise by user agent (not a browser). */
+  bots: number;
+  botShare: number;
+  botBasis: 'score' | 'heuristic';
+  /** Malicious requests: by WAF attack score (1–20) when the plan scores them, otherwise threat-like paths or clients other rules stopped. */
+  malicious: number;
+  maliciousShare: number;
+  maliciousBasis: 'attack_score' | 'heuristic';
+  threatPathHits: number;
+  repeatOffenderHits: number;
+  hostingShare: number;
+  browserShare: number;
+  /** Passed requests to login, account, admin or API paths. */
+  sensitiveHits: number;
+  statuses: { s2xx: number; s3xx: number; s4xx: number; s5xx: number } | null;
+  peakPerHour: number | null;
+  solveRate: number | null;
+  topPaths: { path: string; count: number }[];
+  topAsns: { asn: string; name: string; count: number; hosting: boolean }[];
+  topUas: { ua: string; count: number; browser: boolean }[];
+  topCountries: { country: string; count: number }[];
+  verdict: 'too_few' | 'malicious' | 'bots' | 'clean';
+  recommendation: Recommendation;
 }
 /** HTTP requests in the window: by path and status, and by network and status (top rows). */
 export interface RequestData {
@@ -206,8 +279,8 @@ export interface RequestData {
   notes: string[];
 }
 
-export type RuleKind = 'custom' | 'managed' | 'ratelimit' | 'bot' | 'ddos' | 'other';
-export const KIND_LABEL: Record<RuleKind, string> = { custom: 'Custom rule', managed: 'Managed rule', ratelimit: 'Rate limiting rule', bot: 'Bot protection', ddos: 'HTTP DDoS protection', other: 'Other security feature' };
+export type RuleKind = 'custom' | 'managed' | 'ratelimit' | 'bot' | 'ddos' | 'access' | 'other';
+export const KIND_LABEL: Record<RuleKind, string> = { custom: 'Custom rule', managed: 'Managed rule', ratelimit: 'Rate limiting rule', bot: 'Bot protection', ddos: 'HTTP DDoS protection', access: 'IP Access rule', other: 'Other security feature' };
 
 /** One security rule's effect in the window. */
 export interface RuleEffect {
@@ -230,6 +303,8 @@ export interface RuleEffect {
   topPaths: { path: string; count: number }[];
   topCountries: { country: string; count: number }[];
   topAsns: { asn: string; name: string; count: number }[];
+  /** The traffic the rule let through (log, skip, allow, solved challenges) and the recommendation; null when it let nothing through or was not analysed. */
+  passthrough: PassThrough | null;
   /** Events in the window before (null: not read or older than the plan keeps). */
   previous: number | null;
   /** (events - previous) / previous; null when previous is null or 0. */
@@ -244,6 +319,10 @@ export interface Effectiveness {
   previousSince: string | null;
   totalEvents: number;
   rules: RuleEffect[];
+  /** Recommended actions for every analysed rule, most impact first. */
+  recommendations: (Recommendation & { ruleKey: string; ruleName: string; kind: RuleKind })[];
+  /** Rules that let traffic through but were not analysed (cap), with why. */
+  notAnalysed: { ruleKey: string; ruleName: string; passed: number; reason: string }[];
   notes: string[];
 }
 

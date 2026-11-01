@@ -1,11 +1,12 @@
 // Builds an audit report from a snapshot: the configuration rules (rules.ts) and the traffic rules
-// (effectiveness.ts) through one engine, so both keep the same coverage ledger. Pure.
+// (rules-extra.ts) and the traffic rules (effectiveness.ts) through one engine, so both keep the same coverage ledger. Pure.
 
 import { effectivenessOf, TRAFFIC_RULES } from './effectiveness';
 import { RULES, runRules, summarize, type RuleDef } from './rules';
+import { EXTRA_RULES } from './rules-extra';
 import { SOURCES, type AuditReport, type AuditZone, type Snapshot, type SourceKey, type ZoneInfo } from './types';
 
-export const ALL_RULES: RuleDef[] = [...RULES, ...TRAFFIC_RULES];
+export const ALL_RULES: RuleDef[] = [...RULES, ...EXTRA_RULES, ...TRAFFIC_RULES];
 
 export function buildReport(s: Snapshot, meta: { accountId: string; accountName: string; startedAt: string; finishedAt: string; calls: number; lookups: number }): AuditReport {
   const { findings, coverage } = runRules(s, ALL_RULES);

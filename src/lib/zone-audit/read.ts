@@ -2,14 +2,14 @@ import 'server-only';
 import { ReadError, cfGet, cfList, cfReason, inParallel, mask, ok, refused, type CfAnswer } from '../cf-read';
 import { Lookups, dohEnabled } from '../doh';
 import { inZone, takeoverService } from '../dns-hygiene';
-import { J, errorText, gql, isLimit, isPermission, zoneLimits, type Limits } from '../investigate-gql';
+import { J, errorText, gql, isLimit, isPermission, offered, zoneLimits, type Limits } from '../investigate-gql';
 import { buildReport } from './report';
 import {
   AUDIT_PHASES, AUDIT_SETTINGS,
   type AuditReport, type CnameLookups, type DnsRec, type EventData, type Got, type RequestData, type Snapshot, type SourceKey, type ZoneInfo,
 } from './types';
 
-// Reads one zone for the security audit: about 30 Cloudflare API GETs through cf-read (the per-token
+// Reads one zone for the security audit: about 50 Cloudflare API GETs through cf-read (the per-token
 // budget and 429 pause), at most CNAME_LOOKUPS public DNS answers (doh.ts), and the traffic window
 // with GraphQL queries through investigate-gql (the shared analytics budget; queries only, sent as
 // POST because that is how GraphQL takes them). Nothing is written to Cloudflare. A read that fails
@@ -18,6 +18,8 @@ import {
 const PARALLEL = 6;
 /** Public DNS lookups per audit (takeover-prone CNAME targets first). */
 export const CNAME_LOOKUPS = 40;
+/** IP Access rules read per scope at most. */
+export const ACCESS_MAX = 2_000;
 /** Parts of the traffic window per dataset (each part is one plan maxDuration, usually 1–3 days). */
 export const MAX_PARTS = 12;
 
@@ -43,7 +45,7 @@ const fromError = (err: unknown): Got<unknown> => {
 export interface AuditRead { snapshot: Snapshot; calls: number; lookups: number }
 
 /** Reads everything the rules need. `hours`: the traffic window asked for. */
-export async function readZone(token: string, zoneId: string, zoneName: string, hours: number, signal?: AbortSignal): Promise<AuditRead> {
+export async function readZone(token: string, zoneId: string, zoneName: string, hours: number, signal?: AbortSignal, accountId?: string): Promise<AuditRead> {
   let calls = 0;
   const get = (path: string) => { calls++; return cfGet(token, path, signal); };
   const reads: Snapshot['reads'] = {};
@@ -59,6 +61,9 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
     ['page_shield', `${base}/page_shield`],
     ['worker_routes', `${base}/workers/routes`],
     ['managed_headers', `${base}/managed_headers`],
+    ['universal_ssl', `${base}/ssl/universal/settings`],
+    ['leaked_credentials', `${base}/leaked-credential-checks`],
+    ['schema_validation', `${base}/schema_validation/settings`],
   ];
   await inParallel(single, PARALLEL, async ([key, path, empty]) => {
     try { reads[key] = classify(await get(path), empty); } catch (err) { signal?.throwIfAborted(); reads[key] = fromError(err); }
@@ -71,12 +76,25 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
     reads.zone = { state: 'ok', value: { id: zoneId, name: v.name ?? zoneName, status: v.status ?? '', type: v.type ?? 'full', plan: (v.plan?.legacy_id ?? v.plan?.name ?? '').toLowerCase() } satisfies ZoneInfo };
   }
 
+  // API Shield endpoints: only the count (one item asked for, total_count read).
+  try {
+    const r = await get(`${base}/api_gateway/operations?per_page=1`);
+    const g = classify(r);
+    reads.api_operations = g.state === 'ok' ? { state: 'ok', value: { total: Number(r.body?.result_info?.total_count ?? (Array.isArray(g.value) ? g.value.length : 0)) } } : g;
+  } catch (err) { signal?.throwIfAborted(); reads.api_operations = fromError(err); }
+
   const lists: [SourceKey, string, { perPage: number; max: number }][] = [
     ['dns', `${base}/dns_records`, { perPage: 5_000, max: 50_000 }],
     ['certificates', `${base}/ssl/certificate_packs?status=all`, { perPage: 50, max: 500 }],
     ['page_rules', `${base}/pagerules`, { perPage: 0, max: 500 }],
+    // IP Access rules and legacy rules: capped (a zone with thousands is reported as "many", not read in full).
+    ['access_rules', `${base}/firewall/access_rules/rules`, { perPage: 1_000, max: ACCESS_MAX }],
+    ['lockdowns', `${base}/firewall/lockdowns`, { perPage: 100, max: 500 }],
+    ['ua_rules', `${base}/firewall/ua_rules`, { perPage: 100, max: 500 }],
+    ...(accountId ? [['account_access_rules', `/accounts/${encodeURIComponent(accountId)}/firewall/access_rules/rules`, { perPage: 1_000, max: ACCESS_MAX }] as [SourceKey, string, { perPage: number; max: number }]] : []),
   ];
-  await inParallel(lists, 3, async ([key, path, o]) => {
+  if (!accountId) reads.account_access_rules = { state: 'error', status: 0, reason: 'The zone\'s account is not known' };
+  await inParallel(lists, 4, async ([key, path, o]) => {
     try {
       // cfList counts its own pages; one call per page is close enough for the total (pages are rare here).
       calls++;
@@ -115,10 +133,22 @@ interface Spec { alias: string; dims: string[]; limit: number }
 const EVENT_SPECS: Spec[] = [
   { alias: 'rules', dims: ['ruleId', 'rulesetId', 'source', 'action', 'description'], limit: 1000 },
   { alias: 'paths', dims: ['ruleId', 'source', 'action', 'clientRequestHTTPHost', 'clientRequestPath'], limit: 2000 },
-  { alias: 'countries', dims: ['ruleId', 'source', 'clientCountryName'], limit: 2000 },
+  { alias: 'countries', dims: ['ruleId', 'source', 'action', 'clientCountryName'], limit: 2000 },
   { alias: 'asns', dims: ['ruleId', 'source', 'action', 'clientAsn', 'clientASNDescription'], limit: 2000 },
   { alias: 'ips', dims: ['ruleId', 'source', 'action', 'clientIP'], limit: 5000 },
-  { alias: 'uas', dims: ['ruleId', 'source', 'userAgent'], limit: 2000 },
+  { alias: 'uas', dims: ['ruleId', 'source', 'action', 'userAgent'], limit: 2000 },
+];
+/**
+ * Optional dimensions, each in its own query and only when the plan's field list offers the field:
+ * response status, hour (rate peaks), Bot Management bot score (Enterprise) and WAF attack score
+ * (Enterprise). When the plan publishes no field list, each is tried once on the newest part; a
+ * refusal there leaves it out for the rest of the window.
+ */
+const OPTIONAL_SPECS: (Spec & { field: string })[] = [
+  { alias: 'statuses', field: 'edgeResponseStatus', dims: ['ruleId', 'source', 'action', 'edgeResponseStatus'], limit: 3000 },
+  { alias: 'hours', field: 'datetimeHour', dims: ['ruleId', 'source', 'action', 'datetimeHour'], limit: 5000 },
+  { alias: 'bots', field: 'botScore', dims: ['ruleId', 'source', 'action', 'botScore', 'verifiedBotCategory'], limit: 5000 },
+  { alias: 'attacks', field: 'wafAttackScore', dims: ['ruleId', 'source', 'action', 'wafAttackScore'], limit: 5000 },
 ];
 const REQUEST_SPECS: Spec[][] = [
   [{ alias: 'paths', dims: ['clientRequestHTTPHost', 'clientRequestPath', 'edgeResponseStatus'], limit: 5000 }],
@@ -201,14 +231,32 @@ async function readTraffic(token: string, zoneId: string, hours: number, signal?
     try {
       const g = await grouped(token, zoneId, 'firewallEventsAdaptiveGroups', pack(EVENT_SPECS, Math.max(6, fw.maxNumberOfFields)), w.parts, fw, count, signal);
       const R = g.rows;
+      const opt: Record<string, { dims: Record<string, string>; count: number }[] | null> = {};
+      for (const o of OPTIONAL_SPECS) {
+        if (fw.availableFields && !offered(fw, o.field)) { opt[o.alias] = null; continue; }
+        const parts = [...w.parts].reverse();
+        try {
+          const first = await grouped(token, zoneId, 'firewallEventsAdaptiveGroups', [[o]], parts.slice(0, 1), fw, count, signal);
+          const rest = parts.length > 1 ? await grouped(token, zoneId, 'firewallEventsAdaptiveGroups', [[o]], parts.slice(1), fw, count, signal) : null;
+          opt[o.alias] = [...first.rows(o.alias), ...(rest?.rows(o.alias) ?? [])];
+        } catch (err) {
+          signal?.throwIfAborted();
+          if (isGot(err) && err.state === 'error' && err.status === 429) throw err;
+          opt[o.alias] = null;
+        }
+      }
       reads.events = { state: 'ok', value: {
         since: new Date(w.start).toISOString(), until: new Date(end).toISOString(), notes: [...notes, ...g.problems.slice(0, 3).map((p) => `Part not read: ${p}`)],
         rules: R('rules').map((r) => ({ ruleId: r.dims.ruleId, rulesetId: r.dims.rulesetId, source: r.dims.source, action: r.dims.action, description: r.dims.description, count: r.count })),
         paths: R('paths').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, host: r.dims.clientRequestHTTPHost, path: r.dims.clientRequestPath, count: r.count })),
-        countries: R('countries').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, country: r.dims.clientCountryName, count: r.count })),
+        countries: R('countries').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, country: r.dims.clientCountryName, count: r.count })),
         asns: R('asns').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, asn: r.dims.clientAsn, name: r.dims.clientASNDescription, count: r.count })),
         ips: R('ips').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, ip: r.dims.clientIP, count: r.count })),
-        uas: R('uas').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, ua: r.dims.userAgent, count: r.count })),
+        uas: R('uas').map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, ua: r.dims.userAgent, count: r.count })),
+        statuses: opt.statuses?.map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, status: Number(r.dims.edgeResponseStatus) || 0, count: r.count })) ?? null,
+        hours: opt.hours?.map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, hour: r.dims.datetimeHour, count: r.count })) ?? null,
+        bots: opt.bots?.map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, score: Number(r.dims.botScore) || 0, verified: r.dims.verifiedBotCategory ?? '', count: r.count })) ?? null,
+        attacks: opt.attacks?.map((r) => ({ ruleId: r.dims.ruleId, source: r.dims.source, action: r.dims.action, score: Number(r.dims.wafAttackScore) || 0, count: r.count })) ?? null,
       } satisfies EventData };
     } catch (err) { signal?.throwIfAborted(); reads.events = isGot(err) ? err : { state: 'error', status: 0, reason: String(err) }; }
     // The window before, for the trend: only the per-rule counts, and only when the plan still keeps it.
@@ -218,7 +266,7 @@ async function readTraffic(token: string, zoneId: string, hours: number, signal?
     else {
       try {
         const g = await grouped(token, zoneId, 'firewallEventsAdaptiveGroups', [[EVENT_SPECS[0]]], windowParts(prevEnd, used, fw).parts, fw, count, signal);
-        reads.events_previous = { state: 'ok', value: { since: new Date(prevEnd - used * 3600_000).toISOString(), until: new Date(prevEnd).toISOString(), notes: [], paths: [], countries: [], asns: [], ips: [], uas: [],
+        reads.events_previous = { state: 'ok', value: { since: new Date(prevEnd - used * 3600_000).toISOString(), until: new Date(prevEnd).toISOString(), notes: [], paths: [], countries: [], asns: [], ips: [], uas: [], statuses: null, hours: null, bots: null, attacks: null,
           rules: g.rows('rules').map((r) => ({ ruleId: r.dims.ruleId, rulesetId: r.dims.rulesetId, source: r.dims.source, action: r.dims.action, description: r.dims.description, count: r.count })) } satisfies EventData };
       } catch (err) { signal?.throwIfAborted(); reads.events_previous = isGot(err) ? err : { state: 'error', status: 0, reason: String(err) }; }
     }
@@ -244,6 +292,6 @@ const isGot = (x: unknown): x is Got<never> => !!x && typeof x === 'object' && '
 /** Reads the zone and builds its report. */
 export async function auditZone(o: { token: string; zoneId: string; zoneName: string; accountId: string; accountName: string; hours: number; signal?: AbortSignal }): Promise<AuditReport> {
   const startedAt = new Date().toISOString();
-  const r = await readZone(o.token, o.zoneId, o.zoneName, o.hours, o.signal);
+  const r = await readZone(o.token, o.zoneId, o.zoneName, o.hours, o.signal, o.accountId || undefined);
   return buildReport(r.snapshot, { accountId: o.accountId, accountName: o.accountName, startedAt, finishedAt: new Date().toISOString(), calls: r.calls, lookups: r.lookups });
 }

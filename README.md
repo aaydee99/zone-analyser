@@ -839,7 +839,7 @@ Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zon
 
 **Console › Security audit** (`/console/security-audit`) checks one zone against a fixed set of rules derived from the `security-audit` skill (`.claude/skills/security-audit/`). It also reports how the zone's security rules acted on its traffic. Choose a zone with the search box (the search runs on the server, so the browser never loads the whole zone list). Pick a traffic window (24 hours, 7 days by default, or 30 days, shortened to what the plan keeps) and press **Run audit**. The report opens at `/console/security-audit/{id}`. The Zone explorer's zone view has a **Security audit** button that opens the page with that zone chosen.
 
-**No AI and no writes.** Every rule is plain code with a documented condition (`src/lib/zone-audit/rules.ts` for configuration, `effectiveness.ts` for traffic). Each rule names the skill attack class it implements and the skill file it comes from. The audit only reads Cloudflare. Fixes are written out as dashboard steps and are never applied.
+**No AI and no writes.** Every rule is plain code with a documented condition (`src/lib/zone-audit/rules.ts` and `rules-extra.ts` for configuration, `effectiveness.ts` and `passthrough.ts` for traffic). Each rule names the skill attack class it implements and the skill file it comes from. The audit only reads Cloudflare. Fixes are written out as dashboard steps and are never applied.
 
 **Verdicts.** A finding is **Confirmed** only when the zone's configuration, or the traffic numbers, prove the outcome. Example: SSL Flexible means the leg from Cloudflare to the origin is plain HTTP. A finding is **Needs validation** when the outcome depends on something the configuration cannot show, such as how the origin behaves, what an unproxied host serves, or headers the origin sets. Each such finding gives the exact check to run.
 
@@ -852,9 +852,11 @@ Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zon
 This keeps a clean result from being mistaken for "everything was checked".
 
 **Report contents:**
-- A summary by severity and verdict.
+- A summary by severity and verdict, and "N of M checks read" in the header.
+- **Recommended actions**: one per rule that lets traffic through, ordered by the bots and malicious requests the change would have stopped, each linking to its finding and evidence.
+- **Managed rules**: deployment, overrides, OWASP tuning, credential checks and exceptions.
 - Configuration findings, worst first, each with evidence (secret-looking values masked), root cause, fix and validation.
-- **Rule effectiveness**: per custom, managed, rate limiting, bot and DDoS rule, the hits by action, the challenge solve rate, the top paths, countries and networks, and the trend against the previous window.
+- **Rule effectiveness**: per custom, managed, rate limiting, bot, DDoS and IP Access rule, the hits by action, the challenge solve rate, the top paths, countries and networks, and the trend against the previous window. The details panel of each rule that lets traffic through adds **Traffic it let through**: passed requests, the bot and malicious shares (with their basis), hosting vs consumer networks, browser vs automation user agents, response codes, the busiest hour, login/API paths reached, and the rule's recommendation.
 - Recommendations drawn from the traffic.
 - The coverage ledger.
 - What was read.
@@ -865,37 +867,72 @@ This keeps a clean result from being mistaken for "everything was checked".
 
 | Area | What the rules check |
 | --- | --- |
-| Transport | SSL mode, minimum TLS, TLS 1.3, Always Use HTTPS, HTTPS rewrites, HSTS, authenticated origin pulls, edge certificates |
+| Managed rules | Cloudflare Managed Ruleset deployed, rules or categories disabled or set to log, ruleset-wide action override, deployed on part of the traffic only; OWASP deployed, log-only, score threshold and paranoia level (PL1 + low sensitivity is the weakest), categories disabled; Free Managed Ruleset (Free plan); leaked credentials detection (or the deprecated Exposed Credentials Check) while login paths get traffic; Sensitive Data Detection (Enterprise); exceptions that are broad, skip whole rulesets or many rules, or sit below the deploy rules (no effect); rulesets whose deploy rules are all disabled |
+| Rules that switch security off | IP Access allow rules (zone and account) for countries, networks or wide ranges, and very long lists; configuration rules and page rules that lower the security level, disable security or the browser integrity check, or weaken SSL; paused Zone Lockdown and User Agent Blocking rules; custom rules that only log |
+| Bots | Bot Fight Mode / Super Bot Fight Mode actions, JavaScript detections, verified bots, static resources; Bot Management scores used in rules (Enterprise); AI crawler blocking |
+| Transport | SSL mode, automatic SSL mode, minimum TLS, TLS 1.3, 0-RTT (replay), Opportunistic Encryption, Always Use HTTPS, HTTPS rewrites, HSTS, authenticated origin pulls, Universal SSL, edge certificates |
 | Origin exposure | Unproxied records that reveal a proxied origin, unproxied management or non-production names, dangling CNAMEs to takeover-prone services, wildcards |
 | Email and DNS | SPF, DMARC, CAA, DNSSEC |
-| WAF | Cloudflare Managed and OWASP rulesets, broad skip rules, skips keyed on client-supplied headers, disabled rules, security level, browser integrity check, Bot Fight Mode |
-| Availability | Rate limiting, HTTP DDoS overrides, development mode |
+| WAF | Broad skip rules, skips keyed on client-supplied headers, disabled rules, security level, browser integrity check, challenge passage, IP geolocation |
+| Availability | Rate limiting present, in log mode, counting by IP only, short mitigation, disabled; HTTP DDoS overrides (log, low or essentially-off sensitivity; L4 DDoS is account-level and out of scope); development mode |
 | Cache | Cache-everything rules on per-user paths, Cache Deception Armor, unkeyed query strings |
 | Host trust | Origin-rule Host/SNI overrides, True-Client-IP |
-| Client-side | Security headers set at the edge, Page Shield |
-| Edge | Worker routes, including Worker-less routes on sensitive paths |
-| Traffic | Rules with no hits, log-only rules matching automated traffic, likely false positives (the WAF false-positive score and draft exception), skip rules letting through clients other rules stop, managed rules mostly logging, rate limits that never trigger on busy paths, busy failing paths and hosting networks with no rule acting |
+| Client-side | Security headers set at the edge, Page Shield, email obfuscation, hotlink protection, server-side excludes |
+| API protection | API Shield schema validation and saved endpoints while API paths carry most traffic |
+| Edge | Worker routes, including Worker-less routes on sensitive paths; WebSockets |
+| Traffic | **Bots and malicious requests let through** by log, skip, IP Access allow and challenge rules (below); rules with no hits; likely false positives (the WAF false-positive score and draft exception); managed rules mostly logging; rate limits that never trigger on busy paths; busy failing paths and hosting networks with no rule acting |
+
+**Traffic it let through.** For every rule that lets matched requests pass — Log (custom, managed overrides, rate limiting), Skip (custom and managed exceptions), IP Access allow, and challenges that were solved — the audit measures what passed. Up to 25 rules per audit are analysed: the ones that passed the most. The rest are listed as not analysed.
+- **Bots:**
+  - Bot Management scores 1–29, leaving out verified bots (Enterprise), when at least half of the passed requests carry a score. These conclusions are **confirmed**.
+  - Otherwise, user agents that are not ordinary browsers. These conclusions **need validation**.
+- **Malicious:**
+  - WAF attack scores 1–20 (Enterprise), when at least half carry a score. These conclusions are **confirmed**.
+  - Otherwise, threat-like paths from a documented list (`/wp-login.php`, `/.env`, `/xmlrpc.php`, `../` …) or clients that other rules blocked or challenged in the window. These conclusions **need validation**.
+- **Thresholds:** bots reach at least 30% of the passed requests and at least 50 requests; malicious reaches at least 1% and at least 10. Fewer than 100 passed requests give no conclusion.
+- **Recommendations** depend on the rule type:
+  - Log rules: switch to Managed Challenge or Block.
+  - Skip rules: narrow them, with a drafted expression that excludes the bad slice (`cf.bot_management.score lt 30`, `cf.waf.score lt 21`, the hosting ASNs or the threat paths).
+  - IP Access allow rules: replace them with a narrow custom skip.
+  - Challenge rules: rate limit what passes the challenge (drafted rule).
+  - Clean rules: "no action". Too few requests: "no conclusion".
+- The plan's own field list decides which score fields are queried. Each optional field gets its own query and is dropped when the plan refuses it.
 
 **Permissions.** Viewing and starting an audit both need `runs:read` (every role), because an audit only reads. Starts are limited to 10 per user per 10 minutes, one running audit per zone, and at most 3 running at once per worker. Each start is written to the audit log as `zone_audit.started`, and each download as `zone_audit.downloaded`.
 
-**Cost of one audit.** About 28 Cloudflare API GETs (the zone, 11 settings, 7 ruleset phases, DNS records, DNSSEC, certificate packs, authenticated origin pulls, bot management, Page Shield, page rules, Worker routes, managed transforms). The traffic window adds about 16 GraphQL analytics queries for 7 days with the usual 3-day query span; 30 days, or plans with a 1-day span, take up to about 60 (at most 12 window parts per dataset). These use the shared analytics budget. On top of that come up to 40 public DNS lookups (DoH) for CNAME targets. All calls go through `cf-read.ts` and `investigate-gql.ts`, with the token from the zone's stored credential. There is no run that audits every zone, on purpose: 6,532 zones would be about 290,000 calls. Every page that lists stored audits reads only the database.
+**Cost of one audit.** About 47 Cloudflare API GETs:
+- the zone and 20 settings;
+- 9 ruleset phases;
+- DNS records, DNSSEC, certificate packs, Universal SSL and authenticated origin pulls;
+- bot management, Page Shield, page rules, Worker routes and managed transforms;
+- IP Access rules (zone and account, at most 2,000 each), Zone Lockdown and User Agent rules;
+- leaked credentials, and the API Shield settings and endpoint count.
+
+The traffic window adds about 28 GraphQL analytics queries for 7 days with the usual 3-day query span; 30 days, or plans with a 1-day span, take up to about 110 (at most 12 window parts per dataset). These use the shared analytics budget. On top of that come up to 40 public DNS lookups (DoH) for CNAME targets. All calls go through `cf-read.ts` and `investigate-gql.ts`, with the token from the zone's stored credential. There is no run that audits every zone, on purpose: 6,532 zones would be about 290,000 calls. Every page that lists stored audits reads only the database.
 
 **Cloudflare token permissions** (all read; the audit never needs or uses an edit permission):
-- Zone Read
-- Zone Settings Read
-- DNS Read
-- SSL and Certificates Read
-- Zone WAF Read
-- HTTP DDoS Managed Ruleset Read
-- Cache Settings Read
-- Origin Read
-- Transform Rules Read
-- Managed headers Read
-- Bot Management Read
-- Page Shield Read
-- Page Rules Read
-- Workers Routes Read
-- Analytics Read
+
+| Permission | Rules that need it |
+| --- | --- |
+| Zone Read | plan-aware rules (zone details) |
+| Zone Settings Read | all setting rules |
+| DNS Read | origin exposure, email, DNSSEC |
+| SSL and Certificates Read | certificates, Universal SSL, authenticated origin pulls |
+| Zone WAF Read | custom, managed, rate limiting rules, Sensitive Data Detection, leaked credentials |
+| HTTP DDoS Managed Ruleset Read | DDoS overrides |
+| Config Settings Read | configuration rules |
+| Cache Settings Read | cache rules |
+| Origin Read | origin rules |
+| Transform Rules Read | response header rules |
+| Managed headers Read | managed transforms |
+| Firewall Services Read | zone IP Access rules, Zone Lockdown, User Agent Blocking |
+| Account Firewall Access Rules Read | account-level IP Access rules |
+| Bot Management Read | bot rules |
+| Page Shield Read | Page Shield |
+| Page Rules Read | page rules |
+| Workers Routes Read | Worker routes |
+| Domain API Gateway Read | API Shield |
+| Analytics Read | everything in Rule effectiveness and Traffic it let through |
 
 A missing permission marks only the rules that need it as "not read".
 

@@ -21,10 +21,11 @@ export const isCsvPart = (v: string): v is CsvPart => v === 'findings' || v === 
 export function auditCsv(r: AuditReport, part: CsvPart): string {
   if (part === 'coverage') return csv(['rule', 'title', 'group', 'state', 'findings', 'reason', 'permission', 'attack_class', 'skill_ref'],
     r.coverage.map((c) => [c.ruleId, c.title, GROUP_LABEL[c.group], c.state, c.findings, c.reason ?? '', c.permission ?? '', c.attackClass, c.skillRef]));
-  if (part === 'effectiveness') return csv(['kind', 'rule', 'ruleset', 'source', 'name', 'configured', 'config_action', 'events', 'by_action', 'challenged', 'solved', 'solve_rate', 'previous', 'trend', 'top_paths', 'top_countries', 'top_networks'],
+  if (part === 'effectiveness') return csv(['kind', 'rule', 'ruleset', 'source', 'name', 'configured', 'config_action', 'events', 'by_action', 'challenged', 'solved', 'solve_rate', 'previous', 'trend', 'top_paths', 'top_countries', 'top_networks', 'passed', 'passed_bots', 'bot_basis', 'passed_malicious', 'malicious_basis', 'verdict', 'recommendation'],
     (r.effectiveness?.rules ?? []).map((x) => [KIND_LABEL[x.kind], x.ruleId, x.rulesetId, x.source, x.name, x.configured, x.configAction ?? '', x.events, x.byAction, x.challenged, x.solved,
       x.solveRate === null ? '' : x.solveRate.toFixed(3), x.previous ?? '', x.trend === null ? '' : x.trend.toFixed(3),
-      x.topPaths.map((p) => `${p.path} (${p.count})`).join('; '), x.topCountries.map((p) => `${p.country} (${p.count})`).join('; '), x.topAsns.map((p) => `AS${p.asn} ${p.name} (${p.count})`).join('; ')]));
+      x.topPaths.map((p) => `${p.path} (${p.count})`).join('; '), x.topCountries.map((p) => `${p.country} (${p.count})`).join('; '), x.topAsns.map((p) => `AS${p.asn} ${p.name} (${p.count})`).join('; '),
+      x.passthrough?.passed ?? '', x.passthrough?.bots ?? '', x.passthrough?.botBasis ?? '', x.passthrough?.malicious ?? '', x.passthrough?.maliciousBasis ?? '', x.passthrough?.verdict ?? '', x.passthrough?.recommendation.title ?? '']));
   return csv(['severity', 'verdict', 'rule', 'group', 'title', 'attack_class', 'skill_ref', 'description', 'root_cause', 'evidence', 'fix', 'validation', 'fingerprint'],
     r.findings.map((f) => [f.severity, f.verdict, f.ruleId, GROUP_LABEL[f.group], f.title, f.attackClass, f.skillRef, f.description, f.rootCause,
       f.evidence.map((e) => `${e.source} ${e.field} = ${e.value}`).join(' | '), f.fix.join(' | '), f.validation ?? '', f.fingerprint]));
@@ -43,6 +44,16 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   L.push('| Severity | Findings |', '| --- | --- |', ...SEVERITIES.map((v) => `| ${SEVERITY_LABEL[v]} | ${s.bySeverity[v]} |`), '');
   L.push(`${s.byVerdict.confirmed} confirmed, ${s.byVerdict.needs_validation} need validation. Coverage: ${s.rules} rules — ${s.coverage.passed} passed, ${s.coverage.finding} with findings, ${s.coverage.not_applicable} not applicable, ${s.coverage.not_read} not read.`, '');
   if (s.coverage.not_read) L.push(`**${s.coverage.not_read} rules could not be checked** (see the coverage ledger): a clean result does not cover them.`, '');
+  const recs = r.effectiveness?.recommendations ?? [];
+  if (recs.length) {
+    L.push('## Recommended actions', '', 'For every rule that lets traffic through (log, skip, allow, solved challenges), most impact first. Not applied.', '');
+    recs.forEach((x, i) => {
+      L.push(`${i + 1}. **${x.title}** (${KIND_LABEL[x.kind]}: ${x.ruleName}${x.impact ? `; ${x.impact} requests` : ''}${x.fingerprint ? `; evidence \`${x.fingerprint}\`` : ''})`);
+      for (const st of x.steps) L.push(`   - ${st}`);
+      if (x.expression) L.push(`   - Expression: \`${x.expression.replace(/`/g, "'")}\``);
+    });
+    L.push('');
+  }
   L.push('## Findings', '');
   if (!r.findings.length) L.push('No findings in the rules that were read.', '');
   r.findings.forEach((f, i) => {

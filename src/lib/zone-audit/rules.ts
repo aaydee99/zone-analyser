@@ -72,23 +72,23 @@ export interface RuleDef {
   check(c: Ctx): Outcome;
 }
 
-const ev = (source: string, field: string, value: unknown): Evidence => ({ source, field, value: redact(field, value) });
-const setting = (id: string) => `GET /zones/{id}/settings/${id}`;
-const phasePath = (p: string) => `GET /zones/{id}/rulesets/phases/${p}/entrypoint`;
-const valueOf = <T>(c: Ctx, id: string) => (c.v<{ value?: T }>(`setting:${id}` as SourceKey)?.value) as T | undefined;
-const optValue = <T>(c: Ctx, id: string) => (c.opt<{ value?: T }>(`setting:${id}` as SourceKey)?.value) as T | undefined;
-const rulesOf = (c: Ctx, p: string) => c.v<RulesetRule[]>(`phase:${p}` as SourceKey) ?? [];
-const optRules = (c: Ctx, p: string) => c.opt<RulesetRule[]>(`phase:${p}` as SourceKey);
-const active = (r: RulesetRule) => r.enabled !== false;
-const ruleName = (r: RulesetRule) => r.description?.trim() || r.ref || r.id || '(unnamed rule)';
-const ap = (r: RulesetRule) => (r.action_parameters ?? {}) as Record<string, unknown>;
-const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
-const lower = (s: string) => s.trim().toLowerCase().replace(/\.$/, '');
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const proxiedWeb = (recs: DnsRec[]) => recs.filter((r) => (r.type === 'A' || r.type === 'AAAA' || r.type === 'CNAME') && r.proxied);
+export const ev = (source: string, field: string, value: unknown): Evidence => ({ source, field, value: redact(field, value) });
+export const setting = (id: string) => `GET /zones/{id}/settings/${id}`;
+export const phasePath = (p: string) => `GET /zones/{id}/rulesets/phases/${p}/entrypoint`;
+export const valueOf = <T>(c: Ctx, id: string) => (c.v<{ value?: T }>(`setting:${id}` as SourceKey)?.value) as T | undefined;
+export const optValue = <T>(c: Ctx, id: string) => (c.opt<{ value?: T }>(`setting:${id}` as SourceKey)?.value) as T | undefined;
+export const rulesOf = (c: Ctx, p: string) => c.v<RulesetRule[]>(`phase:${p}` as SourceKey) ?? [];
+export const optRules = (c: Ctx, p: string) => c.opt<RulesetRule[]>(`phase:${p}` as SourceKey);
+export const active = (r: RulesetRule) => r.enabled !== false;
+export const ruleName = (r: RulesetRule) => r.description?.trim() || r.ref || r.id || '(unnamed rule)';
+export const ap = (r: RulesetRule) => (r.action_parameters ?? {}) as Record<string, unknown>;
+export const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
+export const lower = (s: string) => s.trim().toLowerCase().replace(/\.$/, '');
+export const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+export const proxiedWeb = (recs: DnsRec[]) => recs.filter((r) => (r.type === 'A' || r.type === 'AAAA' || r.type === 'CNAME') && r.proxied);
 const daysBetween = (a: string, b: string) => Math.floor((Date.parse(a) - Date.parse(b)) / 86_400_000);
 /** Cut a list of drafts to PER_RULE_MAX, adding one that counts the rest. */
-function capped(list: Draft[], more: (n: number) => Draft): Draft[] {
+export function capped(list: Draft[], more: (n: number) => Draft): Draft[] {
   return list.length > PER_RULE_MAX ? [...list.slice(0, PER_RULE_MAX), more(list.length - PER_RULE_MAX)] : list;
 }
 
@@ -389,12 +389,12 @@ const EMAIL: RuleDef[] = [
 
 // ── WAF and application rules ───────────────────────────────────────────────
 
-const executes = (rules: RulesetRule[], id: string) => rules.filter((r) => r.action === 'execute' && ap(r).id === id);
-const PAID = ['pro', 'business', 'enterprise'];
+export const executes = (rules: RulesetRule[], id: string) => rules.filter((r) => r.action === 'execute' && ap(r).id === id);
+export const PAID = ['pro', 'business', 'enterprise'];
 
 const WAF: RuleDef[] = [
   {
-    id: 'waf.managed_ruleset', title: 'Cloudflare Managed Ruleset', group: 'waf', attackClass: 'Injection', skillRef: ATTACK,
+    id: 'waf.managed_ruleset', title: 'Cloudflare Managed Ruleset', group: 'managed', attackClass: 'Injection', skillRef: ATTACK,
     needs: ['phase:http_request_firewall_managed', 'zone'], plans: PAID, passed: 'The Cloudflare Managed Ruleset is deployed and enabled.',
     check: (c) => {
       const rules = rulesOf(c, 'http_request_firewall_managed');
@@ -411,7 +411,7 @@ const WAF: RuleDef[] = [
     },
   },
   {
-    id: 'waf.owasp', title: 'OWASP Core Ruleset', group: 'waf', attackClass: 'Injection', skillRef: ATTACK,
+    id: 'waf.owasp', title: 'OWASP Core Ruleset', group: 'managed', attackClass: 'Injection', skillRef: ATTACK,
     needs: ['phase:http_request_firewall_managed', 'zone'], plans: PAID, passed: 'The OWASP Core Ruleset is deployed and blocks.',
     check: (c) => {
       const dep = executes(rulesOf(c, 'http_request_firewall_managed'), OWASP_RULESET).filter(active);
@@ -485,7 +485,7 @@ const WAF: RuleDef[] = [
       intendedBehavior: 'On, with a skip rule for API clients that legitimately send unusual headers.', evidence: [ev(setting('browser_check'), 'value', 'off')], fix: ['Security › Settings › Browser integrity check: turn on.'] }],
   },
   {
-    id: 'waf.bot_fight', title: 'Bot Fight Mode / Super Bot Fight Mode', group: 'waf', attackClass: 'Pre-authentication work imbalance', skillRef: RES,
+    id: 'waf.bot_fight', title: 'Bot Fight Mode / Super Bot Fight Mode', group: 'bots', attackClass: 'Pre-authentication work imbalance', skillRef: RES,
     needs: ['bot', 'zone'], plans: ['free', 'pro', 'business'], passed: 'Automated traffic is challenged or blocked.',
     check: (c) => {
       const b = c.v<BotConfig>('bot') ?? {};

@@ -14,7 +14,7 @@ const OWASP = '4814384a9e5d4991b9815dcfc25d2f1f';
 const NOW = '2026-11-01T00:00:00.000Z';
 const days = (n: number) => new Date(Date.parse(NOW) + n * 86_400_000).toISOString();
 const ok = <T>(value: T): Got<T> => ({ state: 'ok', value });
-const evData = (o: Partial<EventData> = {}): EventData => ({ since: days(-7), until: NOW, rules: [], paths: [], countries: [], asns: [], ips: [], uas: [], notes: [], ...o });
+const evData = (o: Partial<EventData> = {}): EventData => ({ since: days(-7), until: NOW, rules: [], paths: [], countries: [], asns: [], ips: [], uas: [], statuses: null, hours: null, bots: null, attacks: null, notes: [], ...o });
 const rqData = (o: Partial<RequestData> = {}): RequestData => ({ since: days(-7), until: NOW, paths: [], asns: [], notes: [], ...o });
 
 /** A zone where every rule passes. `edit` changes the reads before the snapshot is used. */
@@ -24,9 +24,14 @@ function snap(edit: (r: Record<string, unknown>) => void = () => {}, plan = 'bus
     'setting:ssl': { value: 'strict' }, 'setting:min_tls_version': { value: '1.2' }, 'setting:tls_1_3': { value: 'on' }, 'setting:always_use_https': { value: 'on' },
     'setting:automatic_https_rewrites': { value: 'on' }, 'setting:security_header': { value: { strict_transport_security: { enabled: true, max_age: 31_536_000, include_subdomains: true, nosniff: true, preload: false } } },
     'setting:security_level': { value: 'medium' }, 'setting:browser_check': { value: 'on' }, 'setting:development_mode': { value: 'off' }, 'setting:true_client_ip_header': { value: 'off' }, 'setting:cache_level': { value: 'aggressive' },
+    'setting:0rtt': { value: 'off' }, 'setting:opportunistic_encryption': { value: 'on' }, 'setting:email_obfuscation': { value: 'on' }, 'setting:hotlink_protection': { value: 'on' },
+    'setting:server_side_exclude': { value: 'on' }, 'setting:challenge_ttl': { value: 1800 }, 'setting:websockets': { value: 'off' }, 'setting:ip_geolocation': { value: 'on' }, 'setting:ssl_automatic_mode': { value: 'custom' },
+    'phase:http_response_firewall_managed': [], 'phase:http_config_settings': [],
+    access_rules: [], account_access_rules: [], lockdowns: [], ua_rules: [], universal_ssl: { enabled: true }, leaked_credentials: { enabled: true },
+    schema_validation: { validation_default_mitigation_action: 'none' }, api_operations: { total: 0 },
     'phase:http_request_firewall_custom': [],
     'phase:http_request_firewall_managed': [{ id: 'm-dep', action: 'execute', expression: 'true', action_parameters: { id: CF_MANAGED } }, { id: 'o-dep', action: 'execute', expression: 'true', action_parameters: { id: OWASP } }],
-    'phase:http_ratelimit': [{ id: 'rl1', description: 'Login', action: 'block', expression: '(http.request.uri.path eq "/login")', action_parameters: { ratelimit: { period: 60, requests_per_period: 5 } } }],
+    'phase:http_ratelimit': [{ id: 'rl1', description: 'Login', action: 'block', expression: '(http.request.uri.path eq "/login")', ratelimit: { characteristics: ['cf.colo.id', 'ip.src', 'http.request.headers["x-session"]'], period: 60, requests_per_period: 5, mitigation_timeout: 600 } }],
     'phase:ddos_l7': [], 'phase:http_request_cache_settings': [], 'phase:http_request_origin': [],
     'phase:http_response_headers_transform': [{ id: 'h1', action: 'rewrite', expression: 'true', action_parameters: { headers: { 'Content-Security-Policy': { operation: 'set', value: "default-src 'self'" } } } }],
     dns: [
@@ -38,7 +43,7 @@ function snap(edit: (r: Record<string, unknown>) => void = () => {}, plan = 'bus
     ],
     dnssec: { status: 'active' },
     certificates: [{ id: 'p1', type: 'universal', status: 'active', hosts: ['example.test', '*.example.test'], certificates: [{ expires_on: days(60) }] }],
-    aop: { enabled: true }, bot: { sbfm_definitely_automated: 'block', fight_mode: true }, page_shield: { enabled: true }, page_rules: [], worker_routes: [],
+    aop: { enabled: true }, bot: { sbfm_definitely_automated: 'block', sbfm_likely_automated: 'managed_challenge', enable_js: true, fight_mode: true, ai_bots_protection: 'block' }, page_shield: { enabled: true }, page_rules: [], worker_routes: [],
     managed_headers: { managed_response_headers: [{ id: 'add_security_headers', enabled: true }] },
     cname_lookups: { answers: {}, skipped: 0 },
     events: evData({ rules: [{ ruleId: 'rl1', rulesetId: 'rs-rl', source: 'ratelimit', action: 'block', description: 'Login', count: 50 }] }),
@@ -73,10 +78,13 @@ const state = (id: string, s: Snapshot) => result(s, id).cov.state;
 const set = (k: string, value: unknown) => (r: Record<string, unknown>) => { r[k] = value; };
 const setting = (id: string, value: unknown) => set(`setting:${id}`, { value });
 
+/** Rules a Business zone does not get (Free-only, Enterprise-only). */
+const PLAN_GATED = ['managed.free_ruleset', 'managed.sensitive_data', 'bots.bm_rules'];
+
 test('the clean zone passes every rule', () => {
   const { findings, coverage } = runRules(snap(), ALL_RULES);
   assert.deepEqual(findings.map((f) => f.title), []);
-  assert.deepEqual(coverage.filter((c) => c.state !== 'passed').map((c) => `${c.ruleId}: ${c.state} ${c.reason}`), []);
+  assert.deepEqual(coverage.filter((c) => c.state !== 'passed' && !(PLAN_GATED.includes(c.ruleId) && c.state === 'not_applicable')).map((c) => `${c.ruleId}: ${c.state} ${c.reason}`), []);
   assert.equal(coverage.length, ALL_RULES.length);
   assert.equal(new Set(ALL_RULES.map((r) => r.id)).size, ALL_RULES.length, 'rule ids are unique');
 });
@@ -257,31 +265,16 @@ test('traffic.zero_hits and traffic.ratelimit_unused', () => {
   assert.equal(result(day, 'traffic.zero_hits').findings[0].verdict, 'needs_validation', 'a day of sampled events proves less');
   fails('traffic.ratelimit_unused', snap((r) => { events({ rules: [] })(r); r.requests = rqData({ paths: [{ host: 'example.test', path: '/login', status: 200, count: 20_000 }] }); }), 'needs_validation', 'low');
 });
-test('traffic.log_should_act', () => {
-  fails('traffic.log_should_act', snap((r) => {
-    custom({ id: 'c1', description: 'Watch scanners', action: 'log', expression: '(http.request.uri.path contains "/wp-")' })(r);
-    events({ rules: [rl, { ruleId: 'c1', rulesetId: 'rs-c', source: 'firewallCustom', action: 'log', description: 'Watch scanners', count: 200 }],
-      asns: [{ ruleId: 'c1', source: 'firewallCustom', action: 'log', asn: '16509', name: 'AMAZON-02', count: 200 }], uas: [{ ruleId: 'c1', source: 'firewallCustom', ua: 'python-requests/2.31', count: 200 }] })(r);
-  }), 'needs_validation', 'medium');
-});
 test('traffic.false_positive reuses the WAF false-positive score and draft', () => {
   const ips = Array.from({ length: 60 }, (_, i) => ({ ruleId: 'c2', source: 'firewallCustom', action: 'managed_challenge', ip: `198.51.100.${i + 1}`, count: 5 }));
   const asns = Array.from({ length: 10 }, (_, i) => ({ ruleId: 'c2', source: 'firewallCustom', action: 'managed_challenge', asn: String(64500 + i), name: `Example Broadband ${i}`, count: 30 }));
   const f = fails('traffic.false_positive', snap((r) => {
     custom({ id: 'c2', description: 'Challenge checkout', action: 'managed_challenge', expression: '(http.request.uri.path eq "/checkout")' })(r);
     events({ rules: [rl, { ruleId: 'c2', rulesetId: 'rs-c', source: 'firewallCustom', action: 'managed_challenge', description: 'Challenge checkout', count: 300 }, { ruleId: 'c2', rulesetId: 'rs-c', source: 'firewallCustom', action: 'challenge_solved', description: 'Challenge checkout', count: 200 }],
-      ips, asns, uas: [{ ruleId: 'c2', source: 'firewallCustom', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', count: 300 }],
+      ips, asns, uas: [{ ruleId: 'c2', source: 'firewallCustom', action: 'managed_challenge', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', count: 300 }],
       paths: [{ ruleId: 'c2', source: 'firewallCustom', action: 'managed_challenge', host: 'example.test', path: '/checkout', count: 300 }] })(r);
   }), 'needs_validation', 'medium');
   assert.ok(f[0].fix.some((x) => x.includes('http.request.uri.path eq "/checkout"')), f[0].fix.join('\n'));
-});
-test('traffic.skip_broad', () => {
-  const ips = Array.from({ length: 10 }, (_, i) => `203.0.113.${i + 1}`);
-  fails('traffic.skip_broad', snap((r) => {
-    custom({ id: 's1', description: 'Skip partner', action: 'skip', expression: '(http.request.uri.path eq "/hook")', action_parameters: { ruleset: 'current' } })(r);
-    events({ rules: [rl, { ruleId: 's1', rulesetId: 'rs-c', source: 'firewallCustom', action: 'skip', description: 'Skip partner', count: 200 }],
-      ips: [...ips.map((ip) => ({ ruleId: 's1', source: 'firewallCustom', action: 'skip', ip, count: 20 })), ...ips.map((ip) => ({ ruleId: 'm9', source: 'firewallManaged', action: 'block', ip, count: 3 }))] })(r);
-  }), 'needs_validation', 'medium');
 });
 test('traffic.managed_log', () => {
   fails('traffic.managed_log', snap(events({ rules: [rl, { ruleId: 'm1', rulesetId: CF_MANAGED, source: 'firewallManaged', action: 'log', description: 'SQLi', count: 150 }] })), 'confirmed', 'medium');
@@ -330,4 +323,185 @@ test('renderers: findings.json, REPORT.md and CSV', () => {
   const csv = auditCsv({ ...r, findings: [{ ...r.findings[0], title: '=HYPERLINK("x")' }] }, 'findings');
   assert.match(csv, /'=HYPERLINK/);
   assert.equal(auditCsv(r, 'coverage').trim().split('\r\n').length, ALL_RULES.length + 1);
+});
+
+// ── Managed rules in depth ──
+const FREE = '77454fe2d30c4220b5701f6fdfb893ba', ECC = 'c2e184081120413c86c3ab7e14069605', SDD = 'e22d83c647c64a3eae91b71b499d988e', ANOMALY = '6179ae15870a4bb7b2d480d4843b323c';
+const managed = (...rules: object[]) => set('phase:http_request_firewall_managed', rules);
+const cfDep = (o: object = {}) => ({ id: 'm-dep', action: 'execute', expression: 'true', action_parameters: { id: CF_MANAGED, ...o } });
+const owDep = (o: object = {}) => ({ id: 'o-dep', action: 'execute', expression: 'true', action_parameters: { id: OWASP, ...o } });
+test('managed.cf_overrides', () => {
+  fails('managed.cf_overrides', snap(managed(cfDep({ overrides: { action: 'log' } }), owDep())), 'confirmed', 'high');
+  fails('managed.cf_overrides', snap(managed(cfDep({ overrides: { categories: [{ category: 'wordpress', enabled: false }], rules: [{ id: 'r1', action: 'log' }] } }), owDep())), 'confirmed', 'medium');
+  fails('managed.cf_overrides', snap(managed({ ...cfDep(), expression: '(http.host eq "a.example.test" and http.request.uri.path eq "/x")' }, owDep())), 'needs_validation', 'medium');
+  assert.equal(state('managed.cf_overrides', snap(managed(owDep()))), 'not_applicable');
+});
+test('managed.owasp_tuning', () => {
+  const pl1 = [{ category: 'paranoia-level-2', enabled: false }, { category: 'paranoia-level-3', enabled: false }, { category: 'paranoia-level-4', enabled: false }];
+  fails('managed.owasp_tuning', snap(managed(cfDep(), owDep({ overrides: { categories: pl1, rules: [{ id: ANOMALY, score_threshold: 60 }] } }))), 'confirmed', 'medium');
+  fails('managed.owasp_tuning', snap(managed(cfDep(), owDep({ overrides: { categories: [{ category: 'paranoia-level-4', enabled: false }], rules: [{ id: ANOMALY, score_threshold: 60 }] } }))), 'confirmed', 'low');
+  fails('managed.owasp_tuning', snap(managed(cfDep(), owDep({ overrides: { categories: [{ category: 'language-php', enabled: false }] } }))), 'confirmed', 'low');
+  assert.equal(state('managed.owasp_tuning', snap(managed(cfDep(), owDep({ overrides: { rules: [{ id: ANOMALY, score_threshold: 25 }] } })))), 'passed');
+});
+test('managed.free_ruleset (Free plan only)', () => {
+  fails('managed.free_ruleset', snap(managed(), 'free'), 'needs_validation', 'medium');
+  fails('managed.free_ruleset', snap(managed({ action: 'execute', enabled: false, action_parameters: { id: FREE } }), 'free'), 'confirmed', 'medium');
+  assert.equal(state('managed.free_ruleset', snap(managed({ action: 'execute', action_parameters: { id: FREE } }), 'free')), 'passed');
+});
+test('managed.leaked_credentials', () => {
+  fails('managed.leaked_credentials', snap((r) => { r.leaked_credentials = { enabled: false }; r.requests = rqData({ paths: [{ host: 'example.test', path: '/login', status: 200, count: 500 }] }); }), 'needs_validation', 'medium');
+  fails('managed.leaked_credentials', snap(set('leaked_credentials', { enabled: false })), 'needs_validation', 'info');
+  assert.equal(state('managed.leaked_credentials', snap((r) => { r.leaked_credentials = { enabled: false }; managed(cfDep(), owDep(), { action: 'execute', action_parameters: { id: ECC } })(r); })), 'passed', 'the (deprecated) Exposed Credentials Check counts');
+});
+test('managed.sensitive_data (Enterprise only)', () => {
+  fails('managed.sensitive_data', snap(set('bot', {}), 'enterprise'), 'needs_validation', 'info');
+  assert.equal(state('managed.sensitive_data', snap(set('phase:http_response_firewall_managed', [{ action: 'execute', action_parameters: { id: SDD } }]), 'enterprise')), 'passed');
+  assert.equal(state('managed.sensitive_data', snap()), 'not_applicable');
+});
+test('managed.exceptions', () => {
+  const skip = (o: object) => ({ id: 'x1', description: 'Exception', action: 'skip', ...o });
+  fails('managed.exceptions', snap(managed(skip({ expression: 'true', action_parameters: { ruleset: 'current' } }), cfDep(), owDep())), 'confirmed', 'high');
+  fails('managed.exceptions', snap(managed(skip({ expression: '(http.request.uri.path eq "/upload")', action_parameters: { rulesets: [CF_MANAGED] } }), cfDep(), owDep())), 'confirmed', 'medium');
+  fails('managed.exceptions', snap(managed(skip({ expression: '(http.request.uri.path eq "/upload")', action_parameters: { rules: { [CF_MANAGED]: Array.from({ length: 12 }, (_, i) => `r${i}`) } } }), cfDep(), owDep())), 'confirmed', 'low');
+  fails('managed.exceptions', snap(managed(cfDep(), owDep(), skip({ expression: '(http.request.uri.path eq "/upload")', action_parameters: { rules: { [CF_MANAGED]: ['r1'] } } }))), 'confirmed', 'info');
+  assert.equal(state('managed.exceptions', snap(managed(skip({ expression: '(http.request.uri.path eq "/upload")', action_parameters: { rules: { [CF_MANAGED]: ['r1'] } } }), cfDep(), owDep()))), 'passed');
+});
+test('managed.all_disabled', () => {
+  fails('managed.all_disabled', snap(managed(cfDep(), owDep(), { action: 'execute', enabled: false, action_parameters: { id: ECC } })), 'confirmed', 'medium');
+});
+
+// ── Rules that switch security off ──
+const allow = (o: object) => ({ id: 'a1', mode: 'whitelist', notes: 'test', ...o });
+test('bypass.ip_access_allow and bypass.account_ip_access_allow', () => {
+  fails('bypass.ip_access_allow', snap(set('access_rules', [allow({ configuration: { target: 'country', value: 'NL' } })])), 'confirmed', 'high');
+  fails('bypass.ip_access_allow', snap(set('access_rules', [allow({ configuration: { target: 'ip_range', value: '198.51.0.0/16' } })])), 'confirmed', 'high');
+  assert.equal(state('bypass.ip_access_allow', snap(set('access_rules', [allow({ configuration: { target: 'ip', value: '192.0.2.1' } }), allow({ id: 'a2', configuration: { target: 'country', value: 'NL' }, paused: true })]))), 'passed');
+  fails('bypass.ip_access_allow', snap(set('access_rules', Array.from({ length: 500 }, (_, i) => ({ id: `b${i}`, mode: 'block', configuration: { target: 'ip', value: `198.51.100.${i % 250}` } })))), 'confirmed', 'info');
+  fails('bypass.account_ip_access_allow', snap(set('account_access_rules', [allow({ configuration: { target: 'asn', value: 'AS64500' } })])), 'confirmed', 'high');
+});
+test('bypass.config_rules and bypass.page_rules', () => {
+  fails('bypass.config_rules', snap(set('phase:http_config_settings', [{ id: 'cfg1', action: 'set_config', expression: 'starts_with(http.request.uri.path, "/api")', action_parameters: { security_level: 'essentially_off' } }])), 'confirmed', 'high');
+  fails('bypass.config_rules', snap(set('phase:http_config_settings', [{ id: 'cfg1', action: 'set_config', expression: 'true', action_parameters: { bic: false } }])), 'confirmed', 'medium');
+  assert.equal(state('bypass.config_rules', snap(set('phase:http_config_settings', [{ id: 'cfg1', action: 'set_config', expression: 'true', action_parameters: { rocket_loader: false } }]))), 'passed');
+  fails('bypass.page_rules', snap(set('page_rules', [{ id: 'pr1', status: 'active', targets: [{ constraint: { value: 'example.test/*' } }], actions: [{ id: 'disable_security' }] }])), 'confirmed', 'high');
+  fails('bypass.page_rules', snap(set('page_rules', [{ id: 'pr1', status: 'active', targets: [{ constraint: { value: 'example.test/x/*' } }], actions: [{ id: 'browser_check', value: 'off' }] }])), 'confirmed', 'medium');
+});
+test('bypass.lockdowns, bypass.ua_rules, waf.custom_log_only', () => {
+  fails('bypass.lockdowns', snap(set('lockdowns', [{ id: 'l1', paused: true, description: 'Admin', urls: ['example.test/admin/*'] }])), 'confirmed', 'low');
+  assert.equal(state('bypass.lockdowns', snap(set('lockdowns', { state: 'absent', reason: 'not on this plan' }))), 'not_applicable');
+  fails('bypass.ua_rules', snap(set('ua_rules', [{ id: 'u1', paused: true, mode: 'block' }])), 'confirmed', 'info');
+  fails('waf.custom_log_only', snap(custom({ id: 'c1', action: 'log', expression: '(http.request.uri.path eq "/x")' })), 'confirmed', 'info');
+});
+
+// ── Bots, rate limiting, settings, API ──
+test('bots rules', () => {
+  fails('bots.sbfm_config', snap(set('bot', { sbfm_definitely_automated: 'block', sbfm_likely_automated: 'allow', enable_js: true })), 'confirmed', 'low');
+  fails('bots.sbfm_config', snap(set('bot', { sbfm_definitely_automated: 'block', sbfm_likely_automated: 'block', enable_js: true, sbfm_verified_bots: 'block' })), 'confirmed', 'info');
+  const bm = { using_latest_model: true, enable_js: true };
+  fails('bots.bm_rules', snap(set('bot', bm), 'enterprise'), 'needs_validation', 'medium');
+  fails('bots.bm_rules', snap((r) => { r.bot = bm; custom({ id: 'b1', action: 'block', expression: '(cf.bot_management.score lt 2)' })(r); }, 'enterprise'), 'needs_validation', 'low');
+  assert.equal(state('bots.bm_rules', snap((r) => { r.bot = bm; custom({ id: 'b1', action: 'managed_challenge', expression: '(cf.bot_management.score lt 30)' })(r); }, 'enterprise')), 'passed');
+  assert.equal(state('bots.bm_rules', snap(set('bot', { sbfm_definitely_automated: 'block' }), 'enterprise')), 'not_applicable', 'no Bot Management, no scores');
+  fails('bots.ai_bots', snap(set('bot', { sbfm_definitely_automated: 'block', sbfm_likely_automated: 'block', enable_js: true, ai_bots_protection: 'disabled' })), 'confirmed', 'info');
+});
+test('avail.ratelimit_depth', () => {
+  const rlRule = (o: object) => set('phase:http_ratelimit', [{ id: 'rl1', description: 'Login', action: 'block', expression: '(http.request.uri.path eq "/login")', ratelimit: { characteristics: ['cf.colo.id', 'ip.src', 'http.request.headers["x-session"]'], period: 60, requests_per_period: 5, mitigation_timeout: 600 }, ...o }]);
+  fails('avail.ratelimit_depth', snap(rlRule({ action: 'log' })), 'confirmed', 'medium');
+  fails('avail.ratelimit_depth', snap(rlRule({ ratelimit: { characteristics: ['cf.colo.id', 'ip.src'], period: 60, requests_per_period: 5, mitigation_timeout: 600 } })), 'needs_validation', 'low');
+  fails('avail.ratelimit_depth', snap(rlRule({ ratelimit: { characteristics: ['cf.colo.id', 'ip.src', 'cf.unique_visitor_id'], period: 10, requests_per_period: 5, mitigation_timeout: 10 } })), 'confirmed', 'low');
+  fails('avail.ratelimit_depth', snap(rlRule({ enabled: false })), 'confirmed', 'info');
+});
+test('the remaining settings', () => {
+  fails('tls.0rtt', snap(setting('0rtt', 'on')), 'needs_validation', 'low');
+  fails('tls.opportunistic_encryption', snap(setting('opportunistic_encryption', 'off')), 'confirmed', 'info');
+  fails('client.email_obfuscation', snap(setting('email_obfuscation', 'off')), 'confirmed', 'info');
+  fails('client.hotlink_protection', snap(setting('hotlink_protection', 'off')), 'confirmed', 'info');
+  fails('client.server_side_exclude', snap(setting('server_side_exclude', 'off')), 'confirmed', 'info');
+  fails('waf.challenge_ttl', snap(setting('challenge_ttl', 31_536_000)), 'confirmed', 'low');
+  fails('edge.websockets', snap(setting('websockets', 'on')), 'needs_validation', 'info');
+  fails('waf.ip_geolocation', snap(setting('ip_geolocation', 'off')), 'confirmed', 'info');
+  fails('tls.automatic_mode', snap(setting('ssl_automatic_mode', 'auto')), 'confirmed', 'info');
+  fails('tls.universal_ssl', snap(set('universal_ssl', { enabled: false })), 'confirmed', 'high');
+  assert.equal(state('tls.universal_ssl', snap((r) => { r.universal_ssl = { enabled: false }; r.certificates = [{ id: 'adv', type: 'advanced', status: 'active', hosts: ['example.test'], certificates: [{ expires_on: days(60) }] }]; })), 'passed');
+});
+test('api.shield', () => {
+  const apiTraffic = set('requests', rqData({ paths: [{ host: 'example.test', path: '/api/v1/orders', status: 200, count: 8000 }, { host: 'example.test', path: '/', status: 200, count: 2000 }] }));
+  fails('api.shield', snap(apiTraffic), 'needs_validation', 'info');
+  assert.equal(state('api.shield', snap((r) => { apiTraffic(r); r.api_operations = { total: 12 }; r.schema_validation = { validation_default_mitigation_action: 'block' }; })), 'passed');
+  assert.equal(state('api.shield', snap(set('schema_validation', { state: 'absent', reason: 'API Shield is not on this plan' }))), 'not_applicable');
+});
+
+// ── Traffic it let through ──
+const PY = 'python-requests/2.31', CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const rowOf = (s: Snapshot, ruleId: string) => buildReport(s, { accountId: 'a1', accountName: 'Test', startedAt: NOW, finishedAt: NOW, calls: 0, lookups: 0 }).effectiveness!.rules.find((x) => x.ruleId === ruleId)!;
+const logRule = (count: number, ua: string, asn = { asn: '16509', name: 'AMAZON-02' }) => (r: Record<string, unknown>) => {
+  custom({ id: 'c1', description: 'Watch', action: 'log', expression: '(http.request.uri.path contains "/shop")' })(r);
+  events({ rules: [rl, { ruleId: 'c1', rulesetId: 'rs-c', source: 'firewallCustom', action: 'log', description: 'Watch', count }],
+    asns: [{ ruleId: 'c1', source: 'firewallCustom', action: 'log', ...asn, count }], uas: [{ ruleId: 'c1', source: 'firewallCustom', action: 'log', ua, count }],
+    paths: [{ ruleId: 'c1', source: 'firewallCustom', action: 'log', host: 'example.test', path: '/shop/cart', count }] })(r);
+};
+test('traffic.passthrough: a log rule letting mostly bots through → switch to a challenge (heuristic: needs validation)', () => {
+  const s = snap(logRule(400, PY));
+  const f = fails('traffic.passthrough', s, 'needs_validation', 'medium');
+  assert.match(f[0].title, /400 automated/);
+  const p = rowOf(s, 'c1').passthrough!;
+  assert.equal(p.verdict, 'bots');
+  assert.equal(p.botBasis, 'heuristic');
+  assert.equal(p.recommendation.action, 'block_or_challenge');
+  assert.match(p.recommendation.title, /from Log to Managed Challenge/);
+  assert.equal(p.recommendation.fingerprint, f[0].fingerprint);
+});
+test('traffic.passthrough: a clean log rule → no action', () => {
+  const s = snap(logRule(400, CHROME_UA, { asn: '64500', name: 'Example Broadband' }));
+  assert.equal(state('traffic.passthrough', s), 'passed');
+  const p = rowOf(s, 'c1').passthrough!;
+  assert.equal(p.verdict, 'clean');
+  assert.equal(p.recommendation.action, 'keep');
+});
+test('traffic.passthrough: a small sample → no conclusion', () => {
+  const s = snap(logRule(50, PY));
+  assert.equal(state('traffic.passthrough', s), 'passed');
+  assert.equal(rowOf(s, 'c1').passthrough!.recommendation.action, 'no_conclusion');
+});
+test('traffic.passthrough: a skip rule letting attack-scored traffic through → narrow (scores: confirmed)', () => {
+  const s = snap((r) => {
+    custom({ id: 's1', description: 'Skip partner', action: 'skip', expression: '(http.request.uri.path eq "/hook")', action_parameters: { ruleset: 'current' } })(r);
+    events({ rules: [rl, { ruleId: 's1', rulesetId: 'rs-c', source: 'firewallCustom', action: 'skip', description: 'Skip partner', count: 1000 }],
+      uas: [{ ruleId: 's1', source: 'firewallCustom', action: 'skip', ua: CHROME_UA, count: 1000 }],
+      attacks: [{ ruleId: 's1', source: 'firewallCustom', action: 'skip', score: 9, count: 60 }, { ruleId: 's1', source: 'firewallCustom', action: 'skip', score: 90, count: 940 }] })(r);
+  });
+  fails('traffic.passthrough', s, 'confirmed', 'high');
+  const rec = rowOf(s, 's1').passthrough!.recommendation;
+  assert.equal(rec.action, 'narrow');
+  assert.equal(rec.expression, '((http.request.uri.path eq "/hook")) and not (cf.waf.score lt 21)');
+});
+test('traffic.passthrough: Bot Management scores (Enterprise) vs heuristics', () => {
+  const bm = snap((r) => {
+    logRule(400, CHROME_UA, { asn: '64500', name: 'Example Broadband' })(r);
+    (r.events as EventData).bots = [{ ruleId: 'c1', source: 'firewallCustom', action: 'log', score: 1, verified: '', count: 200 }, { ruleId: 'c1', source: 'firewallCustom', action: 'log', score: 1, verified: 'Search Engine Crawler', count: 50 }, { ruleId: 'c1', source: 'firewallCustom', action: 'log', score: 80, count: 150, verified: '' }];
+  }, 'enterprise');
+  fails('traffic.passthrough', bm, 'confirmed', 'medium');
+  const p = rowOf(bm, 'c1').passthrough!;
+  assert.equal(p.botBasis, 'score');
+  assert.equal(p.bots, 200, 'verified bots are left out');
+});
+test('traffic.passthrough: an IP Access allow rule → replace it; threat paths count as malicious', () => {
+  const s = snap((r) => {
+    r.access_rules = [{ id: 'ar1', mode: 'whitelist', notes: 'Office', configuration: { target: 'ip', value: '203.0.113.5' } }];
+    events({ rules: [rl, { ruleId: 'ar1', rulesetId: '', source: 'ip', action: 'allow', description: '', count: 300 }],
+      paths: [{ ruleId: 'ar1', source: 'ip', action: 'allow', host: 'example.test', path: '/wp-login.php', count: 40 }, { ruleId: 'ar1', source: 'ip', action: 'allow', host: 'example.test', path: '/', count: 260 }],
+      uas: [{ ruleId: 'ar1', source: 'ip', action: 'allow', ua: CHROME_UA, count: 300 }] })(r);
+  });
+  const f = fails('traffic.passthrough', s, 'needs_validation', 'high');
+  assert.match(f[0].title, /IP Access rule “IP Access: Office”/);
+  const rec = rowOf(s, 'ar1').passthrough!.recommendation;
+  assert.equal(rec.action, 'replace_allow');
+  assert.match(rec.expression ?? '', /\/wp-login\.php/);
+});
+test('traffic.passthrough: at most 25 rules are analysed, the rest are listed', () => {
+  const s = snap(events({ rules: [rl, ...Array.from({ length: 30 }, (_, i) => ({ ruleId: `l${i}`, rulesetId: 'rs-c', source: 'firewallCustom', action: 'log', description: `Log ${i}`, count: 100 + i }))] }));
+  const e = buildReport(s, { accountId: 'a1', accountName: 'Test', startedAt: NOW, finishedAt: NOW, calls: 0, lookups: 0 }).effectiveness!;
+  assert.equal(e.recommendations.length, 25);
+  assert.equal(e.notAnalysed.length, 5);
+  assert.deepEqual(e.notAnalysed.map((x) => x.passed).sort(), [100, 101, 102, 103, 104]);
 });

@@ -7,7 +7,7 @@ import { fmtDate } from '@/lib/client';
 import { windowLabel, type AuditView } from '@/lib/zone-audit/types';
 import { Alert, Button, ButtonLink, Loading, PageHeader, SkeletonTable } from '@/components/ui';
 import { useSnapshot } from '../../monitoring/use-run';
-import { AuditState, Coverage, EffectivenessTable, Findings, Method, Summary } from '../audit-view';
+import { AuditState, Coverage, EffectivenessTable, Findings, Method, RecommendedActions, Summary } from '../audit-view';
 
 interface View { audit: AuditView & { hours: number; error: string | null }; generatedAt: string }
 
@@ -30,7 +30,7 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
     <div className="space-y-6">
       <Link href="/console/security-audit" className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink"><ArrowLeft className="size-3.5" />Security audit</Link>
       <PageHeader eyebrow="Security audit" title={a?.zoneName || a?.zoneId || 'Audit'}
-        description={a ? <>Started {fmtDate(a.startedAt)}{a.startedBy ? ` by ${a.startedBy}` : ''} · traffic window {windowLabel(r?.effectiveness?.hours || a.hours)}{r?.zone.plan ? ` · ${r.zone.plan} plan` : ''}</> : undefined}
+        description={a ? <>Started {fmtDate(a.startedAt)}{a.startedBy ? ` by ${a.startedBy}` : ''} · traffic window {windowLabel(r?.effectiveness?.hours || a.hours)}{r?.zone.plan ? ` · ${r.zone.plan} plan` : ''}{r ? ` · ${r.summary.coverage.passed + r.summary.coverage.finding} of ${r.summary.rules} checks read` : ''}</> : undefined}
         actions={<>
           <Button variant="ghost" loading={loading && !!data} onClick={reload} icon={<RefreshCw className="size-4" />}>Refresh</Button>
           {r && <>
@@ -54,6 +54,8 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
         <>
           <p className="text-[13px] text-muted">Read-only: nothing was changed in Cloudflare. <strong className="font-medium text-ink-2">Confirmed</strong> means the zone&apos;s configuration (or the traffic numbers) proves the outcome; <strong className="font-medium text-ink-2">Needs validation</strong> means it depends on something they cannot show, and the finding says how to check.</p>
           <Summary r={r} />
+          <RecommendedActions e={r.effectiveness} />
+          <Findings r={r} section="managed" />
           <Findings r={r} section="config" />
           <EffectivenessTable e={r.effectiveness} note={r.reads.find((x) => x.key === 'events')?.reason} />
           <Findings r={r} section="traffic" />

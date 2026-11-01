@@ -7,23 +7,21 @@
 // "looks malicious" or "looks like a false positive" are patterns, not proof. The false-positive
 // signals and the draft exception are the WAF false-positive finder's (waf-fp-score.ts), reused.
 
-import { draftException, isBrowserUa, isChallenge, isHostingAsn, isSolved, normAction, scoreRule, MIN_EVENTS, PASSIVE_ACTIONS, ruleString, type RuleStats } from '../waf-fp-score';
+import { draftException, isChallenge, isHostingAsn, isSolved, normAction, scoreRule, MIN_EVENTS, PASSIVE_ACTIONS, ruleString, type RuleStats } from '../waf-fp-score';
 import { MANAGED_RULESETS } from '../traffic-types';
 import { literalPaths, pathMatches } from './expr';
+import { analysePassThrough, PASS_MAX, BOT_SHARE, BOT_MIN, MAL_SHARE, MAL_MIN, PASS_MIN } from './passthrough';
 import { CLOUD, RES, type Ctx, type Draft, type RuleDef } from './rules';
 import {
   KIND_LABEL, windowLabel,
-  type Effectiveness, type EventData, type RequestData, type RuleEffect, type RuleKind, type RulesetRule, type Snapshot, type Verdict,
+  PASS_LABEL,
+  type AccessRule, type Effectiveness, type EventData, type RequestData, type RuleEffect, type RuleKind, type RulesetRule, type Snapshot, type Verdict,
 } from './types';
 
 /** Rules shown in the table (most events first; configured rules without events are added after). */
 export const EFFECT_ROWS = 100;
-/** A rule in log mode with at least this many events, mostly from hosting networks and few browsers, should act. */
-export const LOG_MIN = 100, LOG_HOSTING_SHARE = 0.6, LOG_BROWSER_MAX = 0.3;
 /** waf-fp-score's score from which a mitigating rule is reported as a likely false positive. */
 export const FP_SCORE = 50;
-/** A skip rule is too broad when at least this share of what it skipped came from clients other rules mitigated. */
-export const SKIP_MIN = 100, SKIP_OVERLAP = 0.2;
 /** Managed rules mostly in log: share of a managed ruleset's events that were only logged. */
 export const MANAGED_LOG_SHARE = 0.8, MANAGED_LOG_MIN = 100;
 /** A rate limiting rule that never triggered while its paths got this many requests. */
@@ -40,10 +38,16 @@ const kindOf = (source: string): RuleKind => {
   if (s === 'ratelimit') return 'ratelimit';
   if (s.includes('bot')) return 'bot';
   if (s === 'l7ddos') return 'ddos';
+  // IP Access rules log their source as the target type.
+  if (s === 'ip' || s === 'iprange' || s === 'asn' || s === 'country') return 'access';
   return 'other';
 };
 const keyOf = (source: string, rulesetId: string, ruleId: string) => `${source.toLowerCase()}:${rulesetId}:${ruleId}`;
 const mitigating = (a: string) => !PASSIVE_ACTIONS.includes(normAction(a)) && !isSolved(a);
+/** Actions that let the request through (log, skip, allow, a solved challenge). */
+const passes = (a: string) => ['log', 'skip', 'bypass', 'allow', 'whitelist'].includes(normAction(a)) || isSolved(a);
+/** Same impact: the stronger change first. */
+const ORDER: Record<string, number> = { block_or_challenge: 0, narrow: 1, replace_allow: 2, rate_limit: 3, keep: 4, no_conclusion: 5 };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const n = new Intl.NumberFormat('en-US');
 const top = <T extends { count: number }>(xs: T[], k = 5) => [...xs].sort((a, b) => b.count - a.count).slice(0, k);
@@ -126,7 +130,7 @@ export function effectivenessOf(s: Snapshot) {
       events, byAction: st.actions, challenged, solved, solveRate: challenged >= MIN_EVENTS ? solved / challenged : null,
       topPaths: pathsActed ? top([...pathsActed].map(([path, count]) => ({ path, count }))) : top(mergePaths(st.paths)),
       topCountries: top([...(countries.get(k) ?? new Map<string, number>())].map(([country, count]) => ({ country, count }))),
-      topAsns: top(mergeAsns(st.asns)), previous, trend: previous ? (events - previous) / previous : null,
+      topAsns: top(mergeAsns(st.asns)), passthrough: null, previous, trend: previous ? (events - previous) / previous : null,
     });
   }
   rows.sort((a, b) => b.events - a.events || a.key.localeCompare(b.key));
@@ -136,11 +140,32 @@ export function effectivenessOf(s: Snapshot) {
     if (!c.rule.id || rows.some((r) => r.ruleId === c.rule.id)) continue;
     shown.push({ key: `config:${c.rule.id}`, kind: c.phase === 'http_ratelimit' ? 'ratelimit' : 'custom', source: c.phase === 'http_ratelimit' ? 'ratelimit' : 'firewallCustom', ruleId: c.rule.id, rulesetId: '',
       name: c.rule.description?.trim() || c.rule.id, configured: true, configAction: c.rule.action ?? null, enabled: c.rule.enabled !== false, events: 0, byAction: {}, challenged: 0, solved: 0, solveRate: null,
-      topPaths: [], topCountries: [], topAsns: [], previous: prev ? 0 : null, trend: null });
+      topPaths: [], topCountries: [], topAsns: [], passthrough: null, previous: prev ? 0 : null, trend: null });
   }
+  // What the rules that let traffic through let through: the PASS_MAX that passed the most.
+  const access = new Map<string, AccessRule>();
+  for (const k of ['access_rules', 'account_access_rules'] as const) { const a = s.reads[k]; if (a?.state === 'ok') for (const x of a.value as AccessRule[]) access.set(x.id, x); }
+  const passedOf = (r: RuleEffect) => Object.entries(r.byAction).filter(([a]) => passes(a)).reduce((t, [, v]) => t + v, 0);
+  const passing = rows.filter((r) => passedOf(r) > 0).sort((a, b) => passedOf(b) - passedOf(a) || a.key.localeCompare(b.key));
+  const recommendations: Effectiveness['recommendations'] = [];
+  for (const r of passing.slice(0, PASS_MAX)) {
+    const a = r.kind === 'access' ? access.get(r.ruleId) : undefined;
+    if (a?.notes && r.name === r.ruleId) r.name = `IP Access: ${a.notes}`;
+    r.passthrough = analysePassThrough(d, {
+      key: r.key, source: r.source, ruleId: r.ruleId, name: r.name, kind: r.kind, actions: r.byAction,
+      expression: confBy.get(r.ruleId)?.rule.expression, allowTarget: a?.configuration ? `${a.configuration.target} ${a.configuration.value}` : undefined,
+    }, `zone:${s.zoneId}:traffic.passthrough:${r.key}`);
+    if (r.passthrough) recommendations.push({ ...r.passthrough.recommendation, ruleKey: r.key, ruleName: r.name, kind: r.kind });
+    if (!shown.includes(r)) shown.push(r);
+  }
+  recommendations.sort((a, b) => b.impact - a.impact || ORDER[a.action] - ORDER[b.action] || a.ruleName.localeCompare(b.ruleName));
   const eff: Effectiveness = {
     hours: s.hours ?? 0, askedHours: s.askedHours ?? s.hours ?? 0, since: d.since, until: d.until, previousSince: prev?.since ?? null,
-    totalEvents: rows.reduce((a, r) => a + r.events, 0), rules: shown, notes: [...d.notes, ...(prev ? [] : ['The window before could not be read (older than the plan keeps, or refused): no trend.'])],
+    totalEvents: rows.reduce((a, r) => a + r.events, 0), rules: shown, recommendations,
+    notAnalysed: passing.slice(PASS_MAX).map((r) => ({ ruleKey: r.key, ruleName: r.name, passed: passedOf(r), reason: `Only the ${PASS_MAX} rules that let the most traffic through are analysed per audit` })),
+    notes: [...d.notes, ...(prev ? [] : ['The window before could not be read (older than the plan keeps, or refused): no trend.']),
+      ...(d.bots ? [] : ['Bot scores are not offered on this plan: bot shares come from user agents (a heuristic).']),
+      ...(d.attacks ? [] : ['WAF attack scores are not offered on this plan: malicious shares come from threat-like paths and clients other rules stopped (a heuristic).'])],
   };
   const out = { eff, stats };
   cache.set(s, out);
@@ -163,7 +188,6 @@ const evSrc = 'GraphQL firewallEventsAdaptiveGroups';
 const rqSrc = 'GraphQL httpRequestsAdaptiveGroups';
 const ev = (source: string, field: string, value: string | number) => ({ source, field, value: String(value) });
 const eff = (c: Ctx) => effectivenessOf(c.s)!;
-const shareOf = <X extends { count: number }>(xs: X[], pred: (x: X) => boolean) => { const t = xs.reduce((a, x) => a + x.count, 0); return t ? xs.filter(pred).reduce((a, x) => a + x.count, 0) / t : 0; };
 const reqs = (c: Ctx) => c.v<RequestData>('requests');
 const mitigatedOnPath = (c: Ctx, host: string, path: string) => (c.v<EventData>('events').paths ?? []).filter((p) => p.path === path && (!host || !p.host || p.host === host) && mitigating(p.action)).reduce((a, p) => a + p.count, 0);
 
@@ -182,6 +206,26 @@ const T = { group: 'traffic' as const };
 
 export const TRAFFIC_RULES: RuleDef[] = [
   {
+    ...T, id: 'traffic.passthrough', title: 'Bots and malicious requests let through by log, skip, allow and challenge rules', attackClass: 'Security-control precedence drift', skillRef: CLOUD,
+    needs: ['events'], passed: `No rule that lets traffic through let ${Math.round(BOT_SHARE * 100)}%+ bots (and ${BOT_MIN}+) or ${Math.round(MAL_SHARE * 100)}%+ malicious requests (and ${MAL_MIN}+) through; rules with fewer than ${PASS_MIN} passed requests are not judged.`,
+    check: (c) => eff(c).eff.rules.filter((r) => r.passthrough && (r.passthrough.verdict === 'bots' || r.passthrough.verdict === 'malicious')).map((r): Draft => {
+      const p = r.passthrough!;
+      const mal = p.verdict === 'malicious';
+      const byScore = mal ? p.maliciousBasis === 'attack_score' : p.botBasis === 'score';
+      return { resource: r.key, verdict: byScore ? 'confirmed' : 'needs_validation', severity: mal ? 'high' : 'medium',
+        title: `${KIND_LABEL[r.kind]} “${r.name}” let ${mal ? `${n.format(p.malicious)} malicious` : `${n.format(p.bots)} automated`} requests through (${pct(mal ? p.maliciousShare : p.botShare)} of ${n.format(p.passed)})`,
+        description: `${winText(c.s)} it ${p.kinds.map((k) => PASS_LABEL[k].toLowerCase()).join(', ')} for ${n.format(p.passed)} requests. ${mal
+          ? (p.maliciousBasis === 'attack_score' ? `${n.format(p.malicious)} had a WAF attack score of 1–20 (attack).` : `${n.format(p.threatPathHits)} went to threat-like paths and ${n.format(p.repeatOffenderHits)} came from clients other rules blocked or challenged.`)
+          : (p.botBasis === 'score' ? `${n.format(p.bots)} had a bot score of 1–29 (verified bots left out).` : `${pct(1 - p.browserShare)} came with a user agent that is not an ordinary browser; ${pct(p.hostingShare)} from hosting networks.`)}${p.sensitiveHits ? ` ${n.format(p.sensitiveHits)} reached login, account, admin or API paths.` : ''}`,
+        rootCause: 'The rule lets matched requests through without telling bots and attacks from the traffic it was written for.', intendedBehavior: 'Rules that let traffic through match only the clients they are meant for; bots and attacks among them are challenged or blocked.',
+        evidence: [ev(evSrc, 'passed requests', p.passed), ev(evSrc, `automated (${p.botBasis})`, `${p.bots} (${pct(p.botShare)})`), ev(evSrc, `malicious (${p.maliciousBasis})`, `${p.malicious} (${pct(p.maliciousShare)})`),
+          ev(evSrc, 'from hosting networks', pct(p.hostingShare)), ev(evSrc, 'with a browser user agent', pct(p.browserShare)), ...(p.statuses ? [ev(evSrc, 'responses 2xx / 4xx / 5xx', `${p.statuses.s2xx} / ${p.statuses.s4xx} / ${p.statuses.s5xx}`)] : []),
+          ...(p.peakPerHour !== null ? [ev(evSrc, 'busiest hour', p.peakPerHour)] : []), ...p.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${a.count}`)), ...p.topPaths.slice(0, 3).map((x) => ev(evSrc, `path ${x.path}`, x.count)), ev('window', 'hours', c.s.hours ?? 0)],
+        fix: [p.recommendation.title, ...p.recommendation.steps, ...(p.recommendation.expression ? [`Expression: ${p.recommendation.expression}`] : [])],
+        validation: byScore ? undefined : 'Open Security › Events filtered to this rule and look at a sample: scripted user agents, hosting networks and probe paths confirm it; a known partner or monitor means it is fine (exclude it by IP instead).' };
+    }),
+  },
+  {
     ...T, id: 'traffic.zero_hits', title: 'Rules that did not act in the window', attackClass: 'Security-control precedence drift', skillRef: CLOUD,
     needs: ['events', 'phase:http_request_firewall_custom', 'phase:http_ratelimit'], passed: 'Every enabled custom and rate limiting rule matched traffic in the window.',
     check: (c) => {
@@ -199,29 +243,6 @@ export const TRAFFIC_RULES: RuleDef[] = [
           evidence: [ev(evSrc, `events for rule ${r.ruleId}`, 0), ev('window', 'hours', c.s.hours ?? 0), ev(`GET /zones/{id}/rulesets/phases/${r.kind === 'ratelimit' ? 'http_ratelimit' : 'http_request_firewall_custom'}/entrypoint`, `${r.name}.action`, r.configAction ?? '')],
           fix: [`Review “${r.name}”: keep it if it guards against a rare event (document why), otherwise delete it. Nothing is changed by the audit.`],
           validation: 'Security events are sampled: check a longer window (30 days) before deleting a rule that guards against rare traffic.' });
-      }
-      return out;
-    },
-  },
-  {
-    ...T, id: 'traffic.log_should_act', title: 'Log-only rules matching automated traffic', attackClass: 'Pre-authentication work imbalance', skillRef: RES,
-    needs: ['events', 'phase:http_request_firewall_custom'], passed: `No log-only custom rule saw ${LOG_MIN}+ events mostly from hosting networks without browsers.`,
-    check: (c) => {
-      const out: Draft[] = [];
-      for (const [, st] of eff(c).stats) {
-        const row = eff(c).eff.rules.find((r) => r.ruleId === st.ruleId && r.kind === st.kind);
-        if (st.kind !== 'custom' || !row || row.configAction !== 'log') continue;
-        const events = st.actions.log ?? Object.values(st.actions).reduce((a, b) => a + b, 0);
-        const hosting = shareOf(st.asns, (a) => isHostingAsn(a.name));
-        const browsers = shareOf(st.uas, (u) => isBrowserUa(u.ua));
-        if (events < LOG_MIN || hosting < LOG_HOSTING_SHARE || browsers >= LOG_BROWSER_MAX) continue;
-        out.push({ resource: st.ruleId, verdict: 'needs_validation', severity: 'medium', title: `“${row.name}” only logs ${n.format(events)} requests that look automated`,
-          description: `${winText(c.s)}, ${pct(hosting)} of its events came from hosting/cloud networks and ${pct(browsers)} from ordinary browsers — the pattern of scripted clients. The rule logs them and lets them through.`,
-          rootCause: 'The rule\'s action is Log.', intendedBehavior: 'Rules that match abusive traffic block or challenge it.',
-          evidence: [ev(evSrc, 'log events', events), ev(evSrc, 'share from hosting networks', pct(hosting)), ev(evSrc, 'share with a browser user agent', pct(browsers)), ev('window', 'hours', c.s.hours ?? 0),
-            ...row.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${n.format(a.count)}`))],
-          fix: [`Security › WAF › Custom rules › “${row.name}”: change the action from Log to Managed Challenge (real people pass it), or Block once the logs show no legitimate clients.`],
-          validation: 'Open Security › Events filtered to this rule and look at a sample of requests: if they are scanners or scripts, switch the action; if a partner or monitoring service sends them, exclude its IPs instead.' });
       }
       return out;
     },
@@ -249,32 +270,6 @@ export const TRAFFIC_RULES: RuleDef[] = [
           validation: 'Look at a sample of the rule\'s events in Security › Events: real browsers on real pages (and solved challenges) mean false positives; one client or scripted user agents mean the rule is right.' });
       }
       return out.slice(0, 25);
-    },
-  },
-  {
-    ...T, id: 'traffic.skip_broad', title: 'Skip rules letting through clients other rules stop', attackClass: 'Security-control precedence drift', skillRef: CLOUD,
-    needs: ['events'], passed: `No skip rule passed ${n.format(SKIP_MIN)}+ requests with ${pct(SKIP_OVERLAP)}+ from clients other rules mitigated.`,
-    check: (c) => {
-      const d = c.v<EventData>('events');
-      const out: Draft[] = [];
-      const mitigatedIps = new Map<string, number>();
-      for (const i of d.ips) if (mitigating(i.action)) mitigatedIps.set(i.ip, (mitigatedIps.get(i.ip) ?? 0) + i.count);
-      for (const [, st] of eff(c).stats) {
-        const skipped = Object.entries(st.actions).filter(([a]) => normAction(a) === 'skip').reduce((a, [, v]) => a + v, 0);
-        if (skipped < SKIP_MIN) continue;
-        const mine = d.ips.filter((i) => i.ruleId === st.ruleId && i.source.toLowerCase() === st.source.toLowerCase() && normAction(i.action) === 'skip');
-        const overlap = mine.filter((i) => mitigatedIps.has(i.ip)).reduce((a, i) => a + i.count, 0);
-        const share = skipped ? overlap / skipped : 0;
-        if (share < SKIP_OVERLAP) continue;
-        const name = eff(c).eff.rules.find((r) => r.ruleId === st.ruleId)?.name ?? st.ruleId;
-        out.push({ resource: st.ruleId, verdict: 'needs_validation', severity: 'medium', title: `Skip rule “${name}” lets through clients that other rules block`,
-          description: `${winText(c.s)} it skipped security for ${n.format(skipped)} requests; ${pct(share)} of them came from IP addresses that other rules blocked or challenged in the same window.`,
-          rootCause: 'The skip rule matches more clients than the exception needs.', intendedBehavior: 'Skip rules match only the trusted clients the exception is for.',
-          evidence: [ev(evSrc, 'skipped', skipped), ev(evSrc, 'skipped from IPs mitigated elsewhere', overlap), ev('window', 'hours', c.s.hours ?? 0)],
-          fix: [`Security › WAF › Custom rules › “${name}”: add a trusted-client condition (\`and ip.src in $<trusted list>\`) or narrow its paths.`],
-          validation: 'Compare the IPs it skipped with the clients the exception was meant for; unknown IPs among them mean it is too broad.' });
-      }
-      return out;
     },
   },
   {
@@ -309,7 +304,7 @@ export const TRAFFIC_RULES: RuleDef[] = [
         if (!lits.length) continue;
         const hits = reqs(c).paths.filter((p) => lits.some((l) => pathMatches(p.path, l))).reduce((a, p) => a + p.count, 0);
         if (hits < RL_HEAVY) continue;
-        const rl = (r.action_parameters?.ratelimit ?? {}) as Record<string, unknown>;
+        const rl = (r.ratelimit ?? {}) as Record<string, unknown>;
         out.push({ resource: r.id, verdict: 'needs_validation', severity: 'low', title: `Rate limit “${r.description || r.id}” never triggered while its paths got ${n.format(hits)} requests`,
           description: `${winText(c.s)} the paths it covers (${lits.map((l) => l.path).join(', ')}) received ${n.format(hits)} requests and the rule acted on none. The threshold may be higher than any client ever reaches.`,
           rootCause: 'The threshold or counting characteristic is too generous for the traffic.', intendedBehavior: 'A rate limit sits above legitimate peaks and below abusive rates.',
