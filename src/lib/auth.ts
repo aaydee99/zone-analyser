@@ -177,6 +177,12 @@ export async function createFirstSuperAdmin(input: { email: string; password: st
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 
+/** "jane@example.com" → "j***@example.com" (no "@": "j***"): failed sign-ins for unknown addresses. */
+function maskEmail(email: string): string {
+  const at = email.lastIndexOf('@');
+  return `${[...email][0] ?? ''}***${at > 0 ? email.slice(at).slice(0, 254) : ''}`;
+}
+
 export async function login(emailIn: string, password: string, userAgent?: string | null): Promise<string> {
   const email = normEmail(emailIn);
   if (!email || typeof password !== 'string' || !password) throw new AuthError('Enter your email and password', 400);
@@ -194,7 +200,11 @@ export async function login(emailIn: string, password: string, userAgent?: strin
     await clearLimit(`auth-lock:${key}`);
   }
   if (!userId) {
-    await audit({ id: null, email }, 'auth.login_failed', email);
+    // Whatever was typed is kept only when it is a console user's address (their own account);
+    // anything else (a typo, someone else's address, a guess) is stored masked.
+    const known = await db().from('profiles').select('id').eq('email', email).limit(1).then((r) => !!r.data?.length, () => false);
+    const who = known ? email : maskEmail(email);
+    await audit({ id: null, email: who }, 'auth.login_failed', who);
     throw new AuthError('Incorrect email or password');
   }
   const profile = await loadProfile(userId);

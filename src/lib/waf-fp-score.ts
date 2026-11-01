@@ -6,7 +6,7 @@
 // what to look at first; it does not prove a false positive.
 
 import type { WafSignal, WafSuspect } from './investigate-types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 /** "managed_challenge", "managedChallenge" and "managedchallenge" are the same action. */
 export const normAction = (a: string) => a.toLowerCase().replace(/[_\s-]/g, '');

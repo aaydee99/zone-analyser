@@ -32,7 +32,7 @@ function regPath(key: string): string[] {
 
 function loginShellPath(): string[] {
   const shell = process.env.SHELL || '/bin/sh';
-  const r = spawnSync(shell, ['-lc', 'printf %s "$PATH"'], { encoding: 'utf8', timeout: 5000 });
+  const r = spawnSync(/*turbopackIgnore: true*/ shell, ['-lc', 'printf %s "$PATH"'], { encoding: 'utf8', timeout: 5000 });
   return r.status === 0 ? split(r.stdout) : [];
 }
 

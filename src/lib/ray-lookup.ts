@@ -9,7 +9,7 @@ import { MANAGED_RULESETS } from './traffic-types';
 import type { ZoneListItem } from './zone-catalog';
 import { inParallel } from './cf-read';
 import { rulesetNames } from './zone-explorer';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 // Ray ID lookup: which zone a Ray ID belongs to, and what happened to that request — who sent it,
 // what it asked for, what it got, and which security rule acted on it. From Cloudflare's GraphQL

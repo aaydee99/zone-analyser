@@ -157,7 +157,7 @@ async function run() {
   let working = 0;
   let lastWork = Date.now();
   // Claimed calls waiting for one of the MAX_PARALLEL slots (kept if run() starts again).
-  const waiting = held.waiting as { id: string; request: never }[];
+  const waiting = held.waiting as { id: string; request: never; expiresAt?: string }[];
   const next = () => {
     while (inflight < MAX_PARALLEL && waiting.length && !g.__workerStopping) {
       const row = waiting.shift()!;
@@ -165,7 +165,7 @@ async function run() {
       held.running.add(row.id);
       let counted = false;
       const onWork = () => { counted = true; working++; lastWork = Date.now(); };
-      void handle(row.id, row.request, onWork).finally(() => {
+      void handle(row.id, row.request, onWork, row.expiresAt).finally(() => {
         inflight--;
         held.running.delete(row.id);
         if (counted) { working--; lastWork = Date.now(); }
@@ -199,12 +199,12 @@ async function run() {
         // never takes the same call. More than MAX_PARALLEL wait here for a free slot.
         const now = new Date().toISOString();
         const { data, error } = await db().from('worker_calls').update({ status: 'running', worker_id: id, claimed_at: now })
-          .eq('status', 'queued').gt('expires_at', now).select('id, request, created_at');
+          .eq('status', 'queued').gt('expires_at', now).select('id, request, created_at, expires_at');
         if (error) { await queueFailed(error.message); continue; }
         if (failures) { log(`queue: Supabase answers again after ${failures} failed ${failures === 1 ? 'try' : 'tries'}`); failures = 0; }
-        const rows = ((data ?? []) as { id: string; request: never; created_at: string }[]).sort((a, b) => a.created_at.localeCompare(b.created_at));
+        const rows = ((data ?? []) as { id: string; request: never; created_at: string; expires_at: string }[]).sort((a, b) => a.created_at.localeCompare(b.created_at));
         took = rows.length;
-        waiting.push(...rows.map((r) => ({ id: r.id, request: r.request })));
+        waiting.push(...rows.map((r) => ({ id: r.id, request: r.request, expiresAt: r.expires_at })));
         next();
       }
     } catch (err) {
@@ -262,16 +262,19 @@ function brief(message: string) {
 const aadFor = (id: string, part = 'request') => `worker-call:${id}:${part}`;
 
 /** Runs one call; `onWork` is called when it is one that counts as work (not a status poll). */
-async function handle(callId: string, sealed: never, onWork: () => void) {
+async function handle(callId: string, sealed: never, onWork: () => void, expiresAt?: string) {
   try {
     const r = JSON.parse((await openRelay(sealed, aadFor(callId))).toString('utf8')) as RelayRequest;
     if (!passiveCall(r)) onWork();
+    const until = expiresAt ? Date.parse(expiresAt) : NaN;
     const res = await fetch(`${base()}${r.path}`, {
       method: r.method,
       headers: { ...r.headers, [RELAY_HEADER]: r.identity, ...localRequestHeaders(), ...(r.method !== 'GET' && r.method !== 'HEAD' ? { origin: base() } : {}) },
       body: r.body ? new Uint8Array(Buffer.from(r.body, 'base64')) : undefined,
       redirect: 'manual',
       cache: 'no-store',
+      // Past the call's expiry the web side has stopped waiting: give up then (at least 1 s; 5 min if unknown).
+      signal: AbortSignal.timeout(Math.max(1_000, (Number.isFinite(until) ? until : Date.now() + 300_000) - Date.now())),
     });
     let headers: Record<string, string> = {};
     for (const h of ANSWER_HEADERS) { const v = res.headers.get(h); if (v) headers[h] = v; }

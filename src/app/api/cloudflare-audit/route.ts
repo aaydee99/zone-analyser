@@ -13,4 +13,4 @@ export const GET = route(async (req, _ctx, me) => {
   const report = await cachedActivity(new URL(req.url));
   await audit(me, 'cloudflare_audit.viewed', null, { range: report.range, since: report.since, before: report.before, accounts: report.accounts.length });
   return report;
-}, { perm: 'audit:read' });
+}, { perm: 'activity:read' });

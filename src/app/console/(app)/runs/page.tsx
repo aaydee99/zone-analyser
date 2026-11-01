@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { History, Play } from 'lucide-react';
-import { api } from '@/lib/client';
+import { api, isAbort } from '@/lib/client';
 import type { RunMeta, RunStatus } from '@/lib/run-types';
 import { Alert, Button, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonTable, cx } from '@/components/ui';
 import { RunTable } from '@/components/run-table';
+import { usePoll } from '@/components/use-poll';
 
 const FILTERS: (RunStatus | 'all')[] = ['all', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted'];
 const PAGE = 200;
@@ -19,16 +20,11 @@ export default function RunsPage() {
   const [more, setMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  useEffect(() => {
-    let stop = false;
-    const load = () => api<{ runs: RunMeta[]; more?: boolean }>(`/api/runs?limit=${limit}`)
-      .then((r) => { if (stop) return; setRuns(r.runs); setMore(!!r.more); setError(''); })
-      .catch((e) => { if (!stop) setError((e as Error).message); })
-      .finally(() => { if (!stop) setLoadingMore(false); });
-    load();
-    const t = setInterval(load, 5000);
-    return () => { stop = true; clearInterval(t); };
-  }, [limit]);
+  const load = useCallback((signal: AbortSignal) => api<{ runs: RunMeta[]; more?: boolean }>(`/api/runs?limit=${limit}`, { signal })
+    .then((r) => { setRuns(r.runs); setMore(!!r.more); setError(''); })
+    .catch((e) => { if (!isAbort(e)) setError((e as Error).message); })
+    .finally(() => { if (!signal.aborted) setLoadingMore(false); }), [limit]);
+  usePoll(load, 5000);
 
   const shown = useMemo(() => (runs ?? []).filter((r) => filter === 'all' || r.status === filter), [runs, filter]);
 

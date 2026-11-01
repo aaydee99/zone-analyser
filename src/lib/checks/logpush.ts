@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 import { cfOne } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';

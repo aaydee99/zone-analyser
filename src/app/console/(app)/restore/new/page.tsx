@@ -12,6 +12,7 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHead
 import { Terminal } from '@/components/terminal';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
+import { usePoll } from '@/components/use-poll';
 
 interface Zone { id: string; name: string; status: string; accountId?: string; accountName?: string }
 
@@ -144,11 +145,9 @@ export default function RestorePage() {
 
   // Poll while Terraform runs.
   const running = r?.state === 'planning' || r?.state === 'applying' || r?.state === 'scanning';
-  useEffect(() => {
-    if (!r || !(running || r.approval)) return;
-    const t = setInterval(() => { api<RestoreView>(`/api/restore/${r.id}`).then(setR).catch(() => {}); }, 1500);
-    return () => clearInterval(t);
-  }, [r, running]);
+  const restoreId = r?.id;
+  const poll = useCallback((signal: AbortSignal) => api<RestoreView>(`/api/restore/${restoreId}`, { signal }).then(setR).catch(() => {}), [restoreId]);
+  usePoll(poll, 1500, { on: !!r && (running || !!r.approval), now: false });
 
   // Cancelling the running job (compare, plan or apply).
   const [cancelOpen, setCancelOpen] = useState(false);

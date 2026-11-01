@@ -3,7 +3,7 @@ import { cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { Problems, daysSince, readStat, type CheckDef } from './common';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 // What runs in your visitors' browsers and which APIs you expose: Page Shield's script and connection
 // inventory (all plans; scores need Cloudflare's client-side security add-on) and API Shield's saved

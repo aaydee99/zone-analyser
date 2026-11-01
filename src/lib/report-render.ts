@@ -8,7 +8,7 @@ import {
   type ReportContent, type SectionKey, type SevCounts, type TrafficNumbers,
 } from './report-types';
 
-import { compactNum as whole } from '@/lib/num';
+import { compactNum as whole } from './num';
 const day = (iso: string) => fmtEastern(iso);
 export const periodLabel = (c: Pick<ReportContent, 'periodStart' | 'periodEnd'>) => `${day(c.periodStart)} – ${day(c.periodEnd)}`;
 const sevLine = (c: SevCounts) => SEVERITIES.filter((s) => c[s]).map((s) => `${c[s]} ${s}`).join(', ') || 'none';

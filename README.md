@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql) and [`0020_reports.sql`](supabase/migrations/0020_reports.sql) and [`0021_zone_audits.sql`](supabase/migrations/0021_zone_audits.sql) (there is no 0017). When you update the console, run any new ones the same way.
+2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql), [`0020_reports.sql`](supabase/migrations/0020_reports.sql), [`0021_zone_audits.sql`](supabase/migrations/0021_zone_audits.sql) and [`0022_fk_indexes.sql`](supabase/migrations/0022_fk_indexes.sql) (there is no 0017). When you update the console, run any new ones the same way. (`0022` only adds indexes, so deleting a user does not scan the whole audit log; rollback `supabase/rollbacks/0022_fk_indexes.down.sql`.)
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -75,7 +75,7 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 | `MONITOR_TICK_MS` | `5000` | How often the monitoring queue looks for due units. |
 | `MONITOR_NOTIFY_SECONDS` | `300` | Longest gap between notification batches while units run. |
 | `CLOUDFLARE_BASE_URL` | `https://api.cloudflare.com/client/v4/` | Upstream of the read-only Cloudflare proxy that restore plans use (tests point it elsewhere). |
-| `NEXT_PUBLIC_SALES_EMAIL` | `sales@example.com` (placeholder) | Where the landing page's "Contact sales" links go. Built into the page: rebuild after changing it. |
+| `NEXT_PUBLIC_SALES_EMAIL` | empty | Where the landing page's "Contact sales" links go. While empty, the page shows a visible `[TODO: contact email]` and no mailto link. Built into the page: rebuild after changing it. |
 | `VERCEL`, `VERCEL_GIT_COMMIT_SHA` | set by Vercel | Detects Vercel (role `web`, temporary data folder) and the deployed commit. |
 | `GITHUB_SHA` | set by GitHub Actions | The worker's version label. |
 | `NODE_ENV`, `NEXT_RUNTIME` | set by Next.js | Standard Next.js variables. |
@@ -120,6 +120,13 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 | `TF_PLUGIN_CACHE_DIR` | the console's plugin cache | Terraform provider cache. |
 | `HOME`, `PATH` | from the system | Used to find tools and the default output folder. |
 
+## Legal pages and open-source notices
+
+- **`/privacy`, `/terms`, `/licenses`** are static public pages, linked from the landing footer (and Privacy · Terms from sign-in and setup). The privacy and terms texts are **examples drafted for legal review, not legal advice**: each page says so at the top.
+- **Company facts and lawyer clauses** are `[TODO: …]` placeholders in one place, [`src/lib/legal.ts`](src/lib/legal.ts) (`LEGAL`). They show highlighted on the pages and in the footer until replaced; while any is left, the legal pages are marked `noindex`.
+- **Notices:** `npm run notices` ([`scripts/gen-notices.mjs`](scripts/gen-notices.mjs)) walks the production dependency tree in `node_modules` and writes [`public/THIRD_PARTY_NOTICES.txt`](public/THIRD_PARTY_NOTICES.txt) (every package with its licence text, the SIL OFL 1.1 for the fonts, the caniuse-lite CC BY 4.0 attribution, an LGPL note for sharp/libvips) and `src/app/licenses/packages.json` (what `/licenses` lists). Run it again after changing dependencies, ideally on the build platform (optional native packages differ per OS).
+- `tests/landing-numbers.test.ts` checks the landing page's Terraform type counts ([`src/lib/landing-numbers.ts`](src/lib/landing-numbers.ts)) against `runner/backup.js`.
+
 ## Vercel + worker
 
 On Vercel the console runs as the **web** side: sign-in, pages, users and the audit log. Vercel can't do the rest: its disk is read-only, functions stop after a few minutes, and its outgoing IP changes. So everything else goes to a **worker**: backups, restores, tool installs, the vault and every Cloudflare, R2 and S3 call. The worker is the same console, started with `npm run worker` on a machine or container you control.
@@ -144,7 +151,7 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
 
 ### Deploy to Vercel
 
-1. Apply all the migrations above (`0001` to `0021`).
+1. Apply all the migrations above (`0001` to `0022`).
 2. In the Vercel project, set `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. `CONSOLE_ROLE=web` is the default on Vercel.
 3. Deploy. [`vercel.json`](vercel.json) gives API routes up to 300 s, so a slow call such as a full zone read can wait for the worker.
 
@@ -165,7 +172,7 @@ How it runs:
 
 Set up:
 
-1. **Apply the migrations.** All of them, `0001` to `0021` (see [Set up](#set-up)).
+1. **Apply the migrations.** All of them, `0001` to `0022` (see [Set up](#set-up)).
 2. **Add repository secrets.** In GitHub › the repository › **Settings › Secrets and variables › Actions**, add `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, with the same values as on Vercel. Optionally add `REDIS_URL`.
 3. **Create a token Vercel can use to start the workflow.** In GitHub › your avatar › **Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token**:
    - **Repository access:** only this repository.
@@ -198,10 +205,13 @@ The first super admin: on Vercel the setup token is printed in the function log 
 |---|:-:|:-:|:-:|:-:|
 | Run history, live logs, backup files, download .zip | ✓ | ✓ | ✓ | ✓ |
 | **Zone explorer**: full read-only zone configuration, downloads | ✓ | ✓ | ✓ | ✓ |
-| Start / cancel backups, **use presets** | | ✓ (start needs an admin's approval) | ✓ | ✓ |
-| **Approve or reject** operator backups | | | ✓ | ✓ |
+| **Request a backup** (an admin approves it), use presets | ✓ | ✓ | starts directly | starts directly |
+| Cancel backups | | ✓ | ✓ | ✓ |
+| **Approve or reject** viewer and operator backups | | | ✓ | ✓ |
 | Save / delete presets | | ✓ | ✓ | ✓ |
-| Delete runs, settings, managed tools, audit log, recent changes, Cloudflare activity | | | ✓ | ✓ |
+| **Cloudflare activity** (what changed in Cloudflare): read-only | ✓ | ✓ | ✓ | ✓ |
+| Delete runs, settings, managed tools | | | ✓ | ✓ |
+| The console's **audit log** and **recent changes** | | | | ✓ |
 | Restore a zone's changed configuration from a backup (plan, then apply) | | | ✓ (apply needs a super admin's approval) | ✓ |
 | **Approve or reject** admin restore applies | | | | ✓ |
 | Manage operators and viewers | | | ✓ | ✓ |
@@ -209,14 +219,15 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | **Monitoring**: see findings and results (Tokens & members: admins and super admins only) | ✓ | ✓ | ✓ | ✓ |
 | **Monitoring**: run checks now, dismiss findings, accept drift, set up notifications | | | ✓ | ✓ |
 | Connect Cloudflare's own alerts (Monitoring › Cloudflare alerts) | | | | ✓ |
-| **Cache purge**, **roll back** a Worker or Pages deployment | | | ✓ (needs a super admin's approval) | ✓ |
+| **Cache purge**, **roll back** a Worker or Pages deployment (others see the purge page locked) | | | ✓ (needs a super admin's approval) | ✓ |
 | **Approve or reject** admins' cache purges and rollbacks | | | | ✓ |
 | **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, timeline), **Security audit** (run and read), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
 | **Zone tags**, owners and comparison templates: set and change (`zones:tag`) | | | ✓ | ✓ |
-| **API console** and live **Worker logs** with the stored tokens (`cloudflare:query`) | | | ✓ | ✓ |
+| Live **Worker logs** (`workers:tail`) | ✓ | ✓ | ✓ | ✓ |
+| **API console** with the stored tokens (`cloudflare:query`); others see the page locked | | | ✓ | ✓ |
 | **Logpush** job changes | | | ✓ (needs a super admin's approval) | ✓ |
 | Make reports and schedule them; rebuild the search index | | | ✓ | ✓ |
-| **Revert a change** from Cloudflare activity | | | | ✓ + Global API Key |
+| **Revert a change** from Cloudflare activity (hidden from viewers and operators) | | | ✓ + Global API Key | ✓ + Global API Key |
 | Choose upload on/off and the bucket for a run, from the buckets approved on the credential | | ✓ | ✓ | ✓ |
 | **Credential vault** (view, add, edit, reveal, test, import): also decides **which buckets** uploads may go to, and the prefix, region and R2 lock rules | | | | ✓ + vault password |
 
@@ -224,7 +235,7 @@ Roles are enforced on the server for every request ([`src/lib/rbac.ts`](src/lib/
 
 ### Approvals
 
-- **Operator backups:** **Start backup** becomes **Request backup**. The request is checked exactly like a start (account set, buckets, output folder), so an approver only sees requests that can run. Nothing runs until an **admin or super admin** approves it under **Approvals**; approving starts the backup at once and the operator's page opens the run by itself. Admins and super admins start backups directly.
+- **Viewer and operator backups:** **Start backup** becomes **Request backup**. The request is checked exactly like a start (account set, buckets, output folder), so an approver only sees requests that can run. Nothing runs until an **admin or super admin** approves it under **Approvals**; approving starts the backup at once and the requester's page opens the run by itself. Admins and super admins start backups directly.
 - **Admin restores:** comparing and planning are unchanged. **Apply** becomes **Ask a super admin to apply**: the zone name, the replace/delete confirmation and the Global API Key are all checked first, then the plan is locked until a **super admin** decides. Approving starts the apply at once. The Global API Key is held **in the console's memory only** until then — never on disk, in the database, the audit log or the request — and dropped when the request is decided, withdrawn or expires. The request expires with the plan (30 minutes); after a console restart the key is gone and the admin applies again. Super admins apply directly.
 - **Reject and withdraw:** an approver can reject with a reason the requester sees; the requester can withdraw a request that is still waiting. Nobody decides their own request.
 - **When something is already running:** approving while another backup or restore runs is refused and the request stays waiting — approve it when the job finishes.
@@ -232,7 +243,7 @@ Roles are enforced on the server for every request ([`src/lib/rbac.ts`](src/lib/
 - **Audit log:** `approval.requested`, `approval.approved`, `approval.rejected` (with the reason), `approval.withdrawn`, `approval.expired`, `approval.failed`; `run.started` and `restore.apply_started` name who approved them. Approvals and rejections are also listed under **Recent changes › Approvals**.
 - **Stored:** one record per request in `data/approvals/<id>.json`. API: `GET /api/approvals`, `GET /api/approvals/{id}`, `POST /api/approvals/{id}/approve | reject | withdraw`.
 
-**Viewer is a trusted role.** Viewers see full backup contents, which is the whole Cloudflare configuration of the account, plus the live logs.
+**Viewer is a trusted role.** Viewers see full backup contents, which is the whole Cloudflare configuration of the account, plus live run and Worker logs. They never see restores, the credential vault, the audit log, settings or user management, and never change Cloudflare.
 
 ### Uploads: on/off and which bucket
 
@@ -324,7 +335,7 @@ Restore has its own section in the sidebar, set out like Backups:
 
 ## Recent changes
 
-**Access › Recent changes** turns the audit log into a list of what changed over the last 24 hours, 7 days (default) or 30 days. Each change is one line, such as "Changed op@example.com: role operator → viewer" or "Added R2 credential “Backups”". The list is grouped by day and can be filtered by area: users, credentials and vault, presets, settings and tools, runs, accounts.
+**Access › Recent changes** (super admins only, like the audit log) turns the audit log into a list of what changed over the last 24 hours, 7 days (default) or 30 days. Each change is one line, such as "Changed op@example.com: role operator → viewer" or "Added R2 credential “Backups”". The list is grouped by day and can be filtered by area: users, credentials and vault, presets, settings and tools, runs, accounts.
 
 The page also shows who made the changes and counts the rest of the activity: sign-ins, failed sign-ins, backups started, vault unlocks and revealed secrets. **Copy summary** copies the whole report as plain text. API: `GET /api/audit/changes?days=7` (1–30, admins and super admins only).
 
@@ -356,11 +367,11 @@ The page also shows who made the changes and counts the rest of the activity: si
 
 A token missing either is named with the permission it needs.
 
-**Access:** admins and super admins only. Tokens are decrypted on the server and never sent to the browser. Secret-looking fields are masked. Every report viewed is recorded in the console's audit log as `cloudflare_audit.viewed`.
+**Access:** every role (`activity:read`); only admins and super admins see **Revert**. Tokens are decrypted on the server and never sent to the browser. Secret-looking fields are masked. Every report viewed is recorded in the console's audit log as `cloudflare_audit.viewed`.
 
 ### Reverting a Cloudflare change
 
-Super admins see **Revert** on each change in Cloudflare activity. Reverting goes through the same API endpoint the change used:
+Admins and super admins see **Revert** on each change in Cloudflare activity; viewers and operators never do. Reverting goes through the same API endpoint the change used:
 
 | The change | Reverting it |
 |---|---|
@@ -488,7 +499,7 @@ Super admins see **Revert** on each change in Cloudflare activity. Reverting goe
 | Page Rules | Page Rules still in use and the rule type each setting moves to | Page Rules Read |
 
 - **Findings** have a severity. The same problem keeps one finding across runs; it closes by itself once a run has read its account or zone again and the problem is gone (a failed read never closes one). Admins can dismiss a finding: it stays out of counts and notifications, also after later runs.
-- **How it runs (built for thousands of zones):** each check is split into units — one per zone, one per account, or one for the whole console — and each unit has its own next run in `monitor_targets`. The worker takes what is due, hand-started units first, and runs them in **lanes**: one per stored API token, side by side, at most 6 units at a time per token and `MONITOR_PARALLEL` (24) overall. Each lane makes at most `MONITOR_BUDGET` monitoring calls per 5 minutes (**800** of Cloudflare's 1,200 by default; the console's own reads may use up to 1,150). **While a backup or restore uses a token, monitoring makes no calls with it** until it is done; other tokens carry on. A 429 pauses that token until Cloudflare's `Retry-After`. Nothing is lost when the worker stops: what is due stays due in the table, and a unit a stopped worker was running is taken again after 15 minutes. **Overview › API tokens** shows each token's accounts, zones, calls in the last 5 minutes and whether it is paused.
+- **How it runs (designed for many zones):** each check is split into units — one per zone, one per account, or one for the whole console — and each unit has its own next run in `monitor_targets`. The worker takes what is due, hand-started units first, and runs them in **lanes**: one per stored API token, side by side, at most 6 units at a time per token and `MONITOR_PARALLEL` (24) overall. Each lane makes at most `MONITOR_BUDGET` monitoring calls per 5 minutes (**800** of Cloudflare's 1,200 by default; the console's own reads may use up to 1,150). **While a backup or restore uses a token, monitoring makes no calls with it** until it is done; other tokens carry on. A 429 pauses that token until Cloudflare's `Retry-After`. Nothing is lost when the worker stops: what is due stays due in the table, and a unit a stopped worker was running is taken again after 15 minutes. **Overview › API tokens** shows each token's accounts, zones, calls in the last 5 minutes and whether it is paused.
 - **How often:** each check has its own interval (Overview › Schedule and notifications), and units with nothing to watch are read less often:
 
   | Check | Default | Notes |
@@ -991,7 +1002,7 @@ A new monitoring check, `logpush`, reads every account's Logpush jobs every hour
 ### Permissions
 | Feature | Console permission | Cloudflare token permission |
 | --- | --- | --- |
-| Worker logs | `cloudflare:query` | Account › **Workers Tail Read** (create/delete tail; read-only, changes nothing in the Worker). Workers list: Account › Workers Scripts Read |
+| Worker logs | `workers:tail` (every role) | Account › **Workers Tail Read** (create/delete tail; read-only, changes nothing in the Worker). Workers list: Account › Workers Scripts Read |
 | API console | `cloudflare:query` | Whatever the path needs (read permissions) |
 | Logpush list / check | `runs:read` | Account › **Logs Read**, Zone › **Logs Read** |
 | Logpush edit form (live read) | `cloudflare:act` | Logs Read |
@@ -1034,7 +1045,7 @@ The sections:
 cannot read analytics". An empty section says "nothing". An account whose traffic could not be read
 is listed by name and is left out of the totals.
 
-**Checks that need `audit:read` are left out.** Reports are visible to every role and go to shared
+**Checks that need `governance:read` are left out.** Reports are visible to every role and go to shared
 channels, so Tokens & members findings never appear in them.
 
 ### How reports are made and sent
@@ -1246,7 +1257,7 @@ Every read-only Cloudflare view is its own endpoint, and its cached copy is kept
 | Update vulnerable packages | `npm audit` — currently 0 known vulnerabilities. Run it after every `npm install`. |
 | Check file upload types | The only upload is a `.env` file: plain text only (no binary/control characters), 64 KB at most — checked in the browser and again on the server. |
 | Security review | An independent code review (authorization, secrets, process spawning, SSRF, injection) found three issues, all fixed: **restore no longer trusts bucket content** — the backup's `provider.tf` is never used, only literal `cloudflare_*` resource blocks reach Terraform (no provisioners, provider overrides, interpolation or function calls such as `file()`; refused blocks are audited as `security.restore_blocks_refused`), and Terraform may install only the Cloudflare provider; **a run's output folder must be inside the admin-set output folder** (no other paths or network shares); **sign-in guesses cannot be raced** (one password check per account at a time) and the client address is the proxy-added (last) `X-Forwarded-For` hop, or the header named in `CONSOLE_CLIENT_IP_HEADER` (e.g. `cf-connecting-ip`). |
-| Security headers | CSP (no external sources; `frame-ancestors 'none'`), HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP / CORP `same-origin`, `Cache-Control: no-store`, no `X-Powered-By`. |
+| Security headers | CSP (no external sources; `frame-ancestors 'none'`), HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP / CORP `same-origin`, `Cache-Control: no-store` (except the public landing, `/privacy`, `/terms`, `/licenses`, the OG image, `robots.txt` and `sitemap.xml`: `public, max-age=0, s-maxage=300, stale-while-revalidate=60`, HTML only, never their RSC payloads; `/brand/*` and `/icon.svg`: `public, max-age=86400`; see `next.config.ts`), no `X-Powered-By`. |
 | Verify webhook signatures | The console has no webhooks, so there is nothing to verify. |
 
 ## What's stored where
@@ -1264,12 +1275,12 @@ Sessions are opaque cookies set with `HttpOnly`, `Secure` and `SameSite=Strict`.
 
 Request protections:
 - **HTTPS**: plain HTTP is served only on loopback (`127.0.0.1`, `localhost`, `[::1]`), where traffic never leaves the machine. On any other host ([`src/proxy.ts`](src/proxy.ts)), GET requests are redirected to HTTPS and everything else is refused. HTTPS responses carry `Strict-Transport-Security: max-age=63072000; includeSubDomains`. Behind a TLS proxy, set `X-Forwarded-Proto: https`.
-- **Host check**: every request (pages and API) must use an allowed `Host`. Any host is allowed unless `CONSOLE_ALLOWED_HOSTS` lists some; set it to block DNS-rebinding pages. Mutating requests must still carry an `Origin` for the same host, and session cookies stay `SameSite=Strict` and tied to the host name you signed in on.
+- **Host check**: every request (pages, RSC and API) must use an allowed `Host`. The proxy skips only public static files (`/_next/static`, `/_next/image`, `/brand/*`, `/icon.svg`, `/favicon.ico`: its `config.matcher`). Any host is allowed unless `CONSOLE_ALLOWED_HOSTS` lists some; set it to block DNS-rebinding pages. Mutating requests must still carry an `Origin` for the same host, and session cookies stay `SameSite=Strict` and tied to the host name you signed in on.
 - **Origin check**: requests that change data must carry a matching `Origin`. The one exception is `POST /api/hooks/cloudflare` (Cloudflare's alert webhook, which sends no `Origin`): it requires the secret the console gave Cloudflare, compared in constant time, and is rate limited per address.
 - **Response headers**: pages are served with a Content-Security-Policy, `frame-ancestors 'none'` and `nosniff`.
 - **Error responses**: unexpected server errors return a generic message with a reference number. The details go to the server log only.
 
-Failed sign-ins back off per account (2 s up to 30 s, so nobody can be locked out for long) and are also counted across all accounts. These counters and the API rate limits are shared by every server instance (Redis, or Supabase with migration 0014; see `RATE_LIMIT_STORE`), so they don't multiply on Vercel. On Vercel without Turnstile keys the console logs a warning: set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` there. When too many fail at once, every attempt is slowed down, which defeats password spraying without locking anyone out. Vault unlocks back off per user.
+Failed sign-ins are audited as `auth.login_failed`: with the address typed when it is a console user's, otherwise masked (`j***@example.com`), so typos and guessed addresses are not kept. Failed sign-ins back off per account (2 s up to 30 s, so nobody can be locked out for long) and are also counted across all accounts. These counters and the API rate limits are shared by every server instance (Redis, or Supabase with migration 0014; see `RATE_LIMIT_STORE`), so they don't multiply on Vercel. On Vercel without Turnstile keys the console logs a warning: set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` there. When too many fail at once, every attempt is slowed down, which defeats password spraying without locking anyone out. Vault unlocks back off per user.
 
 `SUPABASE_*`, `VAULT_*`, `CONSOLE_*`, `REDIS_*`, `RELAY_*`, `TURNSTILE_*` and `WORKER_GITHUB_*` variables are removed from the environment before `backup.js` and Terraform start.
 

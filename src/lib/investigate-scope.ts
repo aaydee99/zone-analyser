@@ -4,7 +4,7 @@ import { HttpError } from './http';
 import { trafficMonths } from './traffic';
 import type { ZoneListItem } from './zone-catalog';
 import { listZones, type ZoneList } from './zone-explorer';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 // Which zones an investigation reads, from the cached zone list (no Cloudflare call): one zone, the
 // zone a host name belongs to, an account's zones, or every zone. Busiest first when the monthly

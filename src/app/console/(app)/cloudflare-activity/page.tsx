@@ -218,7 +218,7 @@ function ZoneOnboarding({ events, accountsWithoutList }: { events: CfZoneEvent[]
 export default function CloudflareActivityPage() {
   const toast = useToast();
   const { can } = useMe();
-  const allowed = can('audit:read');
+  const allowed = can('activity:read');
   const canRevert = can('cloudflare:revert');
   const [reverting, setReverting] = useState<CfChange | null>(null);
   const [creds, setCreds] = useState<CredentialOption[] | null>(null);

@@ -14,4 +14,4 @@ export const GET = route(async (req, _ctx, me) => {
   const report = await readsReport(accountId, days, q.get('fresh') === '1');
   await audit(me, 'cloudflare_audit.reads_viewed', accountId, { days, readers: report.readers.length });
   return report;
-}, { perm: 'audit:read' });
+}, { perm: 'activity:read' });

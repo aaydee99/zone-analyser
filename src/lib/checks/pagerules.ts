@@ -3,7 +3,7 @@ import { cfList } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { notAvailable, readStat, type CheckDef } from './common';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 // Page Rules are being replaced by Cache, Configuration, Redirect, Origin and Transform Rules
 // (developers.cloudflare.com/rules/reference/page-rules-migration). For every Page Rule still in

@@ -15,7 +15,7 @@ const VARIANTS: Record<Variant, string> = {
   primary: 'btn-gold font-semibold',
   secondary: 'bg-raised text-ink border border-line-strong hover:border-faint hover:bg-raised-2',
   ghost: 'text-ink-2 hover:text-ink hover:bg-raised',
-  danger: 'bg-bad/10 text-bad border border-bad/30 hover:bg-bad/20',
+  danger: 'bg-bad/10 text-bad border border-bad/30 hover:border-bad/60 hover:bg-bad/12',
 };
 
 type Size = 'sm' | 'md' | 'lg';

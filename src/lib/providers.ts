@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { cached, tag } from './cache';
 import type { Credential } from './vault';
 import { BUCKET_PATTERN, R2_ENDPOINT_PATTERN, STORAGE_LABEL, storageFields, type TestResult } from './kinds';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 

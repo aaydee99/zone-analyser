@@ -108,7 +108,7 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
               </button>
             ))}
           </div>
-          <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="space-y-6 focus:outline-none">
+          <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="space-y-6 rounded-[var(--radius-card)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
             {tab === 'findings' && <>
               <Findings findings={configFindings} title="Configuration findings" description="Every configuration finding, worst first — managed rules and their exceptions included. Open one for its evidence, the fix and how to validate it." />
               <Findings findings={trafficFindings} title="Findings from traffic" description="What the security events of the window show. Each finding's rule is broken down in Effectiveness." />

@@ -4,7 +4,7 @@ import { listAlerts } from '../monitor-store';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
 import { Problems, daysSince, readStat, type CheckDef } from './common';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 // Cloudflare's own notifications, per account: the policies that are on, the alert types the account
 // could turn on but has not (from Cloudflare's catalog, so the list fits each account's plan), webhook

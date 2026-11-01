@@ -1,7 +1,7 @@
 // Zone health: what the Health page and the Overview card get. Shared by server and client — no Node imports.
 
 import type { Severity } from './monitor-types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 export type HealthSort = 'score' | 'best' | 'name' | 'findings';
 export const HEALTH_SORTS: { value: HealthSort; label: string }[] = [

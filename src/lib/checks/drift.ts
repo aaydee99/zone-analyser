@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 import crypto from 'node:crypto';
 import { BudgetError, ReadError, cfGet, cfList, cfOne, cfReason, inParallel, ok, mask, refused } from '../cf-read';
 import { db } from '../supabase';

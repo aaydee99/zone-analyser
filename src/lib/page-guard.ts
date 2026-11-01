@@ -15,3 +15,10 @@ export async function requirePage(perm: Permission) {
   if (!me) redirect('/console/login');
   if (!can(me.role, perm)) notFound();
 }
+
+/** For a page every role sees: signed in, and whether this user may use it (the layout shows a notice when not). */
+export async function pageAllows(perm: Permission): Promise<boolean> {
+  const me = await getMe((await cookies()).get(SESSION_COOKIE)?.value, false);
+  if (!me) redirect('/console/login');
+  return can(me.role, perm);
+}

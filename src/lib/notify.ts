@@ -4,7 +4,7 @@ import { getMonitorConfig } from './monitor-config';
 import { claimForSending, logNotification, releaseClaim, saveDelivered, unsentFindings } from './monitor-store';
 import { CHECK, SEVERITY_RANK, type Finding } from './monitor-types';
 import { safePost } from './safe-url';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 // Notifications about new findings, to Slack and/or a webhook. The worker sends what is new in one
 // batch every few minutes while checks run, and once more when the queue is empty (sendUnsent).

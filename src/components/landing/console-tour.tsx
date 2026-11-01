@@ -1,30 +1,41 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, ArrowRight, Check, CloudUpload, Database, History, KeyRound, Pause, Play, Search, Undo2 } from 'lucide-react';
+import { Activity, ArrowRight, Check, CloudUpload, Database, History, KeyRound, Pause, Play, Radar, RefreshCw, Search, ShieldAlert, Undo2 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { useInView, usePageVisible, useReducedMotion } from './motion';
 import { BrandMark } from '@/components/brand-mark';
 
-// A working mock of the console, drawn in HTML: a cursor walks through a backup, a restore compare
-// and a traffic drill-down, and the mock answers with its own toasts. Every zone, number and toast is
+// A working mock of the console, drawn in HTML: a cursor walks through a security audit report, a
+// monitoring refresh, a revert review in Cloudflare activity, a backup, a restore compare and a
+// traffic drill-down, and the mock answers with its own toasts. Every zone, number and toast is
 // sample data on example.com / example.net. Visitors can drive it themselves (it pauses the tour).
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
-type Scene = 'backup' | 'restore' | 'traffic';
+type Scene = 'audit' | 'monitoring' | 'activity' | 'backup' | 'restore' | 'traffic';
 type Phase = 'idle' | 'running' | 'done';
+type AuditTab = 'findings' | 'actions' | 'effectiveness' | 'managed';
 interface Ping { id: number; title: string; detail: string }
 
-const SCENES: { key: Scene; label: string; icon: typeof Database }[] = [
-  { key: 'backup', label: 'Backups', icon: Database },
-  { key: 'restore', label: 'Restore', icon: Undo2 },
-  { key: 'traffic', label: 'Traffic', icon: Activity },
+const SCENES: { key: Scene; label: string; short: string; icon: typeof Database }[] = [
+  { key: 'audit', label: 'Security audit', short: 'Audit', icon: ShieldAlert },
+  { key: 'monitoring', label: 'Monitoring', short: 'Monitor', icon: Radar },
+  { key: 'activity', label: 'Cloudflare activity', short: 'Activity', icon: History },
+  { key: 'backup', label: 'Backups', short: 'Backup', icon: Database },
+  { key: 'restore', label: 'Restore', short: 'Restore', icon: Undo2 },
+  { key: 'traffic', label: 'Traffic', short: 'Traffic', icon: Activity },
 ];
 const DECOR = [
-  { label: 'Cloudflare activity', icon: History },
   { label: 'Zone explorer', icon: Search },
   { label: 'Credentials', icon: KeyRound },
+];
+// The audit report's own tab labels (the console's fifth, Coverage, is left out of the mock).
+const AUDIT_TABS: { key: AuditTab; label: string }[] = [
+  { key: 'findings', label: 'Findings' },
+  { key: 'actions', label: 'Recommended Actions' },
+  { key: 'effectiveness', label: 'Effectiveness' },
+  { key: 'managed', label: 'Managed Ruleset' },
 ];
 
 // Sample month: 30 days of requests (relative heights), one spike on day 17.
@@ -37,14 +48,18 @@ const SPIKE = 16;
 // The spike day per hour, with the attack at 14:00 UTC.
 const HOURS = Array.from({ length: 24 }, (_, h) => (h === 14 ? 100 : h === 15 ? 62 : Math.round(22 + 16 * Math.sin((h - 6) / 3.8) + ((h * 13) % 7))));
 
-export function ConsoleTour() {
+/** `checks`: the audit's rule count (src/lib/zone-audit ALL_RULES), passed in so the rules stay off the client. */
+export function ConsoleTour({ checks }: { checks: number }) {
   const root = useRef<HTMLDivElement>(null);
   const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
   const reduced = useReducedMotion();
   const visible = usePageVisible();
   const onScreen = useInView(rootEl, { threshold: 0.35 });
 
-  const [scene, setScene] = useState<Scene>('backup');
+  const [scene, setScene] = useState<Scene>('audit');
+  const [auditTab, setAuditTab] = useState<AuditTab>('findings');
+  const [monitor, setMonitor] = useState<Phase>('done');
+  const [revert, setRevert] = useState(false);
   const [backup, setBackup] = useState<Phase>('done');
   const [compare, setCompare] = useState<Phase>('done');
   const [drill, setDrill] = useState(false);
@@ -57,12 +72,18 @@ export function ConsoleTour() {
   const touring = !reduced && !paused;
   const running = touring && visible && onScreen;
 
+  /** Back to the top of the tour: the audit's Findings, every demo button unpressed. */
+  const reset = useCallback(() => {
+    setScene('audit'); setAuditTab('findings'); setMonitor('idle'); setRevert(false);
+    setBackup('idle'); setCompare('idle'); setDrill(false);
+  }, []);
+
   useEffect(() => { setRootEl(root.current); }, []);
   // A visitor who wants motion starts from a clean slate; reduced motion keeps the finished state.
   useEffect(() => {
     if (reduced) return;
-    setBackup('idle'); setCompare('idle'); setDrill(false); setScene('backup'); setStep(0);
-  }, [reduced]);
+    reset(); setStep(0);
+  }, [reduced, reset]);
 
   const ping = useCallback((title: string, detail: string) => {
     const id = ++pingId.current;
@@ -74,6 +95,12 @@ export function ConsoleTour() {
     const box = root.current;
     const el = box?.querySelector<HTMLElement>(`[data-tour="${target}"]`);
     if (!box || !el) return;
+    // A target inside a scrolling strip (phone tabs, audit tabs): bring it into the strip first.
+    const strip = el.closest<HTMLElement>('[data-tour-strip]');
+    if (strip) {
+      const s = strip.getBoundingClientRect(), e = el.getBoundingClientRect();
+      if (e.left < s.left || e.right > s.right) strip.scrollLeft += e.left - s.left - 8;
+    }
     const b = box.getBoundingClientRect();
     const r = el.getBoundingClientRect();
     if (r.width === 0) return; // hidden at this width (e.g. the sidebar on phones)
@@ -87,6 +114,21 @@ export function ConsoleTour() {
 
   // The tour, one step at a time: [wait before it, what it does].
   const steps: [number, () => void][] = [
+    [900, () => moveTo('audit-tab-actions')],
+    [850, () => { press(); setAuditTab('actions'); }],
+    [2400, () => moveTo('audit-tab-effectiveness')],
+    [800, () => { press(); setAuditTab('effectiveness'); ping('Rule effectiveness', 'example.com · “Login watch” let 18.4k bots through'); }],
+    [3000, () => moveTo(nav('monitoring'))],
+    [800, () => { press(); setScene('monitoring'); }],
+    [650, () => moveTo('monitor-refresh')],
+    [800, () => { press(); setMonitor('running'); }],
+    [1300, () => { setMonitor('done'); ping('Monitoring refreshed', 'example.com · 1 new finding · drift'); }],
+    [2200, () => moveTo(nav('activity'))],
+    [800, () => { press(); setScene('activity'); setRevert(false); }],
+    [650, () => moveTo('activity-revert')],
+    [800, () => { press(); setRevert(true); ping('Revert ready to review', 'PATCH · Global API Key asked to send'); }],
+    [2600, () => moveTo(nav('backup'))],
+    [800, () => { press(); setScene('backup'); }],
     [700, () => moveTo('backup-start')],
     [850, () => { press(); setBackup('running'); }],
     [1700, () => { setBackup('done'); ping('Backup complete', 'example.com · 42 resources · .tf + JSON'); }],
@@ -99,8 +141,8 @@ export function ConsoleTour() {
     [800, () => { press(); setScene('traffic'); setDrill(false); }],
     [700, () => moveTo('traffic-spike')],
     [850, () => { press(); setDrill(true); ping('17 Oct, per hour', 'example.net · spike at 14:00 UTC'); }],
-    [2800, () => moveTo(nav('backup'))],
-    [800, () => { press(); setScene('backup'); setBackup('idle'); setCompare('idle'); setDrill(false); }],
+    [2800, () => moveTo(nav('audit'))],
+    [800, () => { press(); reset(); }],
   ];
 
   useEffect(() => {
@@ -123,11 +165,15 @@ export function ConsoleTour() {
     takeOver(); setCompare('running');
     window.setTimeout(() => { setCompare('done'); ping('Restore plan ready', 'example.com · 2 to change · 0 to delete'); }, 1100);
   };
+  const refreshMonitor = () => {
+    takeOver(); setMonitor('running');
+    window.setTimeout(() => { setMonitor('done'); ping('Monitoring refreshed', 'example.com · 1 new finding · drift'); }, 1100);
+  };
 
   const togglePause = () => {
     if (paused) {
-      // Resume from the top of the current scene so the cursor never jumps mid-story.
-      setScene('backup'); setBackup('idle'); setCompare('idle'); setDrill(false); setStep(0); setPaused(false);
+      // Resume from the top of the tour so the cursor never jumps mid-story.
+      reset(); setStep(0); setPaused(false);
     } else { setPaused(true); setCursor((c) => ({ ...c, shown: false })); }
   };
 
@@ -153,13 +199,13 @@ export function ConsoleTour() {
           </div>
         </div>
 
-        {/* Phone: the scenes as tabs */}
-        <div className="flex gap-1 border-b border-line px-2 py-1.5 md:hidden">
-          {SCENES.map(({ key, label, icon: Icon }) => (
+        {/* Phone: the scenes as tabs (a strip that scrolls sideways) */}
+        <div data-tour-strip className="flex gap-1 overflow-x-auto border-b border-line px-2 py-1.5 md:hidden">
+          {SCENES.map(({ key, short, icon: Icon }) => (
             <button key={key} type="button" data-tour={`tab-${key}`} onClick={() => go(key)} aria-pressed={scene === key}
-              className={cx('inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md text-[12.5px] transition-colors',
+              className={cx('inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12.5px] transition-colors',
                 scene === key ? 'bg-raised text-ink' : 'text-muted hover:text-ink')}>
-              <Icon aria-hidden="true" className="size-3.5" />{label}
+              <Icon aria-hidden="true" className="size-3.5" />{short}
             </button>
           ))}
         </div>
@@ -186,6 +232,9 @@ export function ConsoleTour() {
           </nav>
 
           <div className="lp-mock-main relative p-3 sm:p-5">
+            {scene === 'audit' && <AuditScene tab={auditTab} checks={checks} onTab={(t) => { takeOver(); setAuditTab(t); }} />}
+            {scene === 'monitoring' && <MonitoringScene phase={monitor} onRefresh={refreshMonitor} />}
+            {scene === 'activity' && <ActivityScene review={revert} onRevert={() => { takeOver(); setRevert(true); }} onBack={() => { takeOver(); setRevert(false); }} />}
             {scene === 'backup' && <BackupScene phase={backup} onStart={startBackup} />}
             {scene === 'restore' && <RestoreScene phase={compare} onCompare={runCompare} />}
             {scene === 'traffic' && <TrafficScene drill={drill} onDrill={() => { takeOver(); setDrill(true); }} onBack={() => { takeOver(); setDrill(false); }} />}
@@ -231,6 +280,233 @@ function Title({ children, meta }: { children: React.ReactNode; meta?: React.Rea
     <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <p className="text-[15px] font-semibold text-ink">{children}</p>
       {meta && <p className="font-mono text-[11px] text-faint">{meta}</p>}
+    </div>
+  );
+}
+
+const SEV_TONE = { high: 'bg-bad/12 text-bad', medium: 'bg-warn/12 text-warn', low: 'bg-info/12 text-info' } as const;
+function Sev({ s }: { s: keyof typeof SEV_TONE }) {
+  return <span className={cx('shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium capitalize', SEV_TONE[s])}>{s}</span>;
+}
+
+function AuditScene({ tab, checks, onTab }: { tab: AuditTab; checks: number; onTab: (t: AuditTab) => void }) {
+  return (
+    <div className="lp-scene">
+      <Title meta={`last 7 days · ${checks - 2} of ${checks} checks read`}>Security audit · example.com</Title>
+      <div data-tour-strip className="-mx-1 mb-3 flex gap-1 overflow-x-auto px-1 pb-0.5">
+        {AUDIT_TABS.map((t) => (
+          <button key={t.key} type="button" data-tour={`audit-tab-${t.key}`} onClick={() => onTab(t.key)} aria-pressed={tab === t.key}
+            className={cx('h-8 shrink-0 rounded-md border px-2.5 text-[12px] transition-colors',
+              tab === t.key ? 'border-signal/60 bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink')}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div key={tab} className="lp-scene">
+        {tab === 'findings' && <AuditFindings />}
+        {tab === 'actions' && <AuditActions />}
+        {tab === 'effectiveness' && <AuditEffect />}
+        {tab === 'managed' && <AuditManaged />}
+      </div>
+    </div>
+  );
+}
+
+function AuditFindings() {
+  // Titles in the shape the audit writes them (effectiveness.ts, managed-effect.ts, rules.ts).
+  const rows: { sev: keyof typeof SEV_TONE; verdict: string; area: string; title: string }[] = [
+    { sev: 'high', verdict: 'Confirmed', area: 'Traffic', title: 'Custom rule “Login watch” let 18.4k automated requests through (62% of 29.7k)' },
+    { sev: 'medium', verdict: 'Confirmed', area: 'Managed rules', title: 'OWASP flagged 2.1k requests in the last 7 days and blocked none' },
+    { sev: 'medium', verdict: 'Needs validation', area: 'Origin exposure', title: 'Unproxied records that reveal a proxied origin' },
+  ];
+  return (
+    <ul className="space-y-2">
+      {rows.map((r) => (
+        <li key={r.title} className="rounded-xl border border-line bg-sunken/60 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
+            <Sev s={r.sev} />
+            <span className={cx('rounded-md px-1.5 py-0.5 font-medium', r.verdict === 'Confirmed' ? 'bg-ok/12 text-ok' : 'bg-raised-2 text-ink-2')}>{r.verdict}</span>
+            <span className="text-faint">{r.area}</span>
+          </div>
+          <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-snug text-ink">{r.title}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AuditActions() {
+  return (
+    <ol className="space-y-2">
+      <li className="rounded-xl border border-line bg-sunken/60 px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[10.5px]"><span className="font-mono text-faint">1</span><Sev s="high" /></div>
+        <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-snug text-ink">Switch “Login watch” from Log to Managed Challenge: it let 18.4k automated requests (62%; bot score 1–29) through</p>
+        <p className="mt-1 truncate text-[11px] text-muted">Security › WAF › Custom rules › “Login watch”: change the action from Log to Managed Challenge.</p>
+      </li>
+      <li className="rounded-xl border border-line bg-sunken/60 px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[10.5px]"><span className="font-mono text-faint">2</span><Sev s="medium" /></div>
+        <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-snug text-ink">Narrow “Partner API skip”: its skip let 3.1k malicious requests (WAF attack score 1–20) through</p>
+        <p className="mt-1.5 truncate rounded-md bg-terminal px-2 py-1 font-mono text-[11px] text-ink-2">(http.request.uri.path wildcard &quot;/api/partner/*&quot;) and not (cf.waf.score lt 21)</p>
+      </li>
+    </ol>
+  );
+}
+
+function Split({ blocked, challenged, passed }: { blocked: number; challenged: number; passed: number }) {
+  return (
+    <span aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-raised-2">
+      <span className="bg-bad" style={{ width: `${blocked}%` }} />
+      <span className="bg-warn" style={{ width: `${challenged}%` }} />
+      <span className="bg-signal" style={{ width: `${passed}%` }} />
+    </span>
+  );
+}
+
+function AuditEffect() {
+  return (
+    <div className="space-y-2">
+      <div className="rounded-xl border border-line bg-sunken/60 px-3 py-2">
+        <div className="flex items-center justify-between gap-2 text-[12px]">
+          <span className="min-w-0 truncate text-ink-2">Custom rule “Block bad ASNs” · Block</span>
+          <span className="shrink-0 font-mono text-[11px] text-faint">41.2k events</span>
+        </div>
+        <div className="mt-2"><Split blocked={100} challenged={0} passed={0} /></div>
+      </div>
+      <div className="rounded-xl border border-signal/50 bg-sunken/60 px-3 py-2">
+        <div className="flex items-center justify-between gap-2 text-[12px]">
+          <span className="min-w-0 truncate text-ink">Custom rule “Login watch” · Log</span>
+          <span className="shrink-0 font-mono text-[11px] text-faint">29.7k events</span>
+        </div>
+        <div className="mt-2"><Split blocked={0} challenged={0} passed={100} /></div>
+        <dl className="mt-2 grid grid-cols-4 gap-1.5 text-[10.5px]">
+          {[['Blocked', '0'], ['Challenged', '0'], ['Passed', '29.7k'], ['Bots passed', '18.4k']].map(([k, v]) => (
+            <div key={k}><dt className="text-faint">{k}</dt><dd className="font-mono text-[12px] text-ink tabular-nums">{v}</dd></div>
+          ))}
+        </dl>
+        <p className="mt-2 truncate font-mono text-[11px] text-muted">/wp-login.php · /login · US · DE · AS14061 (hosting)</p>
+        <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+          <span className="text-faint">Recommended</span>
+          <span className="lp-del rounded px-1 font-mono">Log</span><ArrowRight aria-hidden="true" className="size-3 text-faint" /><span className="lp-add rounded px-1 font-mono">Managed Challenge</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AuditManaged() {
+  const rows = [
+    { name: 'Cloudflare Managed Ruleset', state: 'deployed', note: '3 rules matched only in log (412 events)' },
+    { name: 'OWASP Core Ruleset', state: 'PL1 · threshold 40', note: 'Flagged 2.1k requests and blocked none' },
+    { name: 'Exception “Allow uploads”', state: 'skip', note: 'Skips 12 managed rules · let 640 requests through' },
+  ];
+  return (
+    <ul className="space-y-2">
+      {rows.map((r) => (
+        <li key={r.name} className="rounded-xl border border-line bg-sunken/60 px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-[12.5px] text-ink">{r.name}</span>
+            <span className="shrink-0 rounded-md bg-raised-2 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-2">{r.state}</span>
+          </div>
+          <p className="mt-1 truncate text-[11.5px] text-muted">{r.note}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MonitoringScene({ phase, onRefresh }: { phase: Phase; onRefresh: () => void }) {
+  const zones = [
+    { name: 'shop.example.com', score: 64 },
+    { name: 'example.net', score: 78 },
+    { name: 'example.com', score: 92 },
+  ];
+  const tone = (s: number) => (s < 50 ? 'text-bad' : s < 80 ? 'text-warn' : 'text-ok');
+  const findings: { sev: keyof typeof SEV_TONE; check: string; text: string }[] = [
+    ...(phase === 'done' ? [{ sev: 'medium' as const, check: 'Drift', text: 'example.com · security_level changed since the accepted baseline' }] : []),
+    { sev: 'high', check: 'Certificates', text: 'shop.example.com · edge certificate expires in 5 days' },
+    { sev: 'medium', check: 'Logpush', text: 'example.net · job “http-requests” failing' },
+  ];
+  return (
+    <div className="lp-scene">
+      <Title meta="results from 09:40 UTC">Monitoring</Title>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <div className="rounded-xl border border-line bg-sunken/60 p-3">
+          <p className="text-[11px] font-medium text-faint">Zone health · worst first</p>
+          <ul className="mt-2 space-y-1.5">
+            {zones.map((z) => (
+              <li key={z.name} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-mono text-[12px] text-ink-2">{z.name}</span>
+                <span className={cx('font-mono text-[13px] tabular-nums', tone(z.score))}>{z.score}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <ul className="space-y-1.5">
+          {findings.map((f) => (
+            <li key={f.text} className="rounded-xl border border-line bg-sunken/60 px-3 py-1.5">
+              <div className="flex items-center gap-1.5 text-[10.5px]"><Sev s={f.sev} /><span className="text-faint">{f.check}</span></div>
+              <p className="mt-1 truncate text-[12px] text-ink">{f.text}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" data-tour="monitor-refresh" onClick={onRefresh} disabled={phase === 'running'}
+          className="relative inline-flex h-9 items-center gap-2 overflow-hidden rounded-[10px] border border-line-strong bg-raised px-4 text-[13px] font-medium text-ink hover:bg-raised-2">
+          {phase === 'running' && <span aria-hidden="true" className="progress-live absolute inset-0 opacity-40" />}
+          <span className="relative inline-flex items-center gap-2"><RefreshCw aria-hidden="true" className="size-3.5" />{phase === 'running' ? 'Refreshing…' : 'Refresh'}</span>
+        </button>
+        <span className="font-mono text-[11px] text-faint">Slack + webhook · new findings at medium and above</span>
+      </div>
+    </div>
+  );
+}
+
+function ActivityScene({ review, onRevert, onBack }: { review: boolean; onRevert: () => void; onBack: () => void }) {
+  const changes = [
+    { cat: 'Security rules', zone: 'example.com', at: '09:41 UTC', field: 'rules[Login watch].action', from: 'block', to: 'log', who: 'ops@example.com' },
+    { cat: 'SSL/TLS', zone: 'example.net', at: '08:12 UTC', field: 'min_tls_version', from: '1.2', to: '1.0', who: 'dev@example.net' },
+  ];
+  return (
+    <div className="lp-scene">
+      <Title meta="last 7 days · every account">Cloudflare activity</Title>
+      {!review ? (
+        <ul className="space-y-2">
+          {changes.map((c, i) => (
+            <li key={c.field} className="rounded-xl border border-line bg-sunken/60 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2 text-[12px]">
+                <span className="truncate text-ink-2">{c.cat} · {c.zone}</span>
+                <span className="shrink-0 font-mono text-faint">{c.at}</span>
+              </div>
+              <p className="mt-1.5 truncate font-mono text-[12px] text-ink">{c.field}</p>
+              <p className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[12px]">
+                <span className="lp-del rounded px-1">{c.from}</span><ArrowRight aria-hidden="true" className="size-3 text-faint" /><span className="lp-add rounded px-1">{c.to}</span>
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="truncate text-[12px] text-muted">{c.who}</span>
+                <button type="button" data-tour={i === 0 ? 'activity-revert' : undefined} onClick={onRevert}
+                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-line-strong px-2 text-[12px] text-ink-2 hover:bg-raised hover:text-ink">
+                  <Undo2 aria-hidden="true" className="size-3.5" />Revert
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="rounded-xl border border-line bg-sunken/60 p-3">
+          <p className="text-[12.5px] font-semibold text-ink">Review the revert</p>
+          <pre className="mt-2 overflow-hidden rounded-md bg-terminal px-2.5 py-2 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-all text-ink-2">{'PATCH /zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}\n{ "action": "block" }'}</pre>
+          <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+            <span className="rounded-md border border-line-strong px-2 py-1.5 font-mono text-[11.5px] text-muted">ops@example.com</span>
+            <span className="rounded-md border border-line-strong px-2 py-1.5 font-mono text-[11.5px] text-muted">Global API Key ••••••••</span>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <span className="inline-flex h-8 items-center rounded-[10px] bg-raised-2 px-3 text-[12px] text-ink-2">Send to Cloudflare</span>
+            <button type="button" onClick={onBack} className="rounded px-1 text-[11.5px] text-muted underline-offset-4 hover:text-ink hover:underline">Back to the changes</button>
+          </div>
+          <p className="mt-2 text-[11px] text-faint">Admins and super admins only · the key is asked every time and never stored · demo: nothing is sent</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -320,7 +596,7 @@ function RestoreScene({ phase, onCompare }: { phase: Phase; onCompare: () => voi
               </li>
             ))}
           </ul>
-          <p className="mt-3 font-mono text-[11.5px] text-muted">Plan: <span className="text-ink">2 to change</span>, 0 to add, 0 to delete · apply needs a super admin</p>
+          <p className="mt-3 font-mono text-[11.5px] text-muted">Plan: <span className="text-ink">2 to change</span>, 0 to add, 0 to delete · an admin&apos;s apply waits for a super admin</p>
         </>
       )}
     </div>

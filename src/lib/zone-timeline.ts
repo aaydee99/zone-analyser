@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 import type { Progress } from './bg-job';
 import { cached } from './cache';
 import { cachedActivity } from './cf-audit-cache';

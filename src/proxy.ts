@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cameThroughCdn, isAllowedHost, isHttpsRequest, isLocalRequest } from '@/lib/hosts';
 
-// Runs before every page, asset and API route.
+// Runs before every page, RSC request and API route (static assets are skipped: see config below).
 //  - Unknown Host → 403 (DNS rebinding; also keeps the redirect below on our own hosts).
 //  - With CONSOLE_ORIGIN_SECRET set, a request without the CDN's secret header → 403.
 //  - Plain HTTP is accepted only from this machine (isLocalRequest: the worker's own calls, or a
@@ -65,3 +65,11 @@ export function proxy(req: NextRequest) {
   res.headers.set('Strict-Transport-Security', HSTS);
   return res;
 }
+
+// Everything except the build's hashed files, image optimisation and the public brand files and
+// icon: those are public and the same for every visitor, so they skip the host, origin-secret and
+// HTTPS checks (next.config's headers still apply). Every HTML page, RSC payload and /api route
+// still comes through here and gets the CSP and HSTS.
+export const config = {
+  matcher: ['/((?!_next/static/|_next/image|brand/|icon\\.svg|favicon\\.ico).*)'],
+};

@@ -192,7 +192,7 @@ export default function Overview() {
           <Card>
             <div className="flex items-center justify-between border-b border-line px-5 py-4">
               <h2 className="text-[15px] font-semibold">Environment</h2>
-              <Link href="/console/settings" className="text-faint hover:text-ink"><Wrench className="size-4" /></Link>
+              <Link href="/console/settings" aria-label="Settings" className="text-faint hover:text-ink"><Wrench className="size-4" /></Link>
             </div>
             {!sys && !loaded ? (
               <Loading label="Checking the environment" className="space-y-2.5 px-5 py-4">

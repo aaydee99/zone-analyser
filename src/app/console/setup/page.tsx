@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { BRAND } from '@/lib/brand';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CheckCircle2, Circle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -138,6 +139,7 @@ export default function SetupPage() {
           </div>
         )}
       </div>
+      <p className="mt-4 text-center text-xs text-faint"><Link href="/privacy" className="hover:text-ink">Privacy</Link> · <Link href="/terms" className="hover:text-ink">Terms</Link></p>
     </AuthFrame>
   );
 }

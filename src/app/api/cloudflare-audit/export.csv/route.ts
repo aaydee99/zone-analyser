@@ -15,4 +15,4 @@ export const GET = route(async (req, _ctx, me) => {
   const changes = filterChanges(report.changes, (url.searchParams.get('q') ?? '').slice(0, 200), category as CategoryKey | '');
   await audit(me, 'cloudflare_audit.exported', null, { range: report.range, since: report.since, before: report.before, changes: changes.length });
   return attachment(`cloudflare-changes-${report.since.slice(0, 10)}-to-${report.before.slice(0, 10)}.csv`, toCsv(changes), 'text/csv; charset=utf-8');
-}, { perm: 'audit:read', limit: { name: 'cf-export', max: 20 } });
+}, { perm: 'activity:read', limit: { name: 'cf-export', max: 20 } });

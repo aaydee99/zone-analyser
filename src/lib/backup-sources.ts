@@ -32,6 +32,8 @@ const MAX_FILE = 8 * 1024 * 1024;
 const SKIP = new Set(['provider.tf', 'imports.tf']);
 
 // ── This server's backup folders ────────────────────────────────────────────
+// OUTPUT_DIR is chosen at run time, so the turbopackIgnore comments keep the build from tracing
+// the whole project into the server bundle for these reads.
 
 function outRoot(): string | null {
   const out = path.resolve(cachedSettings().outputDir || DEFAULT_OUTPUT_DIR);
@@ -43,7 +45,7 @@ export function localFolders(): { name: string; time: string; partial: boolean }
   const root = outRoot();
   if (!root) return [];
   let names: fs.Dirent[];
-  try { names = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  try { names = fs.readdirSync(/*turbopackIgnore: true*/ root, { withFileTypes: true }); } catch { return []; }
   return names.filter((d) => d.isDirectory() && FOLDER.test(d.name)).map((d) => parseBackupFolder(d.name))
     .filter((f): f is { name: string; time: string; partial: boolean } => !!f.time).sort((a, b) => (a.time < b.time ? 1 : -1));
 }
@@ -57,7 +59,7 @@ function localZoneDir(folder: string, zoneName: string): string | null {
   try {
     const st = fs.lstatSync(dir);
     if (!st.isDirectory() || st.isSymbolicLink()) return null;
-    return fs.realpathSync(dir).startsWith(root + path.sep) ? dir : null;
+    return fs.realpathSync(/*turbopackIgnore: true*/ dir).startsWith(root + path.sep) ? dir : null;
   } catch { return null; }
 }
 
@@ -83,7 +85,7 @@ export function localZones(folder: string): string[] {
   const root = outRoot();
   if (!root || !FOLDER.test(folder)) return [];
   try {
-    return fs.readdirSync(path.join(root, folder), { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== 'account' && !d.name.startsWith('.') && !d.name.startsWith('_')).map((d) => d.name);
+    return fs.readdirSync(/*turbopackIgnore: true*/ path.join(/*turbopackIgnore: true*/ root, folder), { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== 'account' && !d.name.startsWith('.') && !d.name.startsWith('_')).map((d) => d.name);
   } catch { return []; }
 }
 

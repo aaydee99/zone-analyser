@@ -2,11 +2,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PERMISSIONS, ROLES, can, canManageRole, isRole } from '@/lib/rbac';
 
-test('every role reads runs; only super admins reach the vault, revert changes or approve restores', () => {
+test('every role reads runs; only super admins reach the vault, the audit log or approve restores', () => {
   for (const r of ROLES) assert.ok(can(r, 'runs:read'), r);
-  for (const p of ['vault:access', 'cloudflare:revert', 'restore:approve'] as const) {
+  for (const p of ['vault:access', 'audit:read', 'restore:approve'] as const) {
     assert.deepEqual(ROLES.filter((r) => can(r, p)), ['super_admin'], p);
   }
+});
+
+test('viewers see Cloudflare activity and Worker logs and request backups, but never restore, revert or approve', () => {
+  for (const p of ['activity:read', 'workers:tail', 'runs:start'] as const) assert.ok(can('viewer', p), p);
+  for (const p of ['restore:run', 'cloudflare:revert', 'cloudflare:act', 'cloudflare:query', 'runs:approve', 'runs:cancel', 'settings:read', 'users:manage'] as const) {
+    assert.equal(can('viewer', p), false, p);
+  }
+  assert.deepEqual(ROLES.filter((r) => can(r, 'cloudflare:revert')).sort(), ['admin', 'super_admin']);
 });
 
 test('roles only gain permissions going up', () => {

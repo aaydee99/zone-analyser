@@ -21,7 +21,7 @@ import {
   type Draft, type RuleDef,
 } from './rules';
 import type { AccessRule, BotConfig, CertPack, LegacyRule, PageRule, RequestData, RulesetRule } from './types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 export const FREE_MANAGED = '77454fe2d30c4220b5701f6fdfb893ba';
 export const EXPOSED_CREDENTIALS = 'c2e184081120413c86c3ab7e14069605';

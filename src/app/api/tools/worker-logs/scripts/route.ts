@@ -7,4 +7,4 @@ export const dynamic = 'force-dynamic';
 export const GET = route(async (req) => {
   const u = new URL(req.url).searchParams;
   return accountScripts(u.get('accountId') ?? '', u.get('fresh') === '1');
-}, { perm: 'cloudflare:query' });
+}, { perm: 'workers:tail' });

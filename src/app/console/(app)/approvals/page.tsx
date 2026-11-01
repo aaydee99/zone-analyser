@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import Link from 'next/link';
 import { Check, ChevronRight, DatabaseBackup, RotateCcw, ShieldCheck, Undo2, X, Zap } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
@@ -9,6 +9,7 @@ import { useMe } from '@/components/me';
 import { NoteView } from '@/components/change-note';
 import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useToast } from '@/components/toast';
+import { usePoll } from '@/components/use-poll';
 import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonTable } from '@/components/ui';
 import { compactNum } from '@/lib/num';
 
@@ -50,13 +51,9 @@ export default function ApprovalsPage() {
   const closeApproving = () => { setApproving(null); setCred(EMPTY_CREDENTIAL); };
   const needsCredential = (a: Approval) => a.kind === 'cloudflare' && a.action?.type === 'logpush';
 
-  const load = useCallback(() => api<{ approvals: Approval[]; canApprove: Record<ApprovalKind, boolean> }>('/api/approvals')
+  const load = useCallback((signal?: AbortSignal) => api<{ approvals: Approval[]; canApprove: Record<ApprovalKind, boolean> }>('/api/approvals', { signal })
     .then((r) => { setList(r.approvals); setMayApprove(r.canApprove); }).catch(() => {}), []);
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
-  }, [load]);
+  usePoll(load, 4000);
 
   const act = async (a: Approval, what: 'approve' | 'reject' | 'withdraw', body?: object) => {
     setBusy(`${what}:${a.id}`);

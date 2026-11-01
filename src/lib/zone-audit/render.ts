@@ -4,7 +4,7 @@
 
 import { actionItems } from './actions';
 import { GROUP_LABEL, COVERAGE_LABEL, KIND_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditReport } from './types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 /** findings.json: the records, worst first, as stored. */
 export const findingsJson = (r: AuditReport) => `${JSON.stringify(r.findings, null, 2)}\n`;

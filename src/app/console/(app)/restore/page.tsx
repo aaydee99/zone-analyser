@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, CheckCircle2, Circle, DatabaseBackup, History, RotateCcw } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
@@ -8,6 +8,7 @@ import type { CredentialOption } from '@/lib/kinds';
 import type { RunMeta } from '@/lib/run-types';
 import type { RestoreHistory, RestoreSummary } from '@/lib/restore-history';
 import { useMe } from '@/components/me';
+import { usePoll } from '@/components/use-poll';
 import { OutcomeBadge, RestoreTable } from '@/components/restore-table';
 import { Badge, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonChart, SkeletonStats, SkeletonTable, Stat, cx } from '@/components/ui';
 
@@ -86,17 +87,16 @@ export default function RestoreOverview() {
   const [sys, setSys] = useState<SystemCheck | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const load = useCallback((signal?: AbortSignal) => api<RestoreHistory>('/api/restore/history', { signal }).then(setHistory).catch(() => {}), []);
   useEffect(() => {
-    const load = () => api<RestoreHistory>('/api/restore/history').then(setHistory).catch(() => {});
     Promise.all([
       load(),
       api<{ runs: RunMeta[] }>('/api/runs').then((r) => setRuns(r.runs)),
       api<{ options: CredentialOption[] }>('/api/credentials/options').then((r) => setCreds(r.options)),
       api<{ check: SystemCheck }>('/api/system').then((r) => setSys(r.check)),
     ]).catch(() => {}).finally(() => setLoaded(true));
-    const t = setInterval(load, 10_000);
-    return () => clearInterval(t);
-  }, []);
+  }, [load]);
+  usePoll(load, 10_000, { now: false });
 
   const restores = useMemo(() => history?.restores ?? [], [history]);
   const stats = useMemo(() => {

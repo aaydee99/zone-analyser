@@ -19,7 +19,10 @@ const PERM_LABEL: Record<Permission, string> = {
   'settings:write': 'Change settings',
   'tools:manage': 'Install and remove terraform / cf-terraforming',
   'users:manage': 'Manage users and roles',
-  'audit:read': 'Read the audit log, recent changes and Cloudflare activity',
+  'audit:read': "Read the console's audit log and recent changes",
+  'activity:read': 'View Cloudflare activity (what changed in Cloudflare)',
+  'workers:tail': 'Follow live Worker logs',
+  'governance:read': 'See the Tokens & members monitoring check',
   'cloudflare:revert': 'Revert a change from Cloudflare activity (with a Global API Key)',
   'restore:run': 'Restore zone configuration from a backup (plan, then apply — a super admin approves the apply unless you can approve)',
   'runs:approve': 'Start backups without approval, and approve or reject operator backup requests',
@@ -27,7 +30,7 @@ const PERM_LABEL: Record<Permission, string> = {
   'monitors:manage': 'Run the monitoring checks, dismiss findings, accept drift and set up notifications',
   'cloudflare:act': 'Ask for a cache purge or a Worker / Pages rollback (a super admin approves it)',
   'zones:tag': 'Set zone tags, owners and comparison templates',
-  'cloudflare:query': 'Use the read-only Cloudflare API console and live Worker logs',
+  'cloudflare:query': 'Use the read-only Cloudflare API console',
   'vault:access': 'Open the credential vault (with the vault password)',
 };
 

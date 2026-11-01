@@ -4,7 +4,7 @@
 // parentheses over several lines, quoted strings (with ";" inside), comments, and Cloudflare's
 // "; cf_tags=cf-proxied:true" marks in its own exports. $INCLUDE and $GENERATE are reported, not followed.
 
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 
 export interface ZoneRecord { name: string; ttl: number | null; type: string; content: string; proxied: boolean | null; line: number }

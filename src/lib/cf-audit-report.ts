@@ -1,6 +1,6 @@
 // Cloudflare audit-log report: types, periods and grouping. Shared by server and client — no Node imports.
 import { CATEGORIES, CATEGORY_LABEL, type CategoryKey, type FieldChange } from './cf-classify';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 export { CATEGORIES, CATEGORY_LABEL, type CategoryKey, type FieldChange };
 

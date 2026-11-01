@@ -15,7 +15,7 @@
 import { isBrowserUa, isChallenge, isHostingAsn, isSolved, normAction, PASSIVE_ACTIONS, ruleString } from '../waf-fp-score';
 import { sensitivePaths } from './expr';
 import type { EventData, PassKind, PassThrough, Recommendation, RuleKind } from './types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 /** Below this many passed requests in the window, nothing is concluded. */
 export const PASS_MIN = 100;

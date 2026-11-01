@@ -1,4 +1,4 @@
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 import 'server-only';
 import { db } from './supabase';
 import { HttpError } from './http';

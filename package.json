@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 4400",
     "worker": "node scripts/worker.mjs",
+    "notices": "node scripts/gen-notices.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./tests/setup.mjs --test \"tests/**/*.test.ts\""

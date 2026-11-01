@@ -7,9 +7,23 @@ export class ApiError extends Error {
 // ── Answers shared by every page of this browser tab ─────────────────────────
 // Heavy reads (Cloudflare data) are asked for once: a page that needs what another page already
 // read uses that answer, also while it is still being read. Refresh (`fresh`, or &fresh=1) reads
-// again; any change made through the API (POST, PUT, PATCH, DELETE) forgets everything kept.
-// Live state (runs, approvals, the worker, the vault) is never kept.
-const SHARED = [/^\/api\/zone-explorer(\/|\?|$)/, /^\/api\/traffic(\/|\?|$)/, /^\/api\/cloudflare-audit(\/history)?(\?|$)/, /^\/api\/credentials\/options(\?|$)/, /^\/api\/zones(\?|$)/];
+// again; a change made through the API (POST, PUT, PATCH, DELETE) forgets what it can make stale
+// (WRITES), everything for a change not listed there. Live state (runs, approvals, the worker,
+// the vault) is never kept.
+const EXPLORER = /^\/api\/zone-explorer(\/|\?|$)/;
+const SHARED = [EXPLORER, /^\/api\/traffic(\/|\?|$)/, /^\/api\/cloudflare-audit(\/history)?(\?|$)/, /^\/api\/credentials\/options(\?|$)/, /^\/api\/zones(\?|$)/];
+/** Changes that make only some kept answers stale (or none): the zone explorer list carries tags and owners. */
+const WRITES: [string, RegExp[]][] = [
+  ['/api/me', []], ['/api/runs', []], ['/api/reports', []], ['/api/presets', []], ['/api/compare/templates', []],
+  ['/api/monitors', []], ['/api/search/index', []], ['/api/tools/api-console/saved', []], ['/api/tools/worker-logs', []],
+  ['/api/zones/meta', [EXPLORER]], ['/api/zones/tags', [EXPLORER]],
+];
+const under = (path: string, prefix: string) => path.startsWith(prefix) && /^([/?]|$)/.test(path.slice(prefix.length));
+function forgetFor(path: string) {
+  const w = WRITES.find(([p]) => under(path, p));
+  if (!w) { kept.clear(); return; }
+  for (const key of [...kept.keys()]) if (w[1].some((r) => r.test(key))) kept.delete(key);
+}
 const MAX_KEPT = 80;
 const kept = new Map<string, Promise<{ status: number; body: unknown }>>();
 /** The path without what does not change the answer: `fresh` (read again) and `job` (which read a poll follows). */
@@ -25,15 +39,18 @@ function keyOf(path: string) {
 /** Forget every kept answer (after a change, or when the user asks for everything again). */
 export function forgetShared() { kept.clear(); }
 
+/** A request cancelled through its `signal`: not an error to show. */
+export const isAbort = (e: unknown) => (e as Error | null)?.name === 'AbortError';
+
 /**
  * JSON fetch for the console API. A 401 means the session ended — bounce to sign-in.
  * (A locked vault answers 423, which stays on the page.) Heavy reads are shared between pages
- * (see above); `fresh` reads again.
+ * (see above); `fresh` reads again. `signal` cancels: the call rejects with an AbortError (isAbort).
  */
 export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown; fresh?: boolean } = {}): Promise<T> {
   const { fresh, ...opts } = init;
   const method = (opts.method ?? 'GET').toUpperCase();
-  if (method !== 'GET' && method !== 'HEAD') { kept.clear(); return request<T>(path, opts); }
+  if (method !== 'GET' && method !== 'HEAD') { forgetFor(path); return request<T>(path, opts); }
   if (!SHARED.some((r) => r.test(path))) return request<T>(path, opts);
   const key = keyOf(path);
   const again = fresh || /[?&]fresh=1(&|$)/.test(path);
@@ -41,6 +58,7 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   if (hit && !again) {
     // A shared read that ends as "still reading" or an error: this caller asks itself.
     const r = await hit.catch(() => null);
+    opts.signal?.throwIfAborted();
     if (r) return r.body as T;
   }
   const p = send(path, opts);
@@ -66,6 +84,8 @@ async function send(path: string, init: RequestInit & { json?: unknown }): Promi
   });
   let body: unknown = null;
   try { body = await res.json(); } catch { /* empty */ }
+  // Cancelled while the body was read: not a (kept) empty answer.
+  rest.signal?.throwIfAborted();
   if (res.status === 401 && !path.startsWith('/api/auth/login') && !path.startsWith('/api/setup') && !path.startsWith('/api/vault/')) {
     window.location.href = `/console/login?next=${encodeURIComponent(window.location.pathname)}`;
   }

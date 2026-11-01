@@ -30,7 +30,7 @@ export const CHECKS: CheckMeta[] = [
     description: 'Risks Cloudflare’s Security Insights found in each account: exposed records, weak TLS, missing protections, users without MFA.' },
   { id: 'certificates', every: 24, unit: "each zone’s certificates (every 6 hours when one expires within 14 days)", label: 'Certificates', perm: 'runs:read', needs: ['Zone: SSL and Certificates Read', 'Account: Account SSL and Certificates Read'],
     description: 'Every edge, custom-hostname, Origin CA, client and mTLS certificate, with the days left and any validation problem.' },
-  { id: 'governance', every: 24, unit: "each account’s tokens and members", label: 'Tokens & members', perm: 'audit:read', needs: ['User: API Tokens Read', 'Account: Account API Tokens Read', 'Account: Account Settings Read'],
+  { id: 'governance', every: 24, unit: "each account’s tokens and members", label: 'Tokens & members', perm: 'governance:read', needs: ['User: API Tokens Read', 'Account: Account API Tokens Read', 'Account: Account Settings Read'],
     description: 'API tokens that are expired, expiring, unused or unrestricted, and account members without two-factor sign-in.' },
   { id: 'drift', every: 1, unit: "each account’s audit log for changes (every zone is also read in full once a week)", label: 'Drift', perm: 'runs:read', needs: ['Zone: Zone Settings Read', 'Zone: DNS Read', 'Zone: Zone WAF / Rulesets Read'],
     description: 'Settings, rules and DNS that changed since the accepted baseline, and DNSSEC problems.' },

@@ -2,6 +2,8 @@ import type { NextConfig } from 'next';
 
 // The Content-Security-Policy is set per request in src/proxy.ts (it depends on runtime settings).
 
+const SHORT = 'public, max-age=0, s-maxage=300, stale-while-revalidate=60';
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   // The backup script is spawned by path at runtime, never bundled.
@@ -26,7 +28,15 @@ const nextConfig: NextConfig = {
         { key: 'X-DNS-Prefetch-Control', value: 'off' },
         { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
       ],
-    }];
+    },
+    // Public, identical for every visitor: the landing and legal pages (HTML only, not their RSC
+    // payloads) and the generated metadata files get a short CDN cache, the brand files a day.
+    // Listed after the rule above, so their Cache-Control replaces no-store; everything else
+    // (/console/*, /api/*, RSC) stays no-store.
+    ...['/', '/privacy', '/terms', '/licenses'].map((source) => ({ source, missing: [{ type: 'header' as const, key: 'rsc' }], headers: [{ key: 'Cache-Control', value: SHORT }] })),
+    ...['/opengraph-image', '/robots.txt', '/sitemap.xml'].map((source) => ({ source, headers: [{ key: 'Cache-Control', value: SHORT }] })),
+    ...['/brand/:file*', '/icon.svg'].map((source) => ({ source, headers: [{ key: 'Cache-Control', value: 'public, max-age=86400' }] })),
+    ];
   },
 };
 

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { History, RotateCcw } from 'lucide-react';
-import { api } from '@/lib/client';
+import { api, isAbort } from '@/lib/client';
 import type { RestoreHistory, RestoreOutcome } from '@/lib/restore-history';
 import { RestoreTable } from '@/components/restore-table';
+import { usePoll } from '@/components/use-poll';
 import { Alert, ButtonLink, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonTable, cx } from '@/components/ui';
 
 const FILTERS: { key: string; label: string; outcomes?: RestoreOutcome[] }[] = [
@@ -22,12 +23,9 @@ export default function RestoreHistoryPage() {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('all');
 
-  useEffect(() => {
-    const load = () => api<RestoreHistory>('/api/restore/history').then((h) => { setHistory(h); setError(''); }).catch((e) => setError((e as Error).message));
-    load();
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, []);
+  const load = useCallback((signal: AbortSignal) => api<RestoreHistory>('/api/restore/history', { signal })
+    .then((h) => { setHistory(h); setError(''); }).catch((e) => { if (!isAbort(e)) setError((e as Error).message); }), []);
+  usePoll(load, 5000);
 
   const all = useMemo(() => history?.restores ?? [], [history]);
   const match = (k: string) => { const f = FILTERS.find((x) => x.key === k)!; return all.filter((r) => !f.outcomes || f.outcomes.includes(r.outcome)); };

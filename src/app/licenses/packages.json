@@ -1,0 +1,70 @@
+{
+  "total": 38,
+  "top": [
+    {
+      "name": "@supabase/supabase-js",
+      "version": "2.118.0",
+      "licence": "MIT"
+    },
+    {
+      "name": "lucide-react",
+      "version": "1.62.0",
+      "licence": "ISC"
+    },
+    {
+      "name": "next",
+      "version": "16.4.3",
+      "licence": "MIT"
+    },
+    {
+      "name": "react",
+      "version": "19.3.1",
+      "licence": "MIT"
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.1",
+      "licence": "MIT"
+    },
+    {
+      "name": "redis",
+      "version": "5.12.1",
+      "licence": "MIT"
+    },
+    {
+      "name": "server-only",
+      "version": "0.0.1",
+      "licence": "MIT"
+    }
+  ],
+  "licences": [
+    {
+      "licence": "MIT",
+      "count": 26
+    },
+    {
+      "licence": "Apache-2.0",
+      "count": 5
+    },
+    {
+      "licence": "ISC",
+      "count": 3
+    },
+    {
+      "licence": "Apache-2.0 AND LGPL-3.0-or-later",
+      "count": 1
+    },
+    {
+      "licence": "CC-BY-4.0",
+      "count": 1
+    },
+    {
+      "licence": "BSD-3-Clause",
+      "count": 1
+    },
+    {
+      "licence": "0BSD",
+      "count": 1
+    }
+  ]
+}

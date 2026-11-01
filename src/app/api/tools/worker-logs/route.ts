@@ -8,4 +8,4 @@ export const dynamic = 'force-dynamic';
 export const GET = route(async (_req, _ctx, me) => {
   const [{ accounts }, current] = await Promise.all([accountTargets(), currentTail(me)]);
   return { accounts: accounts.map((a) => ({ id: a.accountId, name: a.accountName || a.accountId })), current };
-}, { perm: 'cloudflare:query' });
+}, { perm: 'workers:tail' });

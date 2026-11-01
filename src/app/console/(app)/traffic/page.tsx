@@ -121,7 +121,7 @@ function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; sinc
               <button key={d.date} type="button" aria-label={`${dayLabel(d.date)}: ${whole.format(d.requests)} requests`}
                 onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
                 onClick={() => target && open({ t: target, filter: { day: d.date }, label: 'All traffic' })}
-                className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus:outline-none', hover === i && 'bg-raised/60', target && 'cursor-pointer')}>
+                className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none', hover === i && 'bg-raised/60', target && 'cursor-pointer')}>
                 <span className="flex w-full flex-col gap-[2px] overflow-hidden rounded-t-[4px]" style={{ height: `${(d.requests / max) * 100}%` }}>
                   {p.threats > 0 && <span className="w-full bg-bad" style={{ flexGrow: p.threats }} />}
                   {p.cached > 0 && <span className="w-full bg-signal" style={{ flexGrow: p.cached }} />}

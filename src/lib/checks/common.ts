@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 import { BudgetError, ReadError } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { CheckId, Column, ReportStat, Row, Severity } from '../monitor-types';

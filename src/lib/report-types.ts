@@ -2,7 +2,7 @@
 // Stored in supabase/migrations/0020_reports.sql; made by the worker (src/lib/report-scheduler.ts).
 
 import type { Severity } from './monitor-types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 export type ReportScope = 'all' | 'accounts' | 'tag';
 export type Cadence = 'daily' | 'weekly';

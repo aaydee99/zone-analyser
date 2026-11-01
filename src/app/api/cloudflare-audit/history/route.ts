@@ -7,4 +7,4 @@ export const dynamic = 'force-dynamic';
 export const GET = route(async (req) => {
   const q = new URL(req.url).searchParams;
   return cloudflareHistory(q.get('accountId') ?? '', q.get('id') ?? '', q.get('time') ?? '');
-}, { perm: 'audit:read' });
+}, { perm: 'activity:read' });

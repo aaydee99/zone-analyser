@@ -40,13 +40,18 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     let es: EventSource | null = null;
     let done = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    // Lines that arrive within one frame are added in one update (a busy run sends many per frame).
+    let queued: string[] = [];
+    let frame = 0;
+    const flush = () => { frame = 0; const add = queued; queued = []; setLines((ls) => [...ls, ...add]); };
     // A stream can end before the run does (on Vercel it is closed after a few minutes):
     // connect again; the backlog brings the log up to date.
     const connect = () => {
       es = new EventSource(`/api/runs/${id}/stream`);
-      es.addEventListener('backlog', (e) => setLines(JSON.parse((e as MessageEvent).data)));
-      es.addEventListener('line', (e) => setLines((ls) => [...ls, JSON.parse((e as MessageEvent).data)]));
+      es.addEventListener('backlog', (e) => { cancelAnimationFrame(frame); frame = 0; queued = []; setLines(JSON.parse((e as MessageEvent).data)); });
+      es.addEventListener('line', (e) => { queued.push(JSON.parse((e as MessageEvent).data)); if (!frame) frame = requestAnimationFrame(flush); });
       es.addEventListener('status', (e) => {
+        if (frame) { cancelAnimationFrame(frame); flush(); }
         const m = JSON.parse((e as MessageEvent).data) as RunMeta | null;
         if (m) setMeta(m);
         done = true;
@@ -56,7 +61,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       es.onerror = () => { es?.close(); if (!done) retry = setTimeout(connect, 3_000); };
     };
     connect();
-    return () => { done = true; clearTimeout(retry); es?.close(); };
+    return () => { done = true; clearTimeout(retry); cancelAnimationFrame(frame); es?.close(); };
   }, [id]);
 
   const running = meta?.status === 'running';

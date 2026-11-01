@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 import { asMonitor, cfCall, cfReason, inParallel } from './cf-read';
 import { accountTargets } from './cf-targets';
 import { zoneToken } from './zone-explorer';

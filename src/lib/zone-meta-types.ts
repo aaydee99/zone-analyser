@@ -1,7 +1,7 @@
 // Zone tags and owners: the shapes and checks shared by server and client — no Node imports.
 // Console data only (supabase/migrations/0015_zone_meta.sql): never sent to Cloudflare.
 
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 export interface ZoneMeta {
   zoneId: string;

@@ -234,7 +234,7 @@ function CredentialEditor({ open, onClose, initial, onSaved }: {
                   onChange={(e) => setFields((s) => ({ ...s, [f.key]: e.target.value }))}
                 />
                 {f.secret && (
-                  <button type="button" onClick={() => setShow((s) => ({ ...s, [f.key]: !s[f.key] }))} className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-muted hover:text-ink">
+                  <button type="button" onClick={() => setShow((s) => ({ ...s, [f.key]: !s[f.key] }))} aria-label={hidden ? 'Show value' : 'Hide value'} aria-pressed={!hidden} className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-muted hover:text-ink">
                     {hidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
                   </button>
                 )}
@@ -458,7 +458,7 @@ function VaultContents({ onLocked, header }: { onLocked: () => void; header: Rea
           <Field label=".env contents">
             <textarea className="input min-h-[220px] font-mono !text-[12px]" spellCheck={false} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder={'CF_API_TOKEN=...\nCF_ACCOUNT_ID=...\nR2_ACCESS_KEY_ID=...'} />
           </Field>
-          <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] text-signal hover:underline">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded text-[13px] text-signal hover:underline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
             <input type="file" accept=".env,text/plain" className="sr-only" onChange={async (e) => {
               const f = e.target.files?.[0];
               e.target.value = '';

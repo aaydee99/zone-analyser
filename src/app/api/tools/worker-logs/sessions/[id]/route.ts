@@ -8,4 +8,4 @@ type Ctx = { params: Promise<{ id: string }> };
 export const GET = route<Ctx>(async (req, { params }, me) => {
   const after = Math.max(0, Math.floor(Number(new URL(req.url).searchParams.get('after')) || 0));
   return pollTail(me, (await params).id, after);
-}, { perm: 'cloudflare:query' });
+}, { perm: 'workers:tail' });

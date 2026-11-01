@@ -5,7 +5,7 @@ import { Pause, Play } from 'lucide-react';
 import { useInView, usePageVisible, useReducedMotion } from './motion';
 
 /** The verbs the headline cycles through: each one is a section of the console. */
-const VERBS = ['Back up', 'Restore', 'Audit', 'Analyse', 'Explore'] as const;
+const VERBS = ['Audit', 'Monitor', 'Investigate', 'Undo', 'Back up'] as const;
 const EVERY_MS = 2600;
 
 /**
@@ -34,7 +34,7 @@ export function HeroHeadline() {
   return (
     <div ref={ref} className="lp-enter relative" style={{ '--lp-d': '60ms' } as React.CSSProperties}>
       <h1 id="hero-title" className="lp-display text-ink">
-        <span className="sr-only">Back up, restore, audit, analyse and explore your Cloudflare edge.</span>
+        <span className="sr-only">Audit, monitor, investigate, undo and back up your Cloudflare edge.</span>
         <span aria-hidden="true" className="block">
           <span className="lp-rotor">
             <span key={verb} className="lp-rotor-word lp-gold">{verb}</span>

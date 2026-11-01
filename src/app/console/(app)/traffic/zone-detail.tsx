@@ -202,7 +202,7 @@ function TimeChart({ b, label, onPick, split }: { b: Record<string, DetailRow[]>
           {rows.map((r, i) => (
             <button key={r.dims[key]} type="button" aria-label={`${timeLabel(alias, r.dims[key])}: ${whole.format(r.count)}`} disabled={!clickable}
               onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)} onClick={() => clickable && onPick!(alias, r)}
-              className={cx('flex h-full min-w-0 flex-1 items-end rounded-t-sm focus:outline-none', hover === i && 'bg-raised/60', clickable && 'cursor-pointer')}>
+              className={cx('flex h-full min-w-0 flex-1 items-end rounded-t-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none', hover === i && 'bg-raised/60', clickable && 'cursor-pointer')}>
               {split ? (
                 <span className={cx('flex w-full flex-col overflow-hidden rounded-t-sm', clickable && hover === i && 'opacity-80')} style={{ height: `${(r.count / max) * 100}%` }}>
                   {partsAt(r.dims[key]).map((n, k) => <span key={k} className={cx('w-full', split.parts[k].cls)} style={{ height: r.count ? `${(n / r.count) * 100}%` : 0 }} />)}
@@ -304,8 +304,12 @@ function RulesTable({ rows, names, total, onPick }: { rows: DetailRow[]; names: 
               return (
                 <tr key={i} className={cx('border-t border-line/50', rid && 'cursor-pointer hover:bg-raised/40')} onClick={() => rid && onPick(rid)}>
                   <td className="px-3 py-2">
-                    <div className="text-ink">{r.dims.description || <span className="text-muted">(no description)</span>}</div>
-                    {rid && <div className="font-mono text-[10.5px] text-faint">{rid}</div>}
+                    {rid ? (
+                      <button type="button" className="block w-full rounded text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" onClick={(e) => { e.stopPropagation(); onPick(rid); }}>
+                        <span className="block text-ink">{r.dims.description || <span className="text-muted">(no description)</span>}</span>
+                        <span className="block font-mono text-[10.5px] text-faint">{rid}</span>
+                      </button>
+                    ) : <div className="text-ink">{r.dims.description || <span className="text-muted">(no description)</span>}</div>}
                   </td>
                   <td className="px-3 py-2 text-ink-2">
                     <div>{(r.dims.rulesetId && names[r.dims.rulesetId]) || sourceLabel(r.dims.source)}</div>
@@ -337,7 +341,7 @@ function IpTable({ rows, total, withBytes, onPick, what }: { rows: DetailRow[]; 
           <tbody>
             {shown.map((r) => (
               <tr key={r.dims.clientIP} className="cursor-pointer border-t border-line/50 hover:bg-raised/40" onClick={() => onPick(r.dims.clientIP)}>
-                <td className="px-3 py-2 font-mono text-ink">{r.dims.clientIP}</td>
+                <td className="px-3 py-2 font-mono text-ink"><button type="button" className="rounded text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" onClick={(e) => { e.stopPropagation(); onPick(r.dims.clientIP); }}>{r.dims.clientIP}</button></td>
                 <td className="px-3 py-2 text-ink-2">{r.dims.clientCountryName || '—'}</td>
                 <td className="max-w-[260px] truncate px-3 py-2 text-ink-2" title={r.dims.clientASNDescription}>{r.dims.clientASNDescription || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-ink" title={whole.format(r.count)}>{num(r.count)}</td>
@@ -601,7 +605,7 @@ function ManagedSection({ d, onRule, onRuleset }: { d: ZoneDetail; onRule: (rule
                       <tbody>
                         {owasp.slice(0, 40).map((r, i) => (
                           <tr key={i} className="cursor-pointer border-t border-line/50 hover:bg-raised/40" onClick={() => r.dims.ruleId && onRule(r.dims.ruleId)}>
-                            <td className="px-3 py-1.5 text-ink">{r.dims.description || r.dims.ruleId}</td>
+                            <td className="px-3 py-1.5 text-ink">{r.dims.ruleId ? <button type="button" className="rounded text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" onClick={(e) => { e.stopPropagation(); onRule(r.dims.ruleId!); }}>{r.dims.description || r.dims.ruleId}</button> : r.dims.description}</td>
                             <td className="px-3 py-1.5 text-ink-2">{crsCategory(crsOf(r.dims.description))}</td>
                             <td className="px-3 py-1.5"><Badge tone={actionTone(r.dims.action)}>{actionLabel(r.dims.action)}</Badge></td>
                             <td className="px-3 py-1.5 text-right tabular-nums text-ink" title={whole.format(r.count)}>{num(r.count)}</td>

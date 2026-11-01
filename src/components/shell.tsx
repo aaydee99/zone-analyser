@@ -7,15 +7,17 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BrandMark } from './brand-mark';
 import { Eraser, FileOutput, ShieldAlert, FileText, Fingerprint, GitCompare, HeartPulse, ListFilter, MessageSquare, Radar, Search, Tags, Terminal, ScanSearch } from 'lucide-react';
 import { ZoneSearchBox } from './zone-search-box';
-import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X, Lock } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
 import { cx } from './ui';
 import { MeProvider, type MeState } from './me';
 import { WorkerStarting } from './worker-starting';
 import { useFocusTrap } from './use-focus-trap';
+import { usePoll } from './use-poll';
 
-interface NavItem { href: string; label: string; icon: typeof LayoutGrid; perm?: Permission }
+/** perm hides the item without it; locked shows it to everyone, with a lock for those who cannot use it. */
+interface NavItem { href: string; label: string; icon: typeof LayoutGrid; perm?: Permission; locked?: Permission }
 
 const NAV: { section: string; items: NavItem[] }[] = [
   {
@@ -63,8 +65,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: '/console/zone-explorer', label: 'Zone explorer', icon: Globe },
       { href: '/console/traffic', label: 'Traffic analytics', icon: BarChart3 },
       { href: '/console/analytics', label: 'DNS & Workers', icon: Activity },
-      { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'audit:read' },
-      { href: '/console/purge', label: 'Cache purge', icon: Eraser, perm: 'cloudflare:act' },
+      { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'activity:read' },
+      { href: '/console/purge', label: 'Cache purge', icon: Eraser, locked: 'cloudflare:act' },
       { href: '/console/lists', label: 'IP & ASN lists', icon: ListFilter },
       { href: '/console/logpush', label: 'Logpush', icon: FileOutput },
       { href: '/console/onboarding', label: 'Zone onboarding', icon: ScanSearch },
@@ -74,8 +76,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
   {
     section: 'Tools',
     items: [
-      { href: '/console/tools/api', label: 'API console', icon: Terminal, perm: 'cloudflare:query' },
-      { href: '/console/tools/worker-logs', label: 'Worker logs', icon: ScrollText, perm: 'cloudflare:query' },
+      { href: '/console/tools/api', label: 'API console', icon: Terminal, locked: 'cloudflare:query' },
+      { href: '/console/tools/worker-logs', label: 'Worker logs', icon: ScrollText, perm: 'workers:tail' },
     ],
   },
   {
@@ -113,18 +115,43 @@ function Logo() {
   );
 }
 
+/** "signing out in m:ss if idle" in the last 10 minutes; re-renders only itself, every second only then. */
+function IdleCountdown({ expiresAt }: { expiresAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  const remaining = Math.max(0, expiresAt - now);
+  const near = remaining < 10 * 60_000;
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    const t = near ? setInterval(tick, 1000) : undefined;
+    const wait = near ? undefined : setTimeout(tick, Math.min(expiresAt - Date.now() - 10 * 60_000 + 50, 2 ** 31 - 1));
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(t); clearTimeout(wait); document.removeEventListener('visibilitychange', tick); };
+  }, [expiresAt, near]);
+  if (!near) return null;
+  const mm = Math.floor(remaining / 60000);
+  const ss = Math.floor((remaining % 60000) / 1000);
+  return (
+    <div className="mt-2 font-mono text-[11px] text-warn">
+      signing out in {mm}:{String(ss).padStart(2, '0')} if idle
+    </div>
+  );
+}
+
+/** Same answer as before (compared as JSON): keep the old object, so useMe() users do not re-render. */
+const same = (a: MeState, b: MeState) => JSON.stringify(a) === JSON.stringify(b);
+
 export function Shell({ initial, children }: { initial: MeState; children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [me, setMe] = useState<MeState>(initial);
-  const [now, setNow] = useState(() => Date.now());
   const [mobileOpen, setMobileOpen] = useState(false);
   const lastTouch = useRef(0);
 
   // A 401 from api() already sends the browser to /login.
-  const refresh = useCallback(async (touch = false) => {
-    try { setMe(await api<MeState>(`/api/auth/me${touch ? '' : '?peek=1'}`)); } catch { /* transient */ }
+  const refresh = useCallback(async (touch = false, signal?: AbortSignal) => {
+    try { const next = await api<MeState>(`/api/auth/me${touch ? '' : '?peek=1'}`, { signal }); setMe((m) => (same(m, next) ? m : next)); } catch { /* transient */ }
   }, []);
+  const peek = useCallback((signal: AbortSignal) => refresh(false, signal), [refresh]);
   const touchRefresh = useCallback(() => { refresh(true); }, [refresh]);
 
   // Background poll does not count as activity; real input does (throttled).
@@ -132,28 +159,15 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   // Refresh often while something changes: a job runs, or the worker is starting.
   const jobRunning = !!(me.activeRunId || me.activeRestore || (me.worker && !me.worker.online && me.worker.startingSince));
   // The poll pauses while the tab is hidden (nobody sees the banner) and refreshes once when it is shown again.
+  usePoll(peek, jobRunning ? 4_000 : 20_000, { now: false });
   useEffect(() => {
-    let poll: ReturnType<typeof setInterval> | undefined;
-    const start = () => { if (!poll) poll = setInterval(() => refresh(false), jobRunning ? 4_000 : 20_000); };
-    const stop = () => { if (poll) { clearInterval(poll); poll = undefined; } };
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') stop();
-      else { void refresh(false); setNow(Date.now()); start(); }
-    };
-    if (document.visibilityState !== 'hidden') start();
-    const tick = setInterval(() => setNow(Date.now()), 1000);
     const onActivity = () => {
       if (Date.now() - lastTouch.current > 45_000) { lastTouch.current = Date.now(); refresh(true); }
     };
-    document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pointerdown', onActivity);
     window.addEventListener('keydown', onActivity);
-    return () => {
-      stop(); clearInterval(tick);
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('pointerdown', onActivity); window.removeEventListener('keydown', onActivity);
-    };
-  }, [refresh, jobRunning]);
+    return () => { window.removeEventListener('pointerdown', onActivity); window.removeEventListener('keydown', onActivity); };
+  }, [refresh]);
 
   // Rendered without the live state (it was slow): ask for it now.
   useEffect(() => { if (initial.stale) void refresh(false); }, [initial.stale, refresh]);
@@ -168,9 +182,6 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   };
 
   const perms = new Set(me.permissions);
-  const remaining = me.expiresAt ? Math.max(0, me.expiresAt - now) : null;
-  const mm = remaining !== null ? Math.floor(remaining / 60000) : 0;
-  const ss = remaining !== null ? Math.floor((remaining % 60000) / 1000) : 0;
   // The most specific nav item wins: /restore/new lights "New restore", not also the Restore overview.
   const hrefs = NAV.flatMap((s) => s.items.map((i) => i.href));
   const matches = (href: string) => (href === '/console' ? pathname === '/console' : pathname === href || pathname.startsWith(`${href}/`));
@@ -186,7 +197,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
           <div key={section}>
             <div className="eyebrow mb-1.5 px-3 !text-[10.5px] !text-faint">{section}</div>
             <div className="space-y-0.5">
-              {items.map(({ href, label, icon: Icon }) => (
+              {items.map(({ href, label, icon: Icon, locked }) => (
                 <Link
                   key={href}
                   href={href}
@@ -199,6 +210,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
                   {isActive(href) && <span className="absolute top-1/2 left-0 h-4 w-[3px] -translate-y-1/2 rounded-r bg-signal" />}
                   <Icon className={cx('size-[17px]', isActive(href) ? 'text-signal' : 'text-faint group-hover:text-muted')} />
                   {label}
+                  {locked && !perms.has(locked) && <Lock className="ml-auto size-3.5 text-faint" aria-label="View only: your role cannot use this" />}
                   {href === '/console/approvals' && !!me.pendingApprovals && (
                     <span className="ml-auto rounded-full bg-signal px-1.5 py-px text-[11px] font-semibold tabular-nums text-canvas" aria-label={`${me.pendingApprovals} waiting for you`}>{me.pendingApprovals}</span>
                   )}
@@ -248,11 +260,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
             <LogOut className="size-3.5" aria-hidden /> Sign out
           </button>
         </div>
-        {remaining !== null && remaining < 10 * 60_000 && (
-          <div className="mt-2 font-mono text-[11px] text-warn">
-            signing out in {mm}:{String(ss).padStart(2, '0')} if idle
-          </div>
-        )}
+        {!!me.expiresAt && <IdleCountdown expiresAt={me.expiresAt} />}
       </div>
     </div>
   );
@@ -260,6 +268,9 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   return (
     <MeProvider value={me} refresh={touchRefresh}>
       <div className="flex min-h-screen">
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[60] focus:rounded-lg focus:bg-signal focus:px-4 focus:py-2 focus:font-semibold focus:text-signal-ink">
+          Skip to content
+        </a>
         <aside className="glass sticky top-0 hidden h-screen w-[248px] shrink-0 border-r border-line lg:block">{sidebar}</aside>
 
         {mobileOpen && (
@@ -275,7 +286,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
               {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
             </button>
           </header>
-          <main className="mx-auto w-full max-w-[1240px] px-4 py-8 sm:px-8 lg:py-10">
+          <main id="main" className="mx-auto w-full max-w-[1240px] px-4 py-8 sm:px-8 lg:py-10">
             {/* Development mode shows stack traces in the browser and loosens the CSP: never for real use. */}
             {process.env.NODE_ENV !== 'production' && me.permissions.includes('settings:read') && (
               <div role="alert" className="mb-6 rounded-xl border border-warn/40 bg-warn/[0.07] px-4 py-3 text-[13px]">

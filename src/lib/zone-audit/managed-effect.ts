@@ -15,7 +15,7 @@ import { norm } from './expr';
 import { CF_MANAGED, CLOUD, DDOS_L7, ATTACK, PAID, active, ap, ev, executes, obj, phasePath, ruleName, rulesOf, type Draft, type RuleDef } from './rules';
 import { EXPOSED_CREDENTIALS, FREE_MANAGED, OWASP_DEFAULT_THRESHOLD, SENSITIVE_DATA } from './rules-extra';
 import { windowLabel, type EventData, type ManagedException, type ManagedOverview, type ManagedRulesetState, type RulesetRule, type Snapshot, type ZoneInfo } from './types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 /** The managed rulesets the overview lists: id, name, phase and the plans that offer it (null: every plan). */
 export const MANAGED_SETS: { id: string; name: string; phase: 'http_request_firewall_managed' | 'http_response_firewall_managed' | 'ddos_l7'; plans: string[] | null }[] = [
@@ -112,7 +112,7 @@ function build(s: Snapshot): ManagedOverview {
 
 const evSrc = 'GraphQL firewallEventsAdaptiveGroups';
 const T = { group: 'traffic' as const };
-import { whole as n } from '@/lib/num';
+import { whole as n } from '../num';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const win = (s: Snapshot) => `in the last ${windowLabel(s.hours ?? 0)}`;
 

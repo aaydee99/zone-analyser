@@ -69,7 +69,7 @@ export function TagFilter({ value, onChange, showOwner = true, className }: { va
   const remove = (t: string) => onChange({ ...value, tags: tags.filter((x) => x !== t) });
   return (
     <div className={cx('flex flex-wrap items-center gap-2', className)}>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[9px] border border-line bg-sunken/60 px-2 py-1">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-[9px] border border-[var(--control-border)] bg-sunken/60 px-2 py-1 transition-[border-color,box-shadow] hover:border-[var(--control-border-hover)] focus-within:border-signal focus-within:ring-3 focus-within:ring-signal/22">
         <Tag className="size-3.5 shrink-0 text-faint" aria-hidden />
         {tags.map((t) => (
           <span key={t} className="inline-flex items-center gap-0.5 rounded-md border border-signal/40 bg-signal/10 py-px pr-0.5 pl-1.5 font-mono text-[11px] text-ink">

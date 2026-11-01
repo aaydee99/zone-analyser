@@ -85,9 +85,11 @@ export function FavouriteStar({ zoneId, zoneName }: { zoneId: string; zoneName: 
     return () => { live = false; };
   }, [zoneId]);
   const toggle = async () => {
-    setBusy(true);
-    try { setOn((await api<{ on: boolean }>('/api/me/zones/favourite', { method: 'PUT', json: { zoneId, on: !on } })).on); setError(''); }
-    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    // Shown at once; put back if the change did not go through.
+    const was = on;
+    setBusy(true); setOn(!was);
+    try { setOn((await api<{ on: boolean }>('/api/me/zones/favourite', { method: 'PUT', json: { zoneId, on: !was } })).on); setError(''); }
+    catch (e) { setOn(was); setError((e as Error).message); } finally { setBusy(false); }
   };
   return (
     <button type="button" onClick={toggle} disabled={on === null || busy} aria-pressed={!!on}

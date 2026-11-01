@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -84,6 +85,7 @@ function LoginInner() {
         </Button>
         <p className="text-center text-xs text-muted">No account? Ask an admin to add you under Users &amp; roles.</p>
       </form>
+      <p className="mt-4 text-center text-xs text-faint"><Link href="/privacy" className="hover:text-ink">Privacy</Link> · <Link href="/terms" className="hover:text-ink">Terms</Link></p>
     </AuthFrame>
   );
 }

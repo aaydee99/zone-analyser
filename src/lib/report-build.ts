@@ -1,5 +1,5 @@
 import 'server-only';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 import { db } from './supabase';
 import { HttpError } from './http';
 import { cachedActivity } from './cf-audit-cache';

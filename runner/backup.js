@@ -537,6 +537,10 @@ function dropLastApiError() {
 // marker so callers treat it as an unexpected shape.
 const NON_JSON = Symbol('non-json');
 
+// A Cloudflare API call (including reading its body) that takes longer than this is abandoned
+// and handled like a network error.
+const CF_TIMEOUT_MS = 60_000;
+
 // cfApi(path, {method, body}) → parsed response. Retries 429/5xx with linear
 // backoff. On failure the error is logged and recorded, and callers always get
 // a {success:false,…} envelope even when the error body wasn't one. The token
@@ -552,6 +556,7 @@ async function cfApi(p, { method = 'GET', body } = {}) {
         method,
         headers: { Authorization: `Bearer ${CF_API_TOKEN}`, 'Content-Type': 'application/json' },
         body,
+        signal: AbortSignal.timeout(CF_TIMEOUT_MS),
       });
       status = r.status;
       text = await r.text();
@@ -592,7 +597,7 @@ async function cfApi(p, { method = 'GET', body } = {}) {
 // parsed body on HTTP 200 only, otherwise null.
 async function cfApiProbe(p) {
   try {
-    const r = await fetch(`${CF_API_BASE}${p}`, { headers: { Authorization: `Bearer ${CF_API_TOKEN}` } });
+    const r = await fetch(`${CF_API_BASE}${p}`, { headers: { Authorization: `Bearer ${CF_API_TOKEN}` }, signal: AbortSignal.timeout(CF_TIMEOUT_MS) });
     const text = await r.text();
     if (r.status !== 200) return null;
     return jqAlt(() => JSON.parse(text), null);
@@ -607,7 +612,7 @@ async function cfApiDownload(p, outFile) {
   let status = 0;
   let buf = null;
   try {
-    const r = await fetch(`${CF_API_BASE}${p}`, { headers: { Authorization: `Bearer ${CF_API_TOKEN}` } });
+    const r = await fetch(`${CF_API_BASE}${p}`, { headers: { Authorization: `Bearer ${CF_API_TOKEN}` }, signal: AbortSignal.timeout(CF_TIMEOUT_MS) });
     status = r.status;
     buf = Buffer.from(await r.arrayBuffer());
   } catch {
@@ -2037,7 +2042,7 @@ async function writeSnippets(dir, zoneId, rawDir) {
     let entry = '';
     try {
       const r = await fetch(`${CF_API_BASE}/zones/${zoneId}/snippets/${name}/content`,
-        { headers: { Authorization: `Bearer ${CF_API_TOKEN}` } });
+        { headers: { Authorization: `Bearer ${CF_API_TOKEN}` }, signal: AbortSignal.timeout(CF_TIMEOUT_MS) });
       status = r.status;
       buf = Buffer.from(await r.arrayBuffer());
       ctype = r.headers.get('content-type') || '';
@@ -3324,6 +3329,8 @@ async function s3Request({ method, url, region, accessKey, secretKey, body = Buf
     method,
     headers: { ...extraHeaders, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate, Authorization: authorization },
     body: method === 'GET' || method === 'HEAD' ? undefined : body,
+    // Uploads move files: 10 minutes; lists and HEADs: 60 s. A timeout counts as a network error (000).
+    signal: AbortSignal.timeout(method === 'PUT' ? 600_000 : 60_000),
   });
 }
 

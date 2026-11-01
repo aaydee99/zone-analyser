@@ -37,7 +37,7 @@
 
   --green-400: #3fbf8a;
   --yellow-400: #e8892b;         /* copper, so warnings never read as the gold accent */
-  --red-400: var(--brand-crimson-lit);
+  --red-400: #f0566a;            /* lighter than crimson-lit so status text clears 4.5:1 */
   --blue-400: #b8c2d0;           /* steel */
   --cyan-400: #b8c2d0;
 }
@@ -86,6 +86,9 @@
   --glass-border: rgb(255 255 255 / 0.08);
   --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.05);
   --glass-blur: 14px;
+  /* Form-control edges only (≥3:1 on sunken/surface); cards and dividers keep --color-line. */
+  --control-border: #686c75;
+  --control-border-hover: var(--brand-chrome-lo);
   --motion-fast: 150ms;
   --motion-base: 220ms;
 }
@@ -149,7 +152,7 @@
   .input {
     width: 100%;
     background: var(--color-sunken);
-    border: 1px solid var(--color-line);
+    border: 1px solid var(--control-border);
     border-radius: 9px;
     padding: 0.55rem 0.75rem;
     font-size: 14px;
@@ -157,7 +160,7 @@
     transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
   }
   .input::placeholder { color: var(--color-faint); }
-  .input:hover { border-color: var(--color-line-strong); }
+  .input:hover { border-color: var(--control-border-hover); }
   .input:focus { outline: none; border-color: var(--color-signal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-signal) 22%, transparent); }
   .input:disabled { opacity: .5; cursor: not-allowed; }
 }
@@ -208,7 +211,6 @@
 :root {
   --lp-ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --lp-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --lp-band-ink-2-mix: color-mix(in srgb, var(--gray-50) 76%, var(--brand-crimson));
 }
 
 /* Semantic */
@@ -218,7 +220,6 @@
 :root {
   --lp-band: var(--brand-crimson-deep);      /* the one region crimson owns outright */
   --lp-band-ink: var(--gray-50);
-  --lp-band-ink-2: var(--lp-band-ink-2-mix);
   --lp-rule: var(--color-line);
   --lp-diff-del: color-mix(in srgb, var(--color-bad) 14%, transparent);
   --lp-diff-del-ink: color-mix(in srgb, var(--color-bad) 70%, var(--color-ink));
@@ -343,7 +344,7 @@
   .lp-cursor path { transform-origin: 30% 20%; transition: transform 160ms ease; }
   .lp-cursor.is-down path { transform: scale(0.82); }
   .lp-ping { animation: lp-ping-in 520ms var(--lp-ease-out-expo) both, lp-ping-out 400ms ease-in 3.2s forwards; }
-  .lp-bar { display: block; background: color-mix(in srgb, var(--color-signal) 38%, var(--color-raised-2)); transform-origin: bottom; animation: lp-bar-in 600ms var(--lp-ease-out-expo) both; }
+  .lp-bar { display: block; background: color-mix(in srgb, var(--color-signal) 50%, var(--color-raised-2)); transform-origin: bottom; animation: lp-bar-in 600ms var(--lp-ease-out-expo) both; }
   .lp-bar.is-hot { background: var(--color-signal); }
   button.lp-bar.is-hot:hover { background: var(--color-signal-soft); }
   .lp-del { background: var(--lp-diff-del); color: var(--lp-diff-del-ink); }

@@ -1,7 +1,7 @@
 // Logpush jobs: how healthy each one is, what of its destination may be shown, and which changes
 // the console may ask Cloudflare for. Shared by server and client — no Node imports.
 
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 export type LogpushStatus = 'failing' | 'stale' | 'disabled' | 'waiting' | 'healthy';
 export const LOGPUSH_STATUSES: LogpushStatus[] = ['failing', 'stale', 'disabled', 'waiting', 'healthy'];

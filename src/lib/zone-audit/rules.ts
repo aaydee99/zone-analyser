@@ -17,7 +17,7 @@ import {
   type AuditFinding, type AuditSummary, type BotConfig, type CertPack, type CnameLookups, type CoverageEntry, type DnsRec, type Evidence, type PageRule,
   type RuleGroup, type RulesetRule, type Severity, type Snapshot, type SourceKey, type Verdict, type WorkerRoute, type ZoneInfo,
 } from './types';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 export const WEB = 'WEB-PROTOCOL-AND-AUTH.md';
 export const CLOUD = 'CLOUD-AND-DEPLOYMENT.md';

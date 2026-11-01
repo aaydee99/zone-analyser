@@ -11,7 +11,7 @@ import { noteDetails, type ChangeNote } from './change-note';
 import { db, isConfigured } from './supabase';
 import { jobsPaused, missingFn } from './job-lock';
 import { approvalTtlMinutes, expiresAtOf, listApprovals, newApproval, readApproval, saveApproval, type Approval, type ApprovalKind, type ApprovalStatus } from './approvals-store';
-import { compactNum } from '@/lib/num';
+import { compactNum } from './num';
 
 // Who approves what: an operator's backup needs an admin or super admin; an admin's restore apply needs
 // a super admin. Approving starts it at once. Every request and decision goes to the audit log.

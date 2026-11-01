@@ -10,6 +10,9 @@ import { useToast } from './toast';
 // backup.js only emits a handful of SGR codes; map them to theme colours.
 const FG: Record<string, string> = { '31': 'text-bad', '32': 'text-ok', '33': 'text-warn', '34': 'text-info', '36': 'text-cyan' };
 
+// Only the last lines are drawn (a big run has tens of thousands); "Show earlier lines" draws all.
+const WINDOW = 2000;
+
 interface Seg { text: string; cls: string }
 
 function parseAnsi(line: string): Seg[] {
@@ -56,7 +59,10 @@ const Line = memo(function Line({ line, n }: { line: string; n: number }) {
 export function Terminal({ lines, live, filename }: { lines: string[]; live: boolean; filename: string }) {
   const toast = useToast();
   const ref = useRef<HTMLDivElement>(null);
-  const [follow, setFollow] = useState(true);
+  const [follow, setFollowing] = useState(true);
+  // Where the drawn lines start while reading up (not following): new lines do not slide them away.
+  const [held, setHeld] = useState<number | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [query, setQuery] = useState('');
   const [levels, setLevels] = useState<Record<Level, boolean>>({ INFO: true, OK: true, WARN: true, ERROR: true, OTHER: true });
 
@@ -74,9 +80,14 @@ export function Terminal({ lines, live, filename }: { lines: string[]; live: boo
     return out;
   }, [lines, query, levels]);
 
+  const latest = Math.max(0, filtered.length - WINDOW);
+  const from = showAll ? 0 : held !== null ? Math.min(held, latest) : latest;
+  const shown = useMemo(() => (from ? filtered.slice(from) : filtered), [filtered, from]);
+  const setFollow = (v: boolean) => { setFollowing(v); setHeld(v ? null : latest); };
+
   useEffect(() => {
     if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [filtered, follow]);
+  }, [shown, follow]);
 
   const onScroll = () => {
     const el = ref.current;
@@ -132,7 +143,12 @@ export function Terminal({ lines, live, filename }: { lines: string[]; live: boo
         </div>
       </div>
       <div ref={ref} onScroll={onScroll} className="h-[62vh] min-h-[360px] overflow-auto py-3 pr-4 font-mono text-[12.5px] leading-[1.65] text-ink-2">
-        {filtered.map(([l, n]) => <Line key={n} line={l} n={n} />)}
+        {from > 0 && (
+          <button type="button" onClick={() => { setShowAll(true); setFollow(false); }} className="mb-2 ml-12 rounded-md border border-line-strong px-2.5 py-1 font-sans text-xs text-muted transition-colors hover:border-faint hover:text-ink">
+            Show earlier lines ({from.toLocaleString()})
+          </button>
+        )}
+        {shown.map(([l, n]) => <Line key={n} line={l} n={n} />)}
         {live && (
           <div className="flex pl-12 text-signal"><span className="inline-block h-4 w-2 animate-pulse bg-signal/80" /></div>
         )}

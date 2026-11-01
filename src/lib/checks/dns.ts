@@ -6,7 +6,7 @@ import { compareDelegation, compareDnssec, inZone, nsSet, originLeaks, takeoverS
 import type { NewFinding } from '../monitor-store';
 import type { Row, Severity } from '../monitor-types';
 import { DAY, Problems, SEV_SORT, daysSince, notAvailable, readStat, type CheckDef } from './common';
-import { compactNum } from '@/lib/num';
+import { compactNum } from '../num';
 
 // DNS hygiene, once a day per zone: CNAMEs pointing at names that no longer exist (on services where
 // someone else could claim them), whether public DNS delegates the zone to the nameservers Cloudflare

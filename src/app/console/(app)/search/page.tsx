@@ -1,10 +1,10 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Database, RefreshCw, RotateCcw, Search } from 'lucide-react';
-import { api, fmtDate, relTime } from '@/lib/client';
+import { api, fmtDate, isAbort, relTime } from '@/lib/client';
 import { INDEX_KINDS, type IndexKind } from '@/lib/zone-index';
 import type { IndexStatus, SearchHit, SearchResult } from '@/lib/zone-search';
 import { Alert, Badge, Button, Card, EmptyState, Field, Loading, PageHeader, SectionHeader, SkeletonTable, cx } from '@/components/ui';
@@ -51,11 +51,21 @@ function SearchPage() {
     return u.toString();
   }, [q, mode, kind, account, tag, offset]);
 
+  // A new search cancels the one still running: only the latest answer is shown.
+  const inFlight = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
-    if (!q) { setData(null); return; }
+    inFlight.current?.abort();
+    if (!q) { inFlight.current = null; setData(null); setLoading(false); return; }
+    const ctl = new AbortController();
+    inFlight.current = ctl;
     setLoading(true);
-    try { setData(await api<Answer>(`/api/search?${query()}`)); setError(''); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+    try {
+      const r = await api<Answer>(`/api/search?${query()}`, { signal: ctl.signal });
+      if (inFlight.current === ctl) { setData(r); setError(''); }
+    } catch (e) { if (!isAbort(e) && inFlight.current === ctl) setError((e as Error).message); }
+    finally { if (inFlight.current === ctl) { inFlight.current = null; setLoading(false); } }
   }, [q, query]);
+  useEffect(() => () => inFlight.current?.abort(), []);
   const loadStatus = useCallback(async () => {
     try { setStatus(await api<IndexStatus>('/api/search/index')); setStatusError(''); } catch (e) { setStatusError((e as Error).message); }
   }, []);

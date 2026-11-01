@@ -17,7 +17,7 @@ const SEV_TONE: Record<Severity, 'bad' | 'warn' | 'info' | 'neutral'> = { critic
 const SEV_LABEL: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info' };
 
 export function SeverityBadge({ s }: { s: Severity }) {
-  return <Badge tone={SEV_TONE[s]} className={s === 'critical' ? '!border-bad/50 !bg-bad/20 font-semibold' : ''}>{SEV_LABEL[s]}</Badge>;
+  return <Badge tone={SEV_TONE[s]} className={s === 'critical' ? '!border-bad/50 !bg-bad/12 font-semibold' : ''}>{SEV_LABEL[s]}</Badge>;
 }
 
 import { whole } from '@/lib/num';
