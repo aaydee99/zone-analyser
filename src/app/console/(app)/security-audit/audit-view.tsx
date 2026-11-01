@@ -106,28 +106,100 @@ export function EffectivenessTable({ e, note }: { e: Effectiveness | null; note?
       {e.notes.length > 0 && <ul className="space-y-1 px-5 pt-3 text-xs text-warn">{e.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
       {!e.rules.length ? <p className="px-5 py-4 text-[13px] text-muted">No security events and no custom or rate limiting rules in the window.</p> : (
         <div className="overflow-x-auto pt-2">
-          <table className="w-full min-w-[860px] text-left text-[13px]">
+          <table className="w-full min-w-[680px] text-left text-[13px]">
             <thead className="border-b border-line text-xs text-muted">
-              <tr>{['Rule', 'Events', 'By action', 'Solve rate', 'Trend', 'Top paths', 'Top countries', 'Top networks'].map((h) => <th key={h} scope="col" className="px-3 py-2 font-medium first:pl-5 last:pr-5">{h}</th>)}</tr>
+              <tr>
+                {['Rule', 'Events', 'Actions', 'Solve rate', 'Trend'].map((h) => <th key={h} scope="col" className="px-3 py-2 font-medium first:pl-5">{h}</th>)}
+                <th scope="col" className="py-2 pr-5 pl-3"><span className="sr-only">Details</span></th>
+              </tr>
             </thead>
-            <tbody className="divide-y divide-line/70">
-              {e.rules.map((x) => (
-                <tr key={x.key} className="align-top">
-                  <td className="py-2 pl-5 pr-3"><span className="font-medium text-ink">{x.name}</span><div className="text-xs text-muted">{KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div></td>
-                  <td className={cx('px-3 py-2 tabular-nums', !x.events && 'text-faint')}>{whole.format(x.events)}</td>
-                  <td className="px-3 py-2 text-xs text-ink-2">{Object.entries(x.byAction).sort((a, b) => b[1] - a[1]).map(([a, n]) => `${a} ${whole.format(n)}`).join(' · ') || '—'}</td>
-                  <td className="px-3 py-2 tabular-nums">{x.solveRate === null ? <span className="text-faint">—</span> : pct(x.solveRate)}</td>
-                  <td className="px-3 py-2 tabular-nums">{x.trend === null ? <span className="text-faint">{x.previous === null ? '—' : 'new'}</span> : <span className={cx(x.trend > 0.5 ? 'text-warn' : 'text-ink-2')}>{x.trend >= 0 ? '+' : ''}{pct(x.trend)}</span>}</td>
-                  <td className="max-w-56 px-3 py-2 font-mono text-[11.5px] break-all text-ink-2">{x.topPaths.slice(0, 3).map((p) => `${p.path} (${whole.format(p.count)})`).join(', ')}</td>
-                  <td className="px-3 py-2 text-xs text-ink-2">{x.topCountries.slice(0, 3).map((p) => `${p.country} ${whole.format(p.count)}`).join(', ')}</td>
-                  <td className="py-2 pl-3 pr-5 text-xs text-ink-2">{x.topAsns.slice(0, 3).map((p) => `AS${p.asn} ${p.name} (${whole.format(p.count)})`).join(', ')}</td>
-                </tr>
-              ))}
+            <tbody>
+              {e.rules.map((x, i) => <EffectRow key={x.key} x={x} total={e.totalEvents} open={i === 0 && x.events > 0} />)}
             </tbody>
           </table>
         </div>
       )}
     </Card>
+  );
+}
+
+/** One rule: the numbers on one line; its top paths, countries and networks in a panel below. */
+function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][number]; total: number; open: boolean }) {
+  const [open, setOpen] = useState(initial);
+  const panel = `effect-${x.key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const actions = Object.entries(x.byAction).sort((a, b) => b[1] - a[1]);
+  const share = total ? x.events / total : 0;
+  const hasDetail = x.topPaths.length + x.topCountries.length + x.topAsns.length > 0;
+  return (
+    <>
+      <tr className={cx('border-t border-line/70 align-top', open && 'bg-raised/30')}>
+        <td className="py-2.5 pr-3 pl-5">
+          <span className="font-medium text-ink">{x.name}</span>
+          <div className="text-xs text-muted">{KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
+        </td>
+        <td className="w-36 px-3 py-2.5">
+          <span className={cx('tabular-nums', !x.events && 'text-faint')}>{whole.format(x.events)}</span>
+          {x.events > 0 && (
+            <span className="mt-1 block h-1 w-24 rounded-full bg-line" title={`${pct(share)} of all security events`}>
+              <span className="block h-1 rounded-full bg-signal/70" style={{ width: `${Math.max(3, share * 100)}%` }} />
+            </span>
+          )}
+        </td>
+        <td className="px-3 py-2.5">
+          {actions.length ? (
+            <span className="flex flex-wrap gap-1">
+              {actions.map(([a, n]) => <span key={a} className="rounded-md border border-line bg-sunken/60 px-1.5 py-0.5 text-[11.5px] text-ink-2">{a.replace(/_/g, ' ')} <span className="tabular-nums text-muted">{whole.format(n)}</span></span>)}
+            </span>
+          ) : <span className="text-faint">—</span>}
+        </td>
+        <td className="px-3 py-2.5 tabular-nums">{x.solveRate === null ? <span className="text-faint">—</span> : pct(x.solveRate)}</td>
+        <td className="px-3 py-2.5 tabular-nums">{x.trend === null ? <span className="text-faint">{x.previous === null ? '—' : 'new'}</span> : <span className={cx(x.trend > 0.5 ? 'text-warn' : 'text-ink-2')}>{x.trend >= 0 ? '+' : ''}{pct(x.trend)}</span>}</td>
+        <td className="py-2 pr-5 pl-3 text-right">
+          {hasDetail && (
+            <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink">
+              Details <ChevronDown aria-hidden="true" className={cx('size-3.5 transition-transform', open && 'rotate-180')} />
+            </button>
+          )}
+        </td>
+      </tr>
+      {open && hasDetail && (
+        <tr id={panel} className="bg-raised/30">
+          <td colSpan={6} className="px-5 pt-1 pb-4">
+            <div className="grid gap-5 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-3">
+              <RankList title="Top paths" mono items={x.topPaths.map((p) => ({ label: p.path || '/', count: p.count }))} />
+              <RankList title="Top countries" items={x.topCountries.map((p) => ({ label: p.country, count: p.count }))} />
+              <RankList title="Top networks" items={x.topAsns.map((p) => ({ label: p.name || `AS${p.asn}`, sub: `AS${p.asn}`, count: p.count }))} />
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/** A ranked list with counts and bars; long values are cut short, with the full value on hover. */
+function RankList({ title, items, mono }: { title: string; items: { label: string; sub?: string; count: number }[]; mono?: boolean }) {
+  const top = items.slice(0, 5);
+  const max = Math.max(1, ...top.map((i) => i.count));
+  return (
+    <div className="min-w-0">
+      <h4 className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">{title}</h4>
+      {top.length ? (
+        <ol className="space-y-2">
+          {top.map((i, n) => (
+            <li key={`${i.label}:${n}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3">
+              <span className="min-w-0">
+                <span className={cx('block truncate text-[12.5px] text-ink-2', mono && 'font-mono text-[12px]')} title={i.label}>{i.label}</span>
+                {i.sub && <span className="block text-[11px] text-faint">{i.sub}</span>}
+                <span className="mt-1 block h-1 rounded-full bg-line" aria-hidden="true"><span className="block h-1 rounded-full bg-signal/60" style={{ width: `${Math.max(4, (i.count / max) * 100)}%` }} /></span>
+              </span>
+              <span className="pt-px text-[12.5px] tabular-nums text-ink-2">{whole.format(i.count)}</span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="text-xs text-faint">None in the window.</p>}
+    </div>
   );
 }
 
