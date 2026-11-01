@@ -6,6 +6,7 @@ most of them delete tables and their data.
 
 | Migration | Rollback | Loses data |
 | --- | --- | --- |
+| 0021_zone_audits | 0021_zone_audits.down.sql | **every stored security audit (the per-zone history)** |
 | 0020_reports | 0020_reports.down.sql | **report definitions and every report made (the history)**, and the Slack command allow-list (monitoring data is kept) |
 | 0019_ops_tools | 0019_ops_tools.down.sql | **saved API console queries**; live Worker log sessions in progress (their events are only kept while a session runs) |
 | 0018_zone_health | 0018_zone_health.down.sql | no (only the zone health scores, recomputed from monitoring when 0018 is applied again) |

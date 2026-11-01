@@ -20,8 +20,8 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   if (format === 'html') {
     await audit(me, 'report.downloaded', run.content.name, { run: run.id, format });
     const res = attachment(`${base}.html`, reportHtml(run.content, BRAND.name), 'text/html; charset=utf-8');
-    // Meant to be opened from disk; should a browser render it from the console, nothing in it runs.
-    res.headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    // A download (attachment), opened from disk. It has no scripts and every value in it is escaped;
+    // the console's own CSP (src/proxy.ts, set on every response) applies should a browser render it here.
     res.headers.set('X-Content-Type-Options', 'nosniff');
     return res;
   }

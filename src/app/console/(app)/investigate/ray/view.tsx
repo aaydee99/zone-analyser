@@ -137,15 +137,18 @@ function Result({ r }: { r: RayResult }) {
   );
 }
 
-export function RayView({ initialRay, initialZone }: { initialRay: string; initialZone: string }) {
+export function RayView({ initialRay, initialZone, initialHours, initialAt }: { initialRay: string; initialZone: string; initialHours: number; initialAt: string }) {
   const accounts = useAccounts();
   const [ray, setRay] = useState(initialRay);
   const [scope, setScope] = useState<Scope>('zone');
   const [zone, setZone] = useState<PickedZone | null>(null);
   const [host, setHost] = useState('');
   const [account, setAccount] = useState('');
-  const [hours, setHours] = useState(24);
-  const [at, setAt] = useState('');
+  // A link may say how far back (and around when) to search; otherwise the last 24 hours.
+  const linkHours = (RAY_WINDOWS as readonly number[]).includes(initialHours) ? initialHours : 24;
+  const linkAt = initialAt && !Number.isNaN(Date.parse(initialAt)) ? new Date(initialAt).toISOString() : '';
+  const [hours, setHours] = useState(linkHours);
+  const [at, setAt] = useState(linkAt ? linkAt.slice(0, 16) : '');
   const [path, setPath] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const job = useJob<RayResult>(path);
@@ -157,9 +160,9 @@ export function RayView({ initialRay, initialZone }: { initialRay: string; initi
       const z = r.zones.find((x) => x.id === initialZone);
       if (!z) return;
       setZone(z);
-      if (initialRay) setPath(`/api/investigate/ray?${new URLSearchParams({ ray: initialRay, zone: z.id, hours: '24' })}`);
+      if (initialRay) setPath(`/api/investigate/ray?${new URLSearchParams({ ray: initialRay, zone: z.id, hours: String(linkHours), ...(linkAt ? { at: linkAt } : {}) })}`);
     }).catch(() => undefined);
-  }, [initialZone, initialRay]);
+  }, [initialZone, initialRay, linkHours, linkAt]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();

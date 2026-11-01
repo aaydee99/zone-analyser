@@ -4,12 +4,12 @@
 import { SEVERITIES } from './monitor-types';
 import { csvFile } from './zone-format';
 import {
-  SECTION_LABEL, bytesLabel, changeLabel, sumCounts,
+  SECTION_LABEL, bytesLabel, changeLabel, fmtEastern, sumCounts,
   type ReportContent, type SectionKey, type SevCounts, type TrafficNumbers,
 } from './report-types';
 
 const whole = (n: number) => n.toLocaleString('en-US');
-const day = (iso: string) => iso.slice(0, 16).replace('T', ' ') + ' UTC';
+const day = (iso: string) => fmtEastern(iso);
 export const periodLabel = (c: Pick<ReportContent, 'periodStart' | 'periodEnd'>) => `${day(c.periodStart)} – ${day(c.periodEnd)}`;
 const sevLine = (c: SevCounts) => SEVERITIES.filter((s) => c[s]).map((s) => `${c[s]} ${s}`).join(', ') || 'none';
 const pct = (part: number, total: number) => (total ? `${((part / total) * 100).toFixed(1)}%` : '—');
@@ -108,12 +108,12 @@ export function reportHtml(c: ReportContent, brand: string): string {
     const s = c.sections;
     if (k === 'changes' && s.changes?.status === 'ok') {
       parts.push(table(['Category', 'Changes', 'Created', 'Updated', 'Deleted'], s.changes.byCategory.map((g) => [g.label, g.total, g.create, g.update, g.delete])));
-      parts.push('<h3>Newest changes</h3>', table(['Time (UTC)', 'Change', 'Zone', 'Account', 'By'], s.changes.top.map((x) => [day(x.time), x.title, x.zone, x.account, x.actor])));
+      parts.push('<h3>Newest changes</h3>', table(['Time (Eastern)', 'Change', 'Zone', 'Account', 'By'], s.changes.top.map((x) => [day(x.time), x.title, x.zone, x.account, x.actor])));
     }
     if (k === 'findings' && s.findings && s.findings.status !== 'unavailable') {
       parts.push(table(['Severity', 'Open', 'New', 'Resolved'], SEVERITIES.map((v) => [v, s.findings!.open[v], s.findings!.fresh[v], s.findings!.resolved[v]])));
-      parts.push('<h3>New findings</h3>', table(['Severity', 'Check', 'Finding', 'Where', 'First seen (UTC)'], s.findings.freshTop.map((f) => [f.severity, f.check, f.title, f.where, day(f.at)])));
-      parts.push('<h3>Resolved findings</h3>', table(['Severity', 'Check', 'Finding', 'Where', 'Resolved (UTC)'], s.findings.resolvedTop.map((f) => [f.severity, f.check, f.title, f.where, day(f.at)])));
+      parts.push('<h3>New findings</h3>', table(['Severity', 'Check', 'Finding', 'Where', 'First seen (Eastern)'], s.findings.freshTop.map((f) => [f.severity, f.check, f.title, f.where, day(f.at)])));
+      parts.push('<h3>Resolved findings</h3>', table(['Severity', 'Check', 'Finding', 'Where', 'Resolved (Eastern)'], s.findings.resolvedTop.map((f) => [f.severity, f.check, f.title, f.where, day(f.at)])));
     }
     if (k === 'traffic' && s.traffic?.current) {
       parts.push(table(['Period', 'Requests', 'Cached requests', 'Bandwidth', 'Cached bandwidth', 'Page views'], [['This period', ...nums(s.traffic.current)], ['Period before', ...nums(s.traffic.previous)]]));
@@ -125,7 +125,7 @@ export function reportHtml(c: ReportContent, brand: string): string {
     }
     if (k === 'coverage' && s.coverage && s.coverage.status !== 'unavailable') {
       parts.push(table(['Check', 'Units', 'Read', 'Failing', 'Never read'], s.coverage.checks.map((x) => [x.label, x.targets, x.read, x.failing, x.never])));
-      if (s.coverage.problems.length) parts.push('<h3>Newest failed reads</h3>', table(['Check', 'Where', 'Reason', 'When (UTC)'], s.coverage.problems.map((p) => [p.check, p.scope, p.error, p.at ? day(p.at) : ''])));
+      if (s.coverage.problems.length) parts.push('<h3>Newest failed reads</h3>', table(['Check', 'Where', 'Reason', 'When (Eastern)'], s.coverage.problems.map((p) => [p.check, p.scope, p.error, p.at ? day(p.at) : ''])));
     }
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${h(`${brand} report: ${c.name}`)}</title>
@@ -141,12 +141,12 @@ export function sectionCsv(c: ReportContent, key: SectionKey): string | null {
   switch (key) {
     case 'changes':
       if (!s.changes) return null;
-      return csvFile([['Time (UTC)', 'Change', 'Zone', 'Account', 'By'], ...s.changes.top.map((x) => [x.time, x.title, x.zone, x.account, x.actor])]);
+      return csvFile([['Time (Eastern)', 'Change', 'Zone', 'Account', 'By'], ...s.changes.top.map((x) => [day(x.time), x.title, x.zone, x.account, x.actor])]);
     case 'findings':
       if (!s.findings) return null;
-      return csvFile([['Kind', 'Severity', 'Check', 'Finding', 'Where', 'Time (UTC)'],
+      return csvFile([['Kind', 'Severity', 'Check', 'Finding', 'Where', 'Time (Eastern)'],
         ...SEVERITIES.flatMap((v) => [['open (count)', v, '', String(s.findings!.open[v]), '', ''], ['new (count)', v, '', String(s.findings!.fresh[v]), '', ''], ['resolved (count)', v, '', String(s.findings!.resolved[v]), '', '']]),
-        ...s.findings.freshTop.map((f) => ['new', f.severity, f.check, f.title, f.where, f.at]),
+        ...s.findings.freshTop.map((f) => ['new', f.severity, f.check, f.title, f.where, day(f.at)]),
         ...s.findings.resolvedTop.map((f) => ['resolved', f.severity, f.check, f.title, f.where, f.at])]);
     case 'traffic': {
       if (!s.traffic) return null;
@@ -160,8 +160,8 @@ export function sectionCsv(c: ReportContent, key: SectionKey): string | null {
       return csvFile([['Kind', 'Hosts / name', 'Zone or account', 'Status', 'Expires', 'Days left'], ...s.certificates.rows.map((r) => [r.kind, r.name, r.where, r.status, r.expires ?? '', r.days ?? ''])]);
     case 'coverage':
       if (!s.coverage) return null;
-      return csvFile([['Check', 'Units', 'Read', 'Failing', 'Never read', 'Problem scope', 'Problem', 'When (UTC)'],
+      return csvFile([['Check', 'Units', 'Read', 'Failing', 'Never read', 'Problem scope', 'Problem', 'When (Eastern)'],
         ...s.coverage.checks.map((x) => [x.label, x.targets, x.read, x.failing, x.never, '', '', '']),
-        ...s.coverage.problems.map((p) => [p.check, '', '', '', '', p.scope, p.error, p.at ?? ''])]);
+        ...s.coverage.problems.map((p) => [p.check, '', '', '', '', p.scope, p.error, p.at ? day(p.at) : ''])]);
   }
 }

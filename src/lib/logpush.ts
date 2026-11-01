@@ -9,11 +9,14 @@ import { db } from './supabase';
 import { zoneToken } from './zone-explorer';
 import { ChangeError, STATUS_SORT, checkChanges, redactDestination, scrubText, type LogpushRow, type LogpushStatus, type RawJob } from './logpush-types';
 import type { Coverage } from './monitor-types';
+import { NEED_CREDENTIAL, authKind, cfRuntime, credentialRefused, parseRuntimeCredential, type RuntimeAnswer, type RuntimeCredential } from './cf-runtime-credential';
 
 // Logpush jobs of every account and zone. The list comes from the monitoring check (checks/logpush.ts),
 // stored in monitor_rows: no Cloudflare call to show it. Cloudflare is read live only for the one job
 // being edited. Changes go through the Cloudflare action approval flow (cf-actions.ts); the console
-// never shows or logs a destination beyond its host.
+// never shows or logs a destination beyond its host. Everything that writes, or makes Cloudflare
+// write (the ownership challenge) or needs write rights (destination validation), runs with a
+// credential typed in at run time (cf-runtime-credential.ts), never with a stored token.
 
 export type LogpushScope = 'account' | 'zone';
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -68,35 +71,56 @@ export async function liveJob(scope: LogpushScope, id: string, jobId: number): P
 
 /**
  * Asks Cloudflare to write an ownership challenge file into the destination (S3, GCS, Azure, Sumo …).
- * It changes nothing in Cloudflare, but needs Logs Edit. The destination is not stored or logged.
+ * It changes nothing in Cloudflare's settings but needs Logs Edit, so it runs with the credential typed
+ * in for it (`cloudflare` in the body). Neither that nor the destination is stored or logged.
  */
-export async function requestOwnership(me: Me, raw: { scope?: unknown; scopeId?: unknown; destination_conf?: unknown }) {
+export async function requestOwnership(me: Me, raw: { scope?: unknown; scopeId?: unknown; destination_conf?: unknown; cloudflare?: unknown }) {
+  let cred: RuntimeCredential | null = parseRuntimeCredential(raw.cloudflare);
+  if (!cred) throw new HttpError(400, NEED_CREDENTIAL);
+  try {
+    return await ownership(me, raw, cred);
+  } finally {
+    cred = null;
+  }
+}
+
+async function ownership(me: Me, raw: { scope?: unknown; scopeId?: unknown; destination_conf?: unknown }, cred: RuntimeCredential) {
   const scope: LogpushScope = raw.scope === 'zone' ? 'zone' : 'account';
   const id = typeof raw.scopeId === 'string' ? raw.scopeId : '';
   let conf: string | undefined;
   try { conf = checkChanges({ destination_conf: raw.destination_conf }, 'update').destination_conf; } catch (err) { throw err instanceof ChangeError ? new HttpError(400, err.message) : err; }
   if (!conf) throw new HttpError(400, 'Enter the destination');
   const t = await scopeToken(scope, id);
-  let r;
-  try { r = await cfCall<{ filename?: string; message?: string; valid?: boolean }>(t.token, 'POST', `/${scope === 'zone' ? 'zones' : 'accounts'}/${id}/logpush/ownership`, { destination_conf: conf }); } catch (err) { throw budget(err); }
+  const r = await cfRuntime<{ filename?: string; message?: string; valid?: boolean }>(cred, 'POST', `/${scope === 'zone' ? 'zones' : 'accounts'}/${id}/logpush/ownership`, { destination_conf: conf });
   const host = redactDestination(conf);
-  if (!ok(r)) {
-    await audit(me, 'logpush.ownership_failed', t.scopeName, { scope, destination: host, error: scrubText(cfReason(r)) });
-    if (refused(r)) throw new HttpError(403, `Cloudflare refused it: the stored token needs “${editPermission(scope)}” (${scrubText(cfReason(r))})`);
-    throw new HttpError(502, `Cloudflare: ${scrubText(cfReason(r))}`);
+  if (!runtimeOk(r)) {
+    const err = runtimeRefusal(r, scope);
+    await audit(me, 'logpush.ownership_failed', t.scopeName, { scope, destination: host, auth: authKind(cred), error: err.message });
+    throw err;
   }
-  await audit(me, 'logpush.ownership_requested', t.scopeName, { scope, destination: host });
+  await audit(me, 'logpush.ownership_requested', t.scopeName, { scope, destination: host, auth: authKind(cred) });
   const res = r.body!.result ?? {};
   return { filename: scrubText(res.filename ?? '', 300), message: scrubText(res.message ?? ''), valid: res.valid !== false, destination: host };
 }
 
-/** Cloudflare's own check of a destination before a job is created or moved (no change in Cloudflare). */
-export async function validateDestination(token: string, scope: LogpushScope, id: string, conf: string): Promise<void> {
-  let r;
-  try { r = await cfCall<{ valid?: boolean; message?: string }>(token, 'POST', `/${scope === 'zone' ? 'zones' : 'accounts'}/${id}/logpush/validate/destination`, { destination_conf: conf }); } catch (err) { throw budget(err); }
-  if (refused(r)) throw new HttpError(403, `The stored token cannot manage Logpush — it needs “${editPermission(scope)}” (${scrubText(cfReason(r))})`);
-  if (!ok(r)) throw new HttpError(400, `Cloudflare cannot use this destination: ${scrubText(cfReason(r))}`);
+/** Cloudflare's own check of a destination before a job is created or moved: no change, but it needs Logs Edit (the run-time credential). */
+export async function validateDestination(cred: RuntimeCredential, scope: LogpushScope, id: string, conf: string): Promise<void> {
+  const r = await cfRuntime<{ valid?: boolean; message?: string }>(cred, 'POST', `/${scope === 'zone' ? 'zones' : 'accounts'}/${id}/logpush/validate/destination`, { destination_conf: conf });
+  if (credentialRefused(r)) throw runtimeRefusal(r, scope);
+  if (!runtimeOk(r)) throw new HttpError(400, `Cloudflare cannot use this destination: ${runtimeReason(r)}`);
   if (r.body!.result?.valid === false) throw new HttpError(400, `Cloudflare cannot use this destination${r.body!.result.message ? `: ${scrubText(r.body!.result.message)}` : ''}`);
+}
+
+export const runtimeOk = (r: RuntimeAnswer) => r.status >= 200 && r.status < 300 && !!r.body && r.body.success !== false;
+export const runtimeReason = (r: RuntimeAnswer) => scrubText(r.body?.errors?.map((e) => e.message).filter(Boolean).join('; ') || `HTTP ${r.status}`);
+
+/**
+ * Cloudflare's refusal of a run-time change. A credential it did not accept, or one without Logs Edit,
+ * is a 409, so an approval stays pending and can be approved again with another credential.
+ */
+export function runtimeRefusal(r: RuntimeAnswer, scope: LogpushScope): HttpError {
+  if (credentialRefused(r)) return new HttpError(409, `Cloudflare refused the credential you entered: it needs “${editPermission(scope)}” (Logs Edit) on this ${scope}, or use a Global API Key of a member who may edit logs (${runtimeReason(r)})`);
+  return new HttpError(502, `Cloudflare: ${runtimeReason(r)}`);
 }
 
 // ── The stored list ─────────────────────────────────────────────────────────

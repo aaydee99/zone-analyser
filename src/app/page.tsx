@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Archivo } from 'next/font/google';
-import { Activity, ArrowRight, Bell, Check, FileCode2, FileJson, Fingerprint, Folder, Gauge, GitCompare, HeartPulse, Mail, Minus, Plus, Radar, Search, ShieldAlert, Tags, Terminal, Undo2 } from 'lucide-react';
+import { Activity, ArrowRight, Bell, Check, ShieldCheck, FileCode2, FileJson, Fingerprint, Folder, Gauge, GitCompare, HeartPulse, Mail, Minus, Plus, Radar, Search, ShieldAlert, Tags, Terminal, Undo2 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
 import { CHECKS } from '@/lib/monitor-types';
 import { RULE_PHASES, SETTING_IDS, ZONE_ENDPOINTS, ZONE_GROUPS } from '@/lib/zone-catalog';
@@ -321,6 +321,7 @@ function DailyTools() {
         { icon: <Fingerprint aria-hidden="true" className="size-4" />, name: 'Ray ID lookup and URL trace', body: 'Paste a Ray ID to see the zone, the request and the rule that acted on it. Or trace a URL to see which rules it would match, phase by phase, without the request reaching your origin.' },
         { icon: <ShieldAlert aria-hidden="true" className="size-4" />, name: 'WAF false positives', body: 'Rules blocking traffic that looks legitimate, ranked with their reasons, with an exception drafted for you to review.' },
         { icon: <Activity aria-hidden="true" className="size-4" />, name: 'Incident timeline', body: 'Configuration changes, error and block spikes, deployments and certificate events on one time axis.' },
+        { icon: <ShieldCheck aria-hidden="true" className="size-4" />, name: 'Security audit', body: 'Pick a zone: fixed rules check its TLS, origin exposure, WAF, rate limits, cache and DNS, then measure how each security rule acted on real traffic and what to change. Every finding shows its evidence; nothing is applied.' },
       ],
     },
     {

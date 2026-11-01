@@ -1,22 +1,31 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { changeLabel, cleanDefinition, emptyCounts, headlineOf, nextRunAt, scheduleLabel, type ReportContent } from '@/lib/report-types';
+import { changeLabel, cleanDefinition, emptyCounts, fmtEastern, headlineOf, nextRunAt, scheduleLabel, type ReportContent } from '@/lib/report-types';
 import { reportHtml, sectionCsv, sectionLines, slackEscape, slackMessage } from '@/lib/report-render';
 
 const at = (s: string) => new Date(s);
 
-test('daily reports run at the next whole hour given, today or tomorrow (UTC)', () => {
-  assert.equal(nextRunAt('daily', 7, null, at('2026-10-31T06:59:00Z')).toISOString(), '2026-10-31T07:00:00.000Z');
-  assert.equal(nextRunAt('daily', 7, null, at('2026-10-31T07:00:00Z')).toISOString(), '2026-11-01T07:00:00.000Z');
-  assert.equal(nextRunAt('daily', 0, null, at('2026-12-31T23:30:00Z')).toISOString(), '2027-01-01T00:00:00.000Z');
+// Eastern time, daylight saving included. In 2026 EDT ends on 1 November; in 2027 it starts on 14 March.
+test('daily reports run at the given Eastern hour, today or tomorrow, across daylight-saving changes', () => {
+  assert.equal(nextRunAt('daily', 7, null, at('2026-10-31T10:59:00Z')).toISOString(), '2026-10-31T11:00:00.000Z'); // 07:00 EDT
+  assert.equal(nextRunAt('daily', 7, null, at('2026-10-31T11:00:00Z')).toISOString(), '2026-11-01T12:00:00.000Z'); // 07:00 EST, the day EDT ends
+  assert.equal(nextRunAt('daily', 0, null, at('2026-12-31T23:30:00Z')).toISOString(), '2027-01-01T05:00:00.000Z'); // midnight EST
+  assert.equal(nextRunAt('daily', 7, null, at('2027-03-13T12:30:00Z')).toISOString(), '2027-03-14T11:00:00.000Z'); // 07:00 EDT, the day EDT starts
 });
 
-test('weekly reports run on their weekday, a week later once that time has passed', () => {
+test('weekly reports run on their Eastern weekday, a week later once that time has passed', () => {
   // 2026-10-31 is a Saturday.
-  assert.equal(nextRunAt('weekly', 9, 1, at('2026-10-31T12:00:00Z')).toISOString(), '2026-11-02T09:00:00.000Z');
-  assert.equal(nextRunAt('weekly', 9, 6, at('2026-10-31T08:00:00Z')).toISOString(), '2026-10-31T09:00:00.000Z');
-  assert.equal(nextRunAt('weekly', 9, 6, at('2026-10-31T09:00:00Z')).toISOString(), '2026-11-07T09:00:00.000Z');
-  assert.equal(scheduleLabel({ cadence: 'weekly', hour: 9, weekday: 1 }), 'Every Monday at 09:00 UTC');
+  assert.equal(nextRunAt('weekly', 9, 1, at('2026-10-31T16:00:00Z')).toISOString(), '2026-11-02T14:00:00.000Z');
+  assert.equal(nextRunAt('weekly', 9, 6, at('2026-10-31T12:00:00Z')).toISOString(), '2026-10-31T13:00:00.000Z');
+  assert.equal(nextRunAt('weekly', 9, 6, at('2026-10-31T13:00:00Z')).toISOString(), '2026-11-07T14:00:00.000Z');
+  // Sunday 23:30 EST is already Monday in UTC: still this coming Monday at 09:00 Eastern.
+  assert.equal(nextRunAt('weekly', 9, 1, at('2026-11-02T04:30:00Z')).toISOString(), '2026-11-02T14:00:00.000Z');
+  assert.equal(scheduleLabel({ cadence: 'weekly', hour: 9, weekday: 1 }), 'Every Monday at 09:00 Eastern (EST/EDT)');
+});
+
+test('times are shown in Eastern time with EST or EDT', () => {
+  assert.equal(fmtEastern('2026-10-31T11:00:00Z'), '2026-10-31 07:00 EDT');
+  assert.equal(fmtEastern('2026-11-02T14:00:00Z'), '2026-11-02 09:00 EST');
 });
 
 test('report settings are checked and cleaned', () => {

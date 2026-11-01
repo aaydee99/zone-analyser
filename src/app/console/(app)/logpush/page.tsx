@@ -9,6 +9,7 @@ import type { JobView, LogpushPage } from '@/lib/logpush';
 import { ACCOUNT_DATASETS, LOGPUSH_STATUSES, STALE_HOURS, STATUS_LABEL, ZONE_DATASETS, type LogpushRow, type LogpushStatus } from '@/lib/logpush-types';
 import { Alert, Badge, Button, Card, Field, Loading, Modal, PageHeader, SectionHeader, Skeleton, SkeletonTable, Stat, Switch, cx } from '@/components/ui';
 import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
+import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 import { coverageLabel } from '../monitoring/use-run';
@@ -25,9 +26,12 @@ function useSettled<T>(value: T, ms = 300) {
   return v;
 }
 
-/** Sends one Logpush action; a super admin's runs at once, an admin's waits for approval. */
-async function sendAction(body: Record<string, unknown>, note: ChangeNote, direct: boolean): Promise<Result> {
-  return api<Result>('/api/cloudflare/actions', { method: 'POST', json: { type: 'logpush', ...body, ...(direct ? {} : noteBody(note)) } });
+/**
+ * Sends one Logpush action. A super admin's runs at once with the credential typed in (`cred`); an
+ * admin's request carries none: the super admin who approves it types one in.
+ */
+async function sendAction(body: Record<string, unknown>, note: ChangeNote, direct: boolean, cred: RuntimeCredentialInput): Promise<Result> {
+  return api<Result>('/api/cloudflare/actions', { method: 'POST', json: { type: 'logpush', ...body, ...(direct ? { cloudflare: credentialBody(cred) } : noteBody(note)) } });
 }
 
 function ResultNote({ r }: { r: Result }) {
@@ -87,7 +91,10 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
   const [busy, setBusy] = useState(false);
   const [owner, setOwner] = useState<{ busy: boolean; text: string }>({ busy: false, text: '' });
   const [result, setResult] = useState<Result | null>(null);
+  const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
   const q = useSettled(zoneQ.trim());
+  // The credential lives only in this dialog: cleared when it closes.
+  const close = () => { setCred(EMPTY_CREDENTIAL); onClose(); };
 
   useEffect(() => {
     if (!row) return;
@@ -111,7 +118,7 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
   const ownership = async () => {
     setOwner({ busy: true, text: '' });
     try {
-      const r = await api<{ filename: string; message: string; valid: boolean }>('/api/logpush/ownership', { method: 'POST', json: { scope, scopeId, destination_conf: form.destination } });
+      const r = await api<{ filename: string; message: string; valid: boolean }>('/api/logpush/ownership', { method: 'POST', json: { scope, scopeId, destination_conf: form.destination, cloudflare: credentialBody(cred) } });
       setOwner({ busy: false, text: r.filename ? `Cloudflare wrote ${r.filename} to the destination: paste the token it holds below.` : r.message || 'Cloudflare wrote the challenge file to the destination.' });
     } catch (e) { setOwner({ busy: false, text: '' }); toast((e as Error).message, 'bad'); }
   };
@@ -121,8 +128,9 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
     if (job && !Object.keys(changes).length) { toast('Nothing would change', 'info'); return; }
     setBusy(true);
     try {
-      const r = await sendAction({ op: job ? 'update' : 'create', scope, scopeId, ...(job ? { jobId: job.id } : {}), changes }, note, direct);
+      const r = await sendAction({ op: job ? 'update' : 'create', scope, scopeId, ...(job ? { jobId: job.id } : {}), changes }, note, direct, cred);
       setResult(r);
+      setCred(EMPTY_CREDENTIAL);
       setForm((f) => ({ ...f, destination: '', ownership: '' }));
       toast(r.done ?? 'Sent to a super admin for approval', r.done ? 'ok' : 'info');
     } catch (e) { toast((e as Error).message, 'bad'); } finally { setBusy(false); }
@@ -132,10 +140,10 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
   const editing = !!row;
   const ready = editing ? !!job : !!scopeId && !!form.dataset.trim() && !!form.destination.trim();
   return (
-    <Modal open onClose={onClose} width="max-w-2xl"
+    <Modal open onClose={close} width="max-w-2xl"
       title={editing ? `Edit Logpush job “${row?.job}”` : 'New Logpush job'}
-      description={editing ? `${row?.scope} ${row?.scopeName} · ${row?.dataset}. Read from Cloudflare just now.` : 'Cloudflare checks the destination before the request is sent.'}
-      footer={result ? <Button onClick={onClose}>Close</Button> : <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!ready || (!direct && !noteReady(note, requireReason))} onClick={submit}>{direct ? (editing ? 'Save in Cloudflare' : 'Create in Cloudflare') : 'Ask for approval'}</Button></>}>
+      description={editing ? `${row?.scope} ${row?.scopeName} · ${row?.dataset}. Read from Cloudflare just now.` : 'Cloudflare checks the destination when the change runs.'}
+      footer={result ? <Button onClick={close}>Close</Button> : <><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" loading={busy} disabled={!ready || (direct ? !credentialReady(cred) : !noteReady(note, requireReason))} onClick={submit}>{direct ? (editing ? 'Save in Cloudflare' : 'Create in Cloudflare') : 'Ask for approval'}</Button></>}>
       {result ? <ResultNote r={result} /> : loadErr ? <Alert tone="bad">{loadErr}</Alert> : editing && !job ? <Loading label="Reading the job"><Skeleton className="h-64 w-full" /></Loading> : (
         <div className="space-y-4">
           {!editing && (
@@ -178,7 +186,7 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
             hint="e.g. s3://bucket/logs?region=us-east-1&access-key-id=…&secret-access-key=… — sealed in the request and never shown again; only its host is displayed">
             <div className="flex gap-2">
               <input className="input flex-1 font-mono !text-[12.5px]" value={form.destination} onChange={(e) => set('destination', e.target.value)} autoComplete="off" spellCheck={false} maxLength={4096} />
-              <Button type="button" size="sm" className="!h-10" onClick={ownership} loading={owner.busy} disabled={!form.destination.trim() || !scopeId}>Ownership challenge</Button>
+              <Button type="button" size="sm" className="!h-10" onClick={ownership} loading={owner.busy} disabled={!form.destination.trim() || !scopeId || !credentialReady(cred)} title={credentialReady(cred) ? undefined : 'Enter a Cloudflare credential below first'}>Ownership challenge</Button>
             </div>
           </Field>
           {owner.text && <Alert tone="info">{owner.text}</Alert>}
@@ -197,6 +205,8 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
             <Field label="Max seconds" optional hint="30–300; 0 off"><input className="input" inputMode="numeric" value={form.interval} onChange={(e) => set('interval', e.target.value.replace(/\D/g, ''))} /></Field>
           </div>
           {!direct && <ChangeNoteFields value={note} onChange={setNote} requireReason={requireReason} />}
+          <RuntimeCredentialFields value={cred} onChange={setCred} scope={scope} />
+          {!direct && <p className="text-xs text-muted">Your request carries no credential: it is used only for the ownership challenge. The super admin who approves types one in.</p>}
         </div>
       )}
     </Modal>
@@ -212,24 +222,28 @@ function ConfirmModal({ row, mode, onClose, direct }: { row: LogpushRow; mode: '
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
+  const close = () => { setCred(EMPTY_CREDENTIAL); onClose(); };
   const del = mode === 'delete';
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await sendAction({ op: del ? 'delete' : 'update', scope: row.scopeKind, scopeId: row.scopeId, jobId: row.jobId, ...(del ? {} : { changes: { enabled: !row.enabled } }) }, note, direct);
+      const r = await sendAction({ op: del ? 'delete' : 'update', scope: row.scopeKind, scopeId: row.scopeId, jobId: row.jobId, ...(del ? {} : { changes: { enabled: !row.enabled } }) }, note, direct, cred);
       setResult(r);
+      setCred(EMPTY_CREDENTIAL);
       toast(r.done ?? 'Sent to a super admin for approval', r.done ? 'ok' : 'info');
     } catch (e) { toast((e as Error).message, 'bad'); } finally { setBusy(false); }
   };
   const verb = del ? 'Delete' : row.enabled ? 'Turn off' : 'Turn on';
   return (
-    <Modal open onClose={onClose} title={`${verb} Logpush job “${row.job}”?`} description={`${row.scope} ${row.scopeName} · ${row.dataset} → ${row.destination}`}
-      footer={result ? <Button onClick={onClose}>Close</Button> : <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant={del ? 'danger' : 'primary'} loading={busy} disabled={(del && typed.trim() !== row.job) || (!direct && !noteReady(note, requireReason))} onClick={submit}>{direct ? verb : 'Ask for approval'}</Button></>}>
+    <Modal open onClose={close} title={`${verb} Logpush job “${row.job}”?`} description={`${row.scope} ${row.scopeName} · ${row.dataset} → ${row.destination}`}
+      footer={result ? <Button onClick={close}>Close</Button> : <><Button variant="ghost" onClick={close}>Cancel</Button><Button variant={del ? 'danger' : 'primary'} loading={busy} disabled={(del && typed.trim() !== row.job) || (direct ? !credentialReady(cred) : !noteReady(note, requireReason))} onClick={submit}>{direct ? verb : 'Ask for approval'}</Button></>}>
       {result ? <ResultNote r={result} /> : (
         <div className="space-y-4">
           <p className="text-sm text-ink-2">{del ? 'Cloudflare stops pushing these logs and the job is gone; the destination keeps what it already has.' : row.enabled ? 'Cloudflare stops pushing these logs until the job is turned on again.' : 'Cloudflare starts pushing these logs again.'}</p>
           {del && <Field label={`Type ${row.job} to confirm`}><input className="input font-mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus /></Field>}
           {!direct && <ChangeNoteFields value={note} onChange={setNote} requireReason={requireReason} />}
+          {direct && <RuntimeCredentialFields value={cred} onChange={setCred} scope={row.scopeKind} />}
         </div>
       )}
     </Modal>
@@ -275,7 +289,7 @@ export default function LogpushPage() {
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="Cloudflare" title="Logpush"
-        description={<>Every Logpush job of every account and zone, as monitoring last read them. Failing: an error newer than the last push. Stale: nothing pushed for {STALE_HOURS} hours. Destinations show their host only.{act ? (direct ? ' Changes run at once and are audited.' : ' Changes wait for a super admin’s approval.') : ''}</>}
+        description={<>Every Logpush job of every account and zone, as monitoring last read them. Failing: an error newer than the last push. Stale: nothing pushed for {STALE_HOURS} hours. Destinations show their host only.{act ? (direct ? ' Changes run at once, with an API token or Global API Key you type in each time (never a stored token), and are audited.' : ' Changes wait for a super admin’s approval; they type in the credential the change runs with.') : ''}</>}
         actions={<>
           {can('monitors:manage') && <Button variant="ghost" onClick={checkNow} loading={checking} icon={<Zap className="size-4" />}>Check now</Button>}
           <Button variant="ghost" onClick={reload} loading={loading} icon={<RefreshCw className="size-4" />}>Refresh</Button>

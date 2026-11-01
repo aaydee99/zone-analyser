@@ -194,10 +194,10 @@ export default function SettingsPage() {
             {s && (
               <div className="space-y-4 p-5">
                 <div className="flex items-center gap-3">
-                  <Switch checked={!!s.requireReason} disabled={!editable} onChange={(v) => setS({ ...s, requireReason: v })} label="Require a reason with every approval request" />
-                  <span className="text-[13.5px] font-medium text-ink-2" aria-hidden>Require a reason with every approval request</span>
+                  <Switch checked={!!s.requireReason} disabled={!editable} onChange={(v) => setS({ ...s, requireReason: v })} label="Require a reason with every Cloudflare change request" />
+                  <span className="text-[13.5px] font-medium text-ink-2" aria-hidden>Require a reason with every Cloudflare change request</span>
                 </div>
-                <p className="text-xs text-muted">The reason (and an optional ticket id or link) is shown to the approver and kept in the audit log. Off: both stay optional.</p>
+                <p className="text-xs text-muted">Cache purges, rollbacks and Logpush changes. The reason (and an optional ticket id or link) is shown to the approver and kept in the audit log. Off: both stay optional. Backup and restore requests are not affected.</p>
                 {editable && <div className="flex justify-end"><Button variant="primary" loading={saving} icon={<Save className="size-4" />} onClick={save}>Save settings</Button></div>}
               </div>
             )}

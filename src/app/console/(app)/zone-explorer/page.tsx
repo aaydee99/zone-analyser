@@ -1,7 +1,7 @@
 'use client';
 
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search } from 'lucide-react';
+import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { ZoneGroupReport, ZoneListItem, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
@@ -568,6 +568,7 @@ export default function ZoneExplorerPage() {
                       <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'dnsCsv'} disabled={!Array.isArray(dns?.data) || !dns.data.length} onClick={() => save('dnsCsv', `${zoneName}-dns.csv`)}>DNS CSV</Button>
                       <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'bind'} disabled={dns?.status !== 'ok'} onClick={() => save('bind', `${zoneName}.txt`)}>BIND file</Button>
                       <ButtonLink size="sm" variant="ghost" href={`/console/investigate/timeline?zone=${encodeURIComponent(summary.zone.id)}`} icon={<History className="size-3.5" />}>Timeline</ButtonLink>
+                      <ButtonLink size="sm" variant="ghost" href={`/console/security-audit?zone=${encodeURIComponent(summary.zone.id)}`} icon={<ShieldCheck className="size-3.5" />}>Security audit</ButtonLink>
                     </div>
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[13px] sm:grid-cols-3">

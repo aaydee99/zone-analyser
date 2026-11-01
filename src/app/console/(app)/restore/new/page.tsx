@@ -12,8 +12,6 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHead
 import { Terminal } from '@/components/terminal';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
-import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
-import type { ChangeNote } from '@/lib/change-note';
 
 interface Zone { id: string; name: string; status: string; accountId?: string; accountName?: string }
 
@@ -215,14 +213,11 @@ export default function RestorePage() {
   };
   // Admins ask a super admin to approve the apply; super admins apply directly.
   const needsApproval = !can('restore:approve');
-  // The request says why (and may name a ticket), for the approver and the audit log.
-  const [note, setNote] = useState<ChangeNote>({});
-  const requireReason = useRequireReason();
   const apply = async () => {
     if (!r) return;
     setBusy(true);
     try {
-      const v = await api<RestoreView>(`/api/restore/${r.id}/apply`, { method: 'POST', json: { confirm, acknowledgeReplace: ack, email: keyEmail, apiKey, ...(needsApproval ? noteBody(note) : {}) } });
+      const v = await api<RestoreView>(`/api/restore/${r.id}/apply`, { method: 'POST', json: { confirm, acknowledgeReplace: ack, email: keyEmail, apiKey } });
       setR(v);
       if (v.approval) toast('Sent for approval — the apply starts when a super admin approves it', 'info');
       refreshMe();
@@ -522,9 +517,8 @@ export default function RestorePage() {
                           {(r.plan.hasReplace || r.plan.hasDelete) && (
                             <label className="flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} /> I understand resources will be replaced or deleted</label>
                           )}
-                          {needsApproval && <div className="w-full"><ChangeNoteFields value={note} onChange={setNote} requireReason={requireReason} /></div>}
                           <Button variant="primary" icon={<Play className="size-4" />} loading={busy}
-                            disabled={lockedOut || confirm.trim().toLowerCase() !== r.zone.name.toLowerCase() || !keyEmail.trim() || !apiKey.trim() || ((r.plan.hasReplace || r.plan.hasDelete) && !ack) || (needsApproval && !noteReady(note, requireReason))} onClick={apply}>{needsApproval ? 'Ask a super admin to apply' : 'Apply'}</Button>
+                            disabled={lockedOut || confirm.trim().toLowerCase() !== r.zone.name.toLowerCase() || !keyEmail.trim() || !apiKey.trim() || ((r.plan.hasReplace || r.plan.hasDelete) && !ack)} onClick={apply}>{needsApproval ? 'Ask a super admin to apply' : 'Apply'}</Button>
                         </div>
                         {needsApproval && <p className="mt-2 text-xs text-warn">A super admin approves every restore an admin applies. Your key is checked now and held in memory only until they decide; the apply starts the moment it is approved.</p>}
                         <p className="mt-2 text-xs text-faint">The plan was made with the stored API token. Applying needs the Global API Key of a user who can edit {r.zone.name} — asked for every apply, checked with Cloudflare, used for this apply only and never stored or logged.</p>

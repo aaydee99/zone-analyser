@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import { api } from '@/lib/client';
 import { Alert, Button, Checkbox, Field, Modal, Segmented } from '@/components/ui';
-import { SECTIONS, WEEKDAYS, nextRunAt, type Cadence, type ReportChannel, type ReportDefinition, type ReportScope, type SectionKey } from '@/lib/report-types';
+import { SECTIONS, WEEKDAYS, fmtEastern, nextRunAt, type Cadence, type ReportChannel, type ReportDefinition, type ReportScope, type SectionKey } from '@/lib/report-types';
 
 // The form for a new report or a changed one (a dialog on the Reports pages).
 
@@ -62,7 +62,7 @@ function EditorDialog({ open, onClose, initial, onSaved }: Props) {
 
   return (
     <Modal open={open} onClose={onClose} width="max-w-2xl" title={initial ? 'Change report' : 'New report'}
-      description="Made by the worker at its time (UTC) from stored monitoring data, the Cloudflare audit logs and account traffic totals."
+      description="Made by the worker at its time (US Eastern, EST/EDT) from stored monitoring data, the Cloudflare audit logs and account traffic totals."
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={save} icon={<Save className="size-4" />}>Save</Button></>}>
       <div className="space-y-5">
         {error && <Alert tone="bad">{error}</Alert>}
@@ -103,13 +103,13 @@ function EditorDialog({ open, onClose, initial, onSaved }: Props) {
               </select>
             </Field>
           )}
-          <Field label="Hour (UTC)">
+          <Field label="Hour (Eastern, EST/EDT)">
             <select className="input w-full" value={hour} onChange={(e) => setHour(Number(e.target.value))}>
               {HOURS.map((h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
             </select>
           </Field>
         </div>
-        <p className="-mt-2 text-xs text-muted">Next: {next.toISOString().slice(0, 16).replace('T', ' ')} UTC ({next.toLocaleString()} your time). It covers the {cadence === 'daily' ? '24 hours' : '7 days'} before.</p>
+        <p className="-mt-2 text-xs text-muted">Next: {fmtEastern(next)}. It covers the {cadence === 'daily' ? '24 hours' : '7 days'} before.</p>
 
         <Field label="Sections">
           <ul className="space-y-1.5">

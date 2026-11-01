@@ -7,6 +7,7 @@ import { api, fmtDate, relTime } from '@/lib/client';
 import type { Approval, ApprovalKind, ApprovalStatus } from '@/lib/approvals-store';
 import { useMe } from '@/components/me';
 import { NoteView } from '@/components/change-note';
+import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useToast } from '@/components/toast';
 import { Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonTable } from '@/components/ui';
 
@@ -42,6 +43,11 @@ export default function ApprovalsPage() {
   const [busy, setBusy] = useState('');
   const [rejecting, setRejecting] = useState<Approval | null>(null);
   const [reason, setReason] = useState('');
+  // A Logpush change runs with a credential the approver types in: kept in this dialog only, cleared on close.
+  const [approving, setApproving] = useState<Approval | null>(null);
+  const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
+  const closeApproving = () => { setApproving(null); setCred(EMPTY_CREDENTIAL); };
+  const needsCredential = (a: Approval) => a.kind === 'cloudflare' && a.action?.type === 'logpush';
 
   const load = useCallback(() => api<{ approvals: Approval[]; canApprove: Record<ApprovalKind, boolean> }>('/api/approvals')
     .then((r) => { setList(r.approvals); setMayApprove(r.canApprove); }).catch(() => {}), []);
@@ -106,7 +112,7 @@ export default function ApprovalsPage() {
                 <div className="flex flex-wrap gap-2">
                   {canDecide && <>
                     <Button variant="danger" icon={<X className="size-4" />} disabled={!!busy} onClick={() => { setReason(''); setRejecting(a); }}>Reject</Button>
-                    <Button variant="primary" icon={<Check className="size-4" />} loading={busy === `approve:${a.id}`} disabled={!!busy} onClick={() => act(a, 'approve')}>Approve and start</Button>
+                    <Button variant="primary" icon={<Check className="size-4" />} loading={busy === `approve:${a.id}`} disabled={!!busy} onClick={() => (needsCredential(a) ? (setCred(EMPTY_CREDENTIAL), setApproving(a)) : act(a, 'approve'))}>Approve and start</Button>
                   </>}
                   {mine && <Button variant="ghost" icon={<Undo2 className="size-4" />} loading={busy === `withdraw:${a.id}`} disabled={!!busy} onClick={() => act(a, 'withdraw')}>Withdraw</Button>}
                 </div>
@@ -168,6 +174,14 @@ export default function ApprovalsPage() {
           </div>
         )}
       </Card>
+
+      <Modal open={!!approving} onClose={closeApproving} title="Approve and run this change?"
+        description={approving ? `${approving.title} — asked by ${approving.requestedBy.email}` : ''}
+        footer={<><Button variant="ghost" onClick={closeApproving}>Cancel</Button><Button variant="primary" disabled={!credentialReady(cred)} loading={!!approving && busy === `approve:${approving.id}`}
+          onClick={async () => { const a = approving!; const body = { cloudflare: credentialBody(cred) }; setCred(EMPTY_CREDENTIAL); await act(a, 'approve', body); setApproving(null); }}>Approve and run</Button></>}>
+        {approving && <RuntimeCredentialFields value={cred} onChange={setCred} scope={approving.action?.type === 'logpush' ? approving.action.scope : undefined} />}
+        <p className="mt-3 text-xs text-muted">If Cloudflare refuses the credential, the request stays waiting and you can try again with another one.</p>
+      </Modal>
 
       <Modal open={!!rejecting} onClose={() => setRejecting(null)} title="Reject this request?"
         description={rejecting ? `${KIND[rejecting.kind].label} asked by ${rejecting.requestedBy.email}: ${rejecting.title}` : ''}

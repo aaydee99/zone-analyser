@@ -11,14 +11,16 @@ import { zoneToken } from './zone-explorer';
 import crypto from 'node:crypto';
 import { openRelay, sealRelay } from './vault';
 import { db } from './supabase';
-import { editPermission, jobsPath, readRawJob, scopeToken, validateDestination, type LogpushScope } from './logpush';
-import { ChangeError, checkChanges, diffLines, fieldLines, scrubText, summarizeJob, type LogpushChanges, type RawJob } from './logpush-types';
+import { jobsPath, readRawJob, runtimeOk, runtimeRefusal, scopeToken, validateDestination, type LogpushScope } from './logpush';
+import { NEED_CREDENTIAL, authKind, cfRuntime, parseRuntimeCredential, runtimeCredential, withRuntimeCredential } from './cf-runtime-credential';
+import { ChangeError, checkChanges, diffLines, fieldLines, summarizeJob, type LogpushChanges, type RawJob } from './logpush-types';
 
 // Changes the console makes in Cloudflare besides a restore: purging the cache, rolling a Worker
 // or a Pages project back to an earlier deployment, and creating, changing or deleting a Logpush
-// job. An admin asks; a super admin approves (or acts directly). Each runs with the stored token for
-// that zone or account, so the token needs the matching write permission; Cloudflare's refusal is
-// shown as it is.
+// job. An admin asks; a super admin approves (or acts directly). A purge or rollback runs with the
+// stored token for that zone or account, so the token needs the matching write permission;
+// Cloudflare's refusal is shown as it is. A Logpush change runs only with an API token or Global
+// API Key the super admin types in when it runs (cf-runtime-credential.ts), never a stored token.
 
 type Sealed = Awaited<ReturnType<typeof sealRelay>>;
 
@@ -126,9 +128,8 @@ async function validateLogpush(a: Record<string, unknown>): Promise<LogpushActio
   const { destination_conf, ownership_challenge, ...plain } = changes;
   const base = { type: 'logpush' as const, op, scope, scopeId, scopeName: t.scopeName, changes: plain, ownership: !!ownership_challenge };
   let out: LogpushAction;
+  // Cloudflare's destination check needs Logs Edit, so it runs with the change (executeLogpush).
   if (op === 'create') {
-    // Cloudflare checks the destination first (this also tells a token without Logs Edit at once).
-    await validateDestination(t.token, scope, scopeId, destination_conf!);
     out = { ...base, jobLabel: plain.name || plain.dataset!, before: {}, after: summarizeJob({ ...plain, enabled: plain.enabled ?? true, destination_conf }) };
   } else {
     const jobId = Number(a.jobId);
@@ -144,7 +145,6 @@ async function validateLogpush(a: Record<string, unknown>): Promise<LogpushActio
       // A new destination with the same host still changes (its path or keys): say so.
       if (destination_conf && destination_conf !== job.destination_conf && after.destination === before.destination) after.destination = `${after.destination} (path or keys changed)`;
       if (!diffLines(before, after).length && !ownership_challenge) throw new HttpError(400, 'Nothing would change');
-      if (destination_conf && destination_conf !== job.destination_conf) await validateDestination(t.token, scope, scopeId, destination_conf);
       out = { ...base, jobId, jobLabel, print: fingerprint(job), before, after };
     }
   }
@@ -166,26 +166,33 @@ function describeLogpush(a: LogpushAction): { title: string; details: string[] }
   return { title, details: [head, ...lines, ...(a.ownership ? ['With a new ownership challenge from the destination.'] : [])] };
 }
 
+/**
+ * Runs the change with the credential typed in for it (runtimeCredential: a super admin acting, or
+ * approving). The stored token only reads the job, to see that it did not change since the request.
+ * A missing, wrong or insufficient credential is a 409, so an approval stays pending.
+ */
 async function executeLogpush(a: LogpushAction): Promise<string> {
+  const cred = runtimeCredential();
   const t = await scopeToken(a.scope, a.scopeId);
   const secret = a.secret ? JSON.parse((await openRelay(a.secret.sealed, `logpush-action:${a.secret.nonce}`)).toString('utf8')) as Pick<LogpushChanges, 'destination_conf' | 'ownership_challenge'> : {};
-  const need = editPermission(a.scope);
-  const fail = (r: { status: number; body: { errors?: { message?: string }[] } | null }) => new HttpError(refused(r) ? 403 : 502, refused(r) ? `Cloudflare refused it: the stored token needs “${need}” (${scrubText(cfReason(r))})` : `Cloudflare: ${scrubText(cfReason(r))}`);
+  const fail = (r: Parameters<typeof runtimeRefusal>[0]) => runtimeRefusal(r, a.scope);
   let done: string;
   if (a.op === 'create') {
-    const r = await cfCall<{ id?: number }>(t.token, 'POST', jobsPath(a.scope, a.scopeId), { ...a.changes, ...secret });
-    if (!ok(r)) throw fail(r);
+    await validateDestination(cred, a.scope, a.scopeId, secret.destination_conf!);
+    const r = await cfRuntime<{ id?: number }>(cred, 'POST', jobsPath(a.scope, a.scopeId), { ...a.changes, ...secret });
+    if (!runtimeOk(r)) throw fail(r);
     done = `Created Logpush job ${r.body!.result?.id ? `#${r.body!.result.id} ` : ''}for ${a.changes.dataset} in ${a.scopeName}`;
   } else {
     const job = await readRawJob(t.token, a.scope, a.scopeId, a.jobId!);
     if (a.print && fingerprint(job) !== a.print) throw new HttpError(409, 'The job changed in Cloudflare since this was asked — ask again with its current settings');
     if (a.op === 'delete') {
-      const r = await cfCall(t.token, 'DELETE', jobsPath(a.scope, a.scopeId, a.jobId));
-      if (!ok(r)) throw fail(r);
+      const r = await cfRuntime(cred, 'DELETE', jobsPath(a.scope, a.scopeId, a.jobId));
+      if (!runtimeOk(r)) throw fail(r);
       done = `Deleted Logpush job “${a.jobLabel}” in ${a.scopeName}`;
     } else {
-      const r = await cfCall(t.token, 'PUT', jobsPath(a.scope, a.scopeId, a.jobId), { ...a.changes, ...secret });
-      if (!ok(r)) throw fail(r);
+      if (secret.destination_conf && secret.destination_conf !== job.destination_conf) await validateDestination(cred, a.scope, a.scopeId, secret.destination_conf);
+      const r = await cfRuntime(cred, 'PUT', jobsPath(a.scope, a.scopeId, a.jobId), { ...a.changes, ...secret });
+      if (!runtimeOk(r)) throw fail(r);
       done = `${describeLogpush(a).title.replace(/^Turn/, 'Turned').replace(/^Change/, 'Changed')}`;
     }
   }
@@ -246,12 +253,16 @@ export async function requestAction(me: Me, raw: unknown): Promise<{ done?: stri
   // Every action kind: the body's `reason` and `ticket` go with the request (and into the audit log).
   const note = await requestNote(raw, !direct);
   if (direct) {
+    // A Logpush change runs with the credential typed in with it (`cloudflare` in the body), never a stored token.
+    const cred = a.type === 'logpush' ? parseRuntimeCredential((raw as { cloudflare?: unknown } | null)?.cloudflare) : null;
+    if (a.type === 'logpush' && !cred) throw new HttpError(400, NEED_CREDENTIAL);
+    const auth = cred ? { auth: authKind(cred) } : {};
     try {
-      const done = await executeAction(a);
-      await audit(me, 'cloudflare.action', d.title, { action: a.type, result: done, ...noteDetails(note) });
+      const done = await withRuntimeCredential(cred, () => executeAction(a));
+      await audit(me, 'cloudflare.action', d.title, { action: a.type, result: done, ...auth, ...noteDetails(note) });
       return { done };
     } catch (err) {
-      await audit(me, 'cloudflare.action_failed', d.title, { action: a.type, error: err instanceof Error ? err.message : String(err), ...noteDetails(note) });
+      await audit(me, 'cloudflare.action_failed', d.title, { action: a.type, error: err instanceof Error ? err.message : String(err), ...auth, ...noteDetails(note) });
       throw err;
     }
   }

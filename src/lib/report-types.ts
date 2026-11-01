@@ -38,7 +38,7 @@ export interface ReportDefinition {
   cadence: Cadence;
   /** 0 = Sunday (weekly reports only). */
   weekday: number | null;
-  /** UTC. */
+  /** Hour of the day in US Eastern time (EST/EDT). */
   hour: number;
   sections: SectionKey[];
   channels: ReportChannel[];
@@ -142,22 +142,54 @@ export interface ReportContent {
 
 // ── The schedule ────────────────────────────────────────────────────────────
 
-/** The first time after `after` at `hour`:00 UTC (on `weekday` for a weekly report). */
-export function nextRunAt(cadence: Cadence, hour: number, weekday: number | null, after: Date): Date {
-  const d = new Date(Date.UTC(after.getUTCFullYear(), after.getUTCMonth(), after.getUTCDate(), hour, 0, 0, 0));
-  if (cadence === 'daily') {
-    if (d.getTime() <= after.getTime()) d.setUTCDate(d.getUTCDate() + 1);
-    return d;
-  }
-  const wd = weekday ?? 1;
-  d.setUTCDate(d.getUTCDate() + ((wd - d.getUTCDay() + 7) % 7));
-  if (d.getTime() <= after.getTime()) d.setUTCDate(d.getUTCDate() + 7);
-  return d;
+// Reports are scheduled and shown in US Eastern time, daylight saving included: 07:00 is 07:00 EST
+// in winter and 07:00 EDT in summer (America/New_York).
+export const REPORT_TZ = 'America/New_York';
+
+const PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: REPORT_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', timeZoneName: 'short',
+});
+const DAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** Eastern calendar fields of an instant, and its abbreviation (EST or EDT). */
+function eastern(d: Date) {
+  const p = Object.fromEntries(PARTS.formatToParts(d).map((x) => [x.type, x.value]));
+  return { y: Number(p.year), m: Number(p.month), d: Number(p.day), h: Number(p.hour), min: Number(p.minute), wd: DAY_INDEX[p.weekday] ?? 0, tz: p.timeZoneName ?? 'ET' };
 }
 
-/** "Every day at 07:00 UTC", "Every Monday at 07:00 UTC". */
+/** The instant that is `hour`:00 Eastern on the given Eastern calendar day (y, m 1–12, d may overflow). */
+function easternAt(y: number, m: number, d: number, hour: number): Date {
+  const want = Date.UTC(y, m - 1, d, hour);
+  let t = want + 5 * 3_600_000; // EST first guess; corrected below (EDT is an hour less)
+  for (let i = 0; i < 2; i++) {
+    const e = eastern(new Date(t));
+    t += want - Date.UTC(e.y, e.m - 1, e.d, e.h, e.min);
+  }
+  return new Date(t);
+}
+
+/** The first time after `after` at `hour`:00 Eastern (on `weekday` for a weekly report). */
+export function nextRunAt(cadence: Cadence, hour: number, weekday: number | null, after: Date): Date {
+  const today = eastern(after);
+  for (let i = 0; i <= 8; i++) {
+    const at = easternAt(today.y, today.m, today.d + i, hour);
+    if (at.getTime() <= after.getTime()) continue;
+    if (cadence === 'weekly' && eastern(at).wd !== (weekday ?? 1)) continue;
+    return at;
+  }
+  return easternAt(today.y, today.m, today.d + 7, hour);
+}
+
+/** "2026-10-31 07:00 EDT": an instant in Eastern time. */
+export function fmtEastern(iso: string | Date): string {
+  const e = eastern(typeof iso === 'string' ? new Date(iso) : iso);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${e.y}-${p2(e.m)}-${p2(e.d)} ${p2(e.h)}:${p2(e.min)} ${e.tz}`;
+}
+
+/** "Every day at 07:00 Eastern (EST/EDT)", "Every Monday at 07:00 Eastern (EST/EDT)". */
 export function scheduleLabel(d: Pick<ReportDefinition, 'cadence' | 'hour' | 'weekday'>) {
-  const at = `${String(d.hour).padStart(2, '0')}:00 UTC`;
+  const at = `${String(d.hour).padStart(2, '0')}:00 Eastern (EST/EDT)`;
   return d.cadence === 'daily' ? `Every day at ${at}` : `Every ${WEEKDAYS[d.weekday ?? 1]} at ${at}`;
 }
 
@@ -194,7 +226,7 @@ export function cleanDefinition(i: DefinitionInput): { ok: true; value: CleanDef
   const cadence = i.cadence ?? 'weekly';
   if (cadence !== 'daily' && cadence !== 'weekly') return { ok: false, error: 'cadence must be daily or weekly' };
   const hour = i.hour === undefined ? 7 : Number(i.hour);
-  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return { ok: false, error: 'hour must be 0 to 23 (UTC)' };
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return { ok: false, error: 'hour must be 0 to 23 (Eastern time)' };
   let weekday: number | null = null;
   if (cadence === 'weekly') {
     weekday = i.weekday === undefined || i.weekday === null ? 1 : Number(i.weekday);

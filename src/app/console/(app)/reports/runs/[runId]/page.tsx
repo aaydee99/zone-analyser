@@ -6,7 +6,7 @@ import { ArrowLeft, Download, RefreshCw } from 'lucide-react';
 import { fmtDate } from '@/lib/client';
 import { SEVERITIES } from '@/lib/monitor-types';
 import { periodLabel, sectionLines } from '@/lib/report-render';
-import { SECTION_LABEL, bytesLabel, changeLabel, sumCounts, type ReportContent, type ReportDefinition, type ReportRun, type SectionKey, type TrafficNumbers } from '@/lib/report-types';
+import { SECTION_LABEL, bytesLabel, changeLabel, fmtEastern, sumCounts, type ReportContent, type ReportDefinition, type ReportRun, type SectionKey, type TrafficNumbers } from '@/lib/report-types';
 import { Alert, Badge, ButtonLink, Button, Card, Loading, PageHeader, SectionHeader, SkeletonTable, Stat } from '@/components/ui';
 import { SeverityBadge } from '@/components/monitor-view';
 import { useSnapshot } from '../../../monitoring/use-run';
@@ -15,7 +15,7 @@ import { RunState } from '../../run-state';
 interface RunView { run: ReportRun; definition: ReportDefinition | null; generatedAt: string }
 
 const whole = new Intl.NumberFormat();
-const utc = (iso: string) => `${iso.slice(0, 16).replace('T', ' ')} UTC`;
+const utc = (iso: string) => fmtEastern(iso);
 
 function Table({ head, rows, empty = 'Nothing.' }: { head: string[]; rows: ReactNode[][]; empty?: string }) {
   if (!rows.length) return <p className="px-5 py-3 text-[13px] text-muted">{empty}</p>;

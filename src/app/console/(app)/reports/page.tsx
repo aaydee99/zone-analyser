@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { FileText, MessageSquare, Plus, RefreshCw } from 'lucide-react';
 import { fmtDate, relTime } from '@/lib/client';
-import { SECTION_LABEL, scheduleLabel, type ReportDefinition, type ReportRunSummary } from '@/lib/report-types';
+import { SECTION_LABEL, fmtEastern, scheduleLabel, type ReportDefinition, type ReportRunSummary } from '@/lib/report-types';
 import { Alert, Button, ButtonLink, Card, EmptyState, Loading, PageHeader, SkeletonTable } from '@/components/ui';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
@@ -55,7 +55,7 @@ export default function ReportsPage() {
                   </td>
                   <td className="px-3 py-3 align-top text-ink-2">{scheduleLabel(d)}<div className="text-xs text-muted">{d.channels.length ? `To ${d.channels.map((c) => (c === 'slack' ? 'Slack' : 'webhook')).join(' and ')}` : 'Kept in the console'}</div></td>
                   <td className="px-3 py-3 align-top"><RunState run={d.latest} />{d.latest && <div className="mt-0.5 text-xs text-faint" title={fmtDate(d.latest.startedAt)}>{relTime(d.latest.startedAt)}</div>}</td>
-                  <td className="px-5 py-3 align-top text-ink-2">{d.enabled && d.nextRunAt ? <span title={fmtDate(d.nextRunAt)}>{d.nextRunAt.slice(0, 16).replace('T', ' ')} UTC</span> : <span className="text-faint">Off (by hand only)</span>}</td>
+                  <td className="px-5 py-3 align-top text-ink-2">{d.enabled && d.nextRunAt ? <span title={fmtDate(d.nextRunAt)}>{fmtEastern(d.nextRunAt)}</span> : <span className="text-faint">Off (by hand only)</span>}</td>
                 </tr>
               ))}
             </tbody>
@@ -69,7 +69,7 @@ export default function ReportsPage() {
           </div>
         </Card>
       )}
-      <p className="text-xs text-muted">Reports run on the worker at their hour (UTC). Numbers are only what was read: a section that could not be read says why, and an empty one says “nothing”.</p>
+      <p className="text-xs text-muted">Reports run on the worker at their hour, US Eastern time (EST/EDT). Numbers are only what was read: a section that could not be read says why, and an empty one says “nothing”.</p>
       <ReportEditor open={editing} onClose={() => setEditing(false)} initial={null} onSaved={(d) => { setEditing(false); toast(`“${d.name}” saved`, 'ok'); void reload(); }} />
     </div>
   );

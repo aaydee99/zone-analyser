@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql) and [`0020_reports.sql`](supabase/migrations/0020_reports.sql) (there is no 0017). When you update the console, run any new ones the same way.
+2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql) and [`0020_reports.sql`](supabase/migrations/0020_reports.sql) and [`0021_zone_audits.sql`](supabase/migrations/0021_zone_audits.sql) (there is no 0017). When you update the console, run any new ones the same way.
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -144,7 +144,7 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
 
 ### Deploy to Vercel
 
-1. Apply all the migrations above (`0001` to `0020`).
+1. Apply all the migrations above (`0001` to `0021`).
 2. In the Vercel project, set `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. `CONSOLE_ROLE=web` is the default on Vercel.
 3. Deploy. [`vercel.json`](vercel.json) gives API routes up to 300 s, so a slow call such as a full zone read can wait for the worker.
 
@@ -165,7 +165,7 @@ How it runs:
 
 Set up:
 
-1. **Apply the migrations.** All of them, `0001` to `0020` (see [Set up](#set-up)).
+1. **Apply the migrations.** All of them, `0001` to `0021` (see [Set up](#set-up)).
 2. **Add repository secrets.** In GitHub › the repository › **Settings › Secrets and variables › Actions**, add `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, with the same values as on Vercel. Optionally add `REDIS_URL`.
 3. **Create a token Vercel can use to start the workflow.** In GitHub › your avatar › **Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token**:
    - **Repository access:** only this repository.
@@ -211,7 +211,7 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | Connect Cloudflare's own alerts (Monitoring › Cloudflare alerts) | | | | ✓ |
 | **Cache purge**, **roll back** a Worker or Pages deployment | | | ✓ (needs a super admin's approval) | ✓ |
 | **Approve or reject** admins' cache purges and rollbacks | | | | ✓ |
-| **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, timeline), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
+| **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, timeline), **Security audit** (run and read), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
 | **Zone tags**, owners and comparison templates: set and change (`zones:tag`) | | | ✓ | ✓ |
 | **API console** and live **Worker logs** with the stored tokens (`cloudflare:query`) | | | ✓ | ✓ |
 | **Logpush** job changes | | | ✓ (needs a super admin's approval) | ✓ |
@@ -554,7 +554,7 @@ These belong to each user. Rows are keyed by the user id, so nobody sees anyone 
 - **Permission:** `runs:read` for everything here.
 
 ### Change reason and ticket on approval requests
-Backup requests, restore-apply requests and Cloudflare action requests (purge, rollbacks and any later action kind) take an optional **reason** (up to 500 characters) and **ticket** (up to 200).
+Cloudflare change requests (cache purge, Worker and Pages rollbacks, Logpush changes) take an optional **reason** (up to 500 characters) and **ticket** (up to 200). Backup and restore requests are unchanged and don’t take them.
 
 - **Ticket format:** a ticket id such as `CHG-1234`, or an `http(s)` link. Links open with `rel="noopener noreferrer"`. Other link schemes are refused.
 - **Where they appear:** on the request on the Approvals page, and in the audit details of `approval.requested`, `approval.approved` and `approval.rejected` (`changeReason`, `ticket`).
@@ -835,6 +835,82 @@ Permissions in the console: everything is `runs:read` (every role); running the 
 
 Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zone_health`, its triggers on `monitor_targets` and `monitor_findings`, readers for stored rows (`monitor_rows_filtered`, `monitor_rows_accounts`, `monitor_snapshot_dnssec`) and indexes. It scores what monitoring already stored. Without it the three pages answer 503 naming the file; DNS hygiene and load balancing still run, the lists check's account units wait for it. Rollback: `supabase/rollbacks/0018_zone_health.down.sql` (loses only the scores).
 
+## Security audit (one zone)
+
+**Console › Security audit** (`/console/security-audit`) checks one zone against a fixed set of rules derived from the `security-audit` skill (`.claude/skills/security-audit/`). It also reports how the zone's security rules acted on its traffic. Choose a zone with the search box (the search runs on the server, so the browser never loads the whole zone list). Pick a traffic window (24 hours, 7 days by default, or 30 days, shortened to what the plan keeps) and press **Run audit**. The report opens at `/console/security-audit/{id}`. The Zone explorer's zone view has a **Security audit** button that opens the page with that zone chosen.
+
+**No AI and no writes.** Every rule is plain code with a documented condition (`src/lib/zone-audit/rules.ts` for configuration, `effectiveness.ts` for traffic). Each rule names the skill attack class it implements and the skill file it comes from. The audit only reads Cloudflare. Fixes are written out as dashboard steps and are never applied.
+
+**Verdicts.** A finding is **Confirmed** only when the zone's configuration, or the traffic numbers, prove the outcome. Example: SSL Flexible means the leg from Cloudflare to the origin is plain HTTP. A finding is **Needs validation** when the outcome depends on something the configuration cannot show, such as how the origin behaves, what an unproxied host serves, or headers the origin sets. Each such finding gives the exact check to run.
+
+**Coverage ledger.** Every rule ends in one of four states:
+- **passed**
+- **finding**
+- **not applicable**: the plan or zone lacks the product.
+- **not read**: a permission was refused or the API failed. The ledger names the token permission that would read the data.
+
+This keeps a clean result from being mistaken for "everything was checked".
+
+**Report contents:**
+- A summary by severity and verdict.
+- Configuration findings, worst first, each with evidence (secret-looking values masked), root cause, fix and validation.
+- **Rule effectiveness**: per custom, managed, rate limiting, bot and DDoS rule, the hits by action, the challenge solve rate, the top paths, countries and networks, and the trend against the previous window.
+- Recommendations drawn from the traffic.
+- The coverage ledger.
+- What was read.
+
+**Downloads:** `REPORT.md`, `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table or the coverage ledger.
+
+**Rule areas.**
+
+| Area | What the rules check |
+| --- | --- |
+| Transport | SSL mode, minimum TLS, TLS 1.3, Always Use HTTPS, HTTPS rewrites, HSTS, authenticated origin pulls, edge certificates |
+| Origin exposure | Unproxied records that reveal a proxied origin, unproxied management or non-production names, dangling CNAMEs to takeover-prone services, wildcards |
+| Email and DNS | SPF, DMARC, CAA, DNSSEC |
+| WAF | Cloudflare Managed and OWASP rulesets, broad skip rules, skips keyed on client-supplied headers, disabled rules, security level, browser integrity check, Bot Fight Mode |
+| Availability | Rate limiting, HTTP DDoS overrides, development mode |
+| Cache | Cache-everything rules on per-user paths, Cache Deception Armor, unkeyed query strings |
+| Host trust | Origin-rule Host/SNI overrides, True-Client-IP |
+| Client-side | Security headers set at the edge, Page Shield |
+| Edge | Worker routes, including Worker-less routes on sensitive paths |
+| Traffic | Rules with no hits, log-only rules matching automated traffic, likely false positives (the WAF false-positive score and draft exception), skip rules letting through clients other rules stop, managed rules mostly logging, rate limits that never trigger on busy paths, busy failing paths and hosting networks with no rule acting |
+
+**Permissions.** Viewing and starting an audit both need `runs:read` (every role), because an audit only reads. Starts are limited to 10 per user per 10 minutes, one running audit per zone, and at most 3 running at once per worker. Each start is written to the audit log as `zone_audit.started`, and each download as `zone_audit.downloaded`.
+
+**Cost of one audit.** About 28 Cloudflare API GETs (the zone, 11 settings, 7 ruleset phases, DNS records, DNSSEC, certificate packs, authenticated origin pulls, bot management, Page Shield, page rules, Worker routes, managed transforms). The traffic window adds about 16 GraphQL analytics queries for 7 days with the usual 3-day query span; 30 days, or plans with a 1-day span, take up to about 60 (at most 12 window parts per dataset). These use the shared analytics budget. On top of that come up to 40 public DNS lookups (DoH) for CNAME targets. All calls go through `cf-read.ts` and `investigate-gql.ts`, with the token from the zone's stored credential. There is no run that audits every zone, on purpose: 6,532 zones would be about 290,000 calls. Every page that lists stored audits reads only the database.
+
+**Cloudflare token permissions** (all read; the audit never needs or uses an edit permission):
+- Zone Read
+- Zone Settings Read
+- DNS Read
+- SSL and Certificates Read
+- Zone WAF Read
+- HTTP DDoS Managed Ruleset Read
+- Cache Settings Read
+- Origin Read
+- Transform Rules Read
+- Managed headers Read
+- Bot Management Read
+- Page Shield Read
+- Page Rules Read
+- Workers Routes Read
+- Analytics Read
+
+A missing permission marks only the rules that need it as "not read".
+
+**Environment.**
+- No new variables.
+- `DNS_HEALTH_DOH=off` turns off the CNAME lookups. The dangling-CNAME rule then shows "not read".
+- `TRAFFIC_GQL_BUDGET` and `TRAFFIC_GQL_WINDOW_MS` (existing) bound the analytics queries.
+
+**Migration:** `supabase/migrations/0021_zone_audits.sql`, rollback `supabase/rollbacks/0021_zone_audits.down.sql`.
+- It creates the table `zone_audits`, which keeps the newest 20 audits per zone and has a `latest` flag for the all-zones list.
+- `zone_audit_start` refuses a second audit of a zone while one is running, and marks audits that have been running for more than 15 minutes as failed.
+- `zone_audit_latest` pages the newest audit of each zone, sorted by worst severity, newest, or name.
+- RLS is on and only the service role has access.
+- Without the migration, the page and the API answer 503 and name the file.
+
 ## Operator tools: Worker logs, API console, Logpush
 
 ### Live Worker logs (`/console/tools/worker-logs`)
@@ -860,11 +936,21 @@ A new monitoring check, `logpush`, reads every account's Logpush jobs every hour
 - Status: **Failing** means the last error is newer than the last push. **Stale** means nothing was pushed for 24 h. **Turned off** and **Not pushed yet** are also shown. Failing jobs raise a high finding, stale jobs a medium one, and turned-off jobs an info one. Findings go through the usual notifications.
 - Destinations are shown as scheme and host only (for example `s3://bucket`). Paths, query strings, keys, SAS tokens, headers and `user:pass@` are never stored or shown. Error messages have URLs cut to the host and secret-looking parameters blanked.
 - **Managing jobs** (the one exception to read-only): create, edit (name, enabled, filter, output options, batch limits, destination, ownership challenge), turn on or off, and delete. Each is a Cloudflare action of kind `logpush` (`POST /api/cloudflare/actions`, permission `cloudflare:act`). A super admin's action runs at once. An admin's waits on the Approvals page and runs once when approved.
+  - **Stored tokens never change Logpush.** Every write runs with a credential typed in when the change runs: an **API token with Logs Edit** on the account or zone, or a **Global API Key with its account email**.
+    - A super admin acting directly enters it in the dialog.
+    - An admin's request carries no credential. The super admin who approves it is asked for one when they press **Approve and start**.
+    - Fields are password-type with autocomplete off, and are cleared when the dialog closes.
+  - The credential lives only in memory for that one request. It is not saved in Supabase, approval records, files, the cache, the audit log or server logs, and it is never returned. The reference is dropped after use.
+    - On Vercel the credential travels to the worker inside the sealed relayed request, like any request body.
+    - The audit log records only which kind was used (`auth: api_token` or `global_api_key`).
+  - If Cloudflare refuses the credential (wrong, or no Logs Edit), the message names **Logs Edit**. An approval then **stays waiting**, so it can be approved again with another credential. A missing credential is treated the same way.
   - The approval shows before → after for each field.
   - The new destination and the ownership challenge are sealed with the server key inside the request and are opened only to send them to Cloudflare.
   - If the job changed in Cloudflare after the request was made, it is refused (409).
-  - Cloudflare validates new destinations first (`validate/destination`).
-- **Ownership challenge** asks Cloudflare to write a challenge file into the destination (`POST …/logpush/ownership`). It changes nothing in Cloudflare and is audited as `logpush.ownership_requested`.
+  - Cloudflare validates new destinations (`validate/destination`) right before the change, with the same typed-in credential, because validation needs Logs Edit too. An admin's request is therefore not validated until it is approved.
+- **Ownership challenge** asks Cloudflare to write a challenge file into the destination (`POST …/logpush/ownership`). It needs Logs Edit, so it also asks for a typed-in credential. It is audited as `logpush.ownership_requested`.
+- Reading stays on the stored tokens: the list, the monitoring check, and the current settings shown in the edit dialog.
+- These few typed-in calls go straight to the Cloudflare API, like the activity revert does, not through the stored tokens' rate budget.
 
 ### Permissions
 | Feature | Console permission | Cloudflare token permission |
@@ -873,7 +959,7 @@ A new monitoring check, `logpush`, reads every account's Logpush jobs every hour
 | API console | `cloudflare:query` | Whatever the path needs (read permissions) |
 | Logpush list / check | `runs:read` | Account › **Logs Read**, Zone › **Logs Read** |
 | Logpush edit form (live read) | `cloudflare:act` | Logs Read |
-| Logpush changes, validation, ownership challenge | `cloudflare:act` (+ super admin approval) | Account › **Logs Edit** / Zone › **Logs Edit** (Cloudflare's API reference calls it "Logs Write"). A token without it is reported by name when the destination is validated or the change runs. |
+| Logpush changes, validation, ownership challenge | `cloudflare:act` (+ super admin approval) | **Typed in at run time, never stored:** an API token with Account › **Logs Edit** / Zone › **Logs Edit** (Cloudflare's API reference calls it "Logs Write"), or a Global API Key and its email. The stored tokens need only Logs Read. |
 
 ### Database
 Migration `supabase/migrations/0019_ops_tools.sql` (rollback `supabase/rollbacks/0019_ops_tools.down.sql`) adds:
@@ -894,7 +980,7 @@ webhook, or both. You can also keep them in the console only and download them.
 Each report has:
 
 - **Scope.** Everything, some accounts, or the zones that carry every one of a set of zone tags.
-- **Schedule.** Daily, or weekly on a chosen day, at a chosen hour in UTC.
+- **Schedule.** Daily, or weekly on a chosen day, at a chosen hour in US Eastern time (America/New_York): 07:00 means 07:00 EST in winter and 07:00 EDT in summer. Every time in a report, its downloads and its Slack message is shown in Eastern time with EST or EDT.
 - **Sections.** Any of the five listed below.
 - **Channels.** The Slack and webhook addresses set in **Monitoring › Settings**.
 

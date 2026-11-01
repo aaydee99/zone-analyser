@@ -78,7 +78,7 @@ function ListDialog({ list, onClose }: { list: ListRow; onClose: () => void }) {
         </section>
         <section aria-labelledby="refs-title">
           <h3 id="refs-title" className="mb-2 text-[14px] font-semibold">Rules that use it {refs && <span className="font-mono text-[11px] text-faint">{refs.total}</span>}</h3>
-          {!refs ? <SkeletonTable rows={2} cols={4} /> : refs.rows.length === 0 ? <p className="text-sm text-muted">{list.referencedBy === 'zones not read yet' ? 'Not every zone of this account has been read yet.' : 'No rule uses this list.'}</p> : (
+          {!refs ? <SkeletonTable rows={2} cols={4} /> : refs.rows.length === 0 ? <p className="text-sm text-muted">{list.refs === null ? 'Monitoring has not read this account’s rules yet (IP & ASN lists check), so the rules that use this list are not known.' : list.referencedBy === 'zones not read yet' ? 'Not every zone of this account has been read yet.' : 'No rule uses this list.'}</p> : (
             <ul className="divide-y divide-line/60 rounded-lg border border-line text-[13px]">
               {refs.rows.map((r, i) => (
                 <li key={i} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2">
@@ -108,6 +108,8 @@ export default function ListsPage() {
   if (kind) params.set('kind', kind);
   if (term) params.set('q', term);
   const { data, error, loading, reload, version } = useSnapshot<ListsView>(`/api/lists?${params}`);
+  // Refresh reads Cloudflare again now; the first load may use the copy kept ten minutes.
+  const refresh = async () => { try { await api<ListsView>(`/api/lists?${params}&fresh=1`); } catch { /* reload shows the error */ } await reload(); };
   const [extra, setExtra] = useState<{ v: number; rows: ListRow[] }>({ v: -1, rows: [] });
   const [more, setMore] = useState(false);
   const [open, setOpen] = useState<ListRow | null>(null);
@@ -120,9 +122,15 @@ export default function ListsPage() {
   };
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Security" title="IP & ASN lists" description="Every IP, ASN, hostname and redirect list in the accounts the tokens read, and the rules that use each one. Read once a day by monitoring; a list’s items are read from Cloudflare when you open it."
-        actions={<Button variant="ghost" loading={loading} onClick={reload} icon={<RefreshCw className="size-4" />}>Refresh</Button>} />
-      {data && <p className="-mt-4 text-[12.5px] text-muted">{data.lastRun ? <>lists read {when(data.lastRun)} · </> : null}as of {new Date(data.generatedAt).toLocaleTimeString()} · <Link className="text-signal hover:underline" href="/console/monitoring/lists">monitoring</Link></p>}
+      <PageHeader eyebrow="Security" title="IP & ASN lists" description="Every IP, ASN, hostname and redirect list in the accounts the tokens read. View only: lists are read from Cloudflare (kept ten minutes; Refresh reads them again), a list’s items when you open it, and the rules that use each list come from monitoring."
+        actions={<Button variant="ghost" loading={loading} onClick={refresh} icon={<RefreshCw className="size-4" />}>Refresh</Button>} />
+      {data && <p className="-mt-4 text-[12.5px] text-muted">{data.readAt ? <>read from Cloudflare {when(data.readAt)} · </> : null}as of {new Date(data.generatedAt).toLocaleTimeString()} · rules using each list: <Link className="text-signal hover:underline" href="/console/monitoring/lists">monitoring</Link></p>}
+      {data?.problems && data.problems.length > 0 && (
+        <Alert tone="warn" title={`${data.problems.length} account(s) could not be read`}>
+          <ul className="mt-1 space-y-0.5 text-xs">{data.problems.slice(0, 10).map((p) => <li key={p.account}><b>{p.account}</b>: {p.error}</li>)}</ul>
+          {data.problems.length > 10 && <p className="mt-1 text-xs">…and {data.problems.length - 10} more.</p>}
+        </Alert>
+      )}
       {error && <Alert tone="bad" title="The lists could not be read">{error}</Alert>}
       <Card>
         <div className="flex flex-wrap items-end gap-3 border-b border-line px-5 py-3">
@@ -147,7 +155,7 @@ export default function ListsPage() {
           {data && <span className="ml-auto self-center font-mono text-[11px] text-faint">{whole.format(data.total)} lists</span>}
         </div>
         {!data ? <Loading label="Loading lists" className="p-5"><SkeletonTable rows={8} cols={6} /></Loading> : rows.length === 0 ? (
-          <EmptyState icon={<ListFilter className="size-5" />} title={account || kind || term ? 'No list matches' : 'No lists yet'} description={account || kind || term ? 'Try another account, kind or search.' : 'Lists appear once monitoring has read each account (IP & ASN lists check). An admin can run it now from Monitoring.'} />
+          <EmptyState icon={<ListFilter className="size-5" />} title={account || kind || term ? 'No list matches' : 'No lists yet'} description={account || kind || term ? 'Try another account, kind or search.' : 'None of the accounts the stored tokens read has a list. The token needs “Account Filter Lists Read” to see them.'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-left text-[13px]">
@@ -162,8 +170,8 @@ export default function ListsPage() {
                     <td className="px-4 py-2.5 text-ink-2">{r.account}</td>
                     <td className="px-4 py-2.5"><Badge>{kindLabel(r.kind)}</Badge></td>
                     <td className="px-4 py-2.5 font-mono text-xs tabular-nums text-ink-2">{whole.format(r.items)}</td>
-                    <td className={cx('px-4 py-2.5 font-mono text-xs tabular-nums', r.refs ? 'text-ink-2' : 'text-warn')}>{whole.format(r.refs)}</td>
-                    <td className="max-w-[300px] px-4 py-2.5 text-[12.5px] text-muted">{r.referencedBy || '—'}</td>
+                    <td className={cx('px-4 py-2.5 font-mono text-xs tabular-nums', r.refs === null ? 'text-faint' : r.refs ? 'text-ink-2' : 'text-warn')} title={r.refs === null ? 'Monitoring has not read this account’s rules yet' : undefined}>{r.refs === null ? '—' : whole.format(r.refs)}</td>
+                    <td className="max-w-[300px] px-4 py-2.5 text-[12.5px] text-muted">{r.refs === null ? 'not read by monitoring yet' : r.referencedBy || '—'}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-muted" title={r.modified ? fmtDate(r.modified) : undefined}>{r.modified ? when(r.modified) : '—'}</td>
                   </tr>
                 ))}

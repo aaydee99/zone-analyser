@@ -5,7 +5,7 @@ import { BRAND } from '@/lib/brand';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { BrandMark } from './brand-mark';
-import { Eraser, FileOutput, FileText, Fingerprint, GitCompare, HeartPulse, ListFilter, MessageSquare, Radar, Search, Tags, Terminal, ScanSearch } from 'lucide-react';
+import { Eraser, FileOutput, ShieldAlert, FileText, Fingerprint, GitCompare, HeartPulse, ListFilter, MessageSquare, Radar, Search, Tags, Terminal, ScanSearch } from 'lucide-react';
 import { ZoneSearchBox } from './zone-search-box';
 import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -54,6 +54,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: '/console/search', label: 'Search', icon: Search },
       { href: '/console/compare', label: 'Compare', icon: GitCompare },
       { href: '/console/investigate', label: 'Investigate', icon: Fingerprint },
+      { href: '/console/security-audit', label: 'Security audit', icon: ShieldAlert },
     ],
   },
   {

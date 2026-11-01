@@ -18,8 +18,6 @@ import {
 } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
-import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
-import type { ChangeNote } from '@/lib/change-note';
 
 interface Zone { id: string; name: string; status: string; plan: string; paused: boolean; accountId?: string; accountName?: string }
 interface Preset { id: string; name: string; config: BackupConfig; updatedAt: string }
@@ -228,9 +226,6 @@ function BackupBuilder() {
   const needsApproval = !can('runs:approve');
   const [request, setRequest] = useState<Approval | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
-  // Why the operator asks (and a ticket), for the approver: src/components/change-note.tsx.
-  const [note, setNote] = useState<ChangeNote>({});
-  const requireReason = useRequireReason();
   // Only one job at a time: the shell keeps these current (a backup run, or a restore job).
   const activeRun = liveRun;
 
@@ -333,7 +328,7 @@ function BackupBuilder() {
     setStarting(true);
     try {
       const r = await api<{ run?: RunMeta; approval?: Approval }>('/api/runs', {
-        method: 'POST', json: { config: cfg, presetName: presets.find((p) => p.id === presetId)?.name, ...(needsApproval ? noteBody(note) : {}) },
+        method: 'POST', json: { config: cfg, presetName: presets.find((p) => p.id === presetId)?.name },
       });
       if (r.run) { router.push(`/console/runs/${r.run.id}`); return; }
       if (r.approval) {
@@ -656,12 +651,9 @@ function BackupBuilder() {
             )}
             <div className="border-t border-line p-4">
               {needsApproval ? (
-                <div className="space-y-4">
-                  {request?.status !== 'pending' && <ChangeNoteFields stacked value={note} onChange={setNote} requireReason={requireReason} />}
-                  <Button variant="primary" size="lg" className="w-full" disabled={problems.length > 0 || request?.status === 'pending' || !noteReady(note, requireReason)} loading={starting} icon={<Play className="size-4" />} onClick={start}>
-                    Request backup
-                  </Button>
-                </div>
+                <Button variant="primary" size="lg" className="w-full" disabled={problems.length > 0 || request?.status === 'pending'} loading={starting} icon={<Play className="size-4" />} onClick={start}>
+                  Request backup
+                </Button>
               ) : activeRun ? (
                 <Link href={`/console/runs/${activeRun}`} className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
                   <span className="live-dot size-2 rounded-full bg-live" /> A backup is running — view it

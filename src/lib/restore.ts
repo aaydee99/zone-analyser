@@ -8,8 +8,7 @@ import { credentialForRun, storageOf } from './vault';
 import { listZones } from './providers';
 import { uncache } from './cache';
 import { saveRecord, type RestoreStep } from './restore-history';
-import { newApproval, requestNote, type Approval } from './approvals-store';
-import { noteDetails, type ChangeNote } from './change-note';
+import { newApproval, type Approval } from './approvals-store';
 import { can } from './rbac';
 import { bucketTarget, getObject, listObjects, type BucketTarget } from './bucket-store';
 import { accountChanges } from './cf-audit';
@@ -1196,7 +1195,7 @@ async function checkGlobalKey(s: Session, email: string, apiKey: string) {
   }
 }
 
-export async function applyRestore(me: Me, id: string, input: { confirm?: string; acknowledgeReplace?: boolean; email?: string; apiKey?: string; reason?: string; ticket?: string }): Promise<RestoreView> {
+export async function applyRestore(me: Me, id: string, input: { confirm?: string; acknowledgeReplace?: boolean; email?: string; apiKey?: string }): Promise<RestoreView> {
   const s = store.sessions.get(id);
   if (!s) throw new HttpError(404, 'Restore session not found or expired — start again');
   if (s.state !== 'planned' || !s.plan) throw new HttpError(409, 'Make a plan first');
@@ -1211,16 +1210,14 @@ export async function applyRestore(me: Me, id: string, input: { confirm?: string
   if (s.approval) throw new HttpError(409, 'This restore is already waiting for a super admin to approve the apply');
   const direct = can(me.role, 'restore:approve');
   if (direct) { assertNoJob(); assertTakingJobs(); }
-  // A request carries its reason and ticket to the approver (checked before the key is).
-  const note = direct ? {} : await requestNote(input);
   await checkGlobalKey(s, email, apiKey);
   if (s.state !== 'planned' || s.approval) throw new HttpError(409, 'This restore changed while the key was being checked — reload');
-  if (!direct) return requestApply(me, s, email, apiKey, note);
+  if (!direct) return requestApply(me, s, email, apiKey);
   return startApply(s, me, email, apiKey);
 }
 
 /** An admin's apply: held until a super admin approves it (the key stays in memory only). */
-async function requestApply(me: Me, s: Session, email: string, apiKey: string, note: ChangeNote = {}): Promise<RestoreView> {
+async function requestApply(me: Me, s: Session, email: string, apiKey: string): Promise<RestoreView> {
   const plan = s.plan!;
   const changes = plan.changes.filter((c) => !c.actions.includes('no-op')).map((c) => ({ address: c.address, actions: c.actions }));
   const expiresAt = new Date(Date.parse(plan.at) + PLAN_MAX_AGE_MS).toISOString();
@@ -1233,14 +1230,13 @@ async function requestApply(me: Me, s: Session, email: string, apiKey: string, n
       `Applied with the Global API Key of ${email} (held in memory until decided)`,
     ],
     expiresAt, restore: { restoreId: s.id, zone: s.zone.name, folder: s.source.folder, keyEmail: email, planAt: plan.at, changes },
-    ...(note.reason || note.ticket ? { note } : {}),
   });
   heldKeys.set(a.id, { email, apiKey, restoreId: s.id });
   // The request's own limit: the plan's age, or APPROVAL_TTL_MINUTES if that is sooner.
   s.approval = { id: a.id, requestedBy: me.email, requestedAt: a.requestedAt, expiresAt: a.expiresAt ?? expiresAt };
   s.log.push(`Apply requested by ${me.email} — waiting for a super admin to approve it (until ${s.approval.expiresAt}).`);
   track(s, 'Apply requested — waiting for a super admin', me.email);
-  await audit(me, 'approval.requested', s.zone.name, { approvalId: a.id, kind: 'restore', restoreId: s.id, folder: s.source.folder, changes: changes.length, keyEmail: email, ...noteDetails(note) });
+  await audit(me, 'approval.requested', s.zone.name, { approvalId: a.id, kind: 'restore', restoreId: s.id, folder: s.source.folder, changes: changes.length, keyEmail: email });
   return view(s);
 }
 

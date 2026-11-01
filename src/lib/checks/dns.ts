@@ -171,7 +171,9 @@ export const dns: CheckDef = {
         records: records.length, proxied: proxiedCount, cnames: unique.length, dangling, leaks: leaks.length, createdOn: zone.created_on ?? null,
         _tone: findings.some((f) => f.severity === 'critical' || f.severity === 'high') ? 'bad' : findings.length ? 'warn' : 'ok',
       };
-      zoneRow._sort = zoneRow._tone === 'bad' ? 0 : zoneRow._tone === 'warn' ? 1 : 2;
+      // Worst first; within that, the zone added longest ago first (pending longest), zones without a date last.
+      const added = zone.created_on ? Date.parse(zone.created_on) / 1000 : NaN;
+      zoneRow._sort = (zoneRow._tone === 'bad' ? 0 : zoneRow._tone === 'warn' ? 1 : 2) * 1e10 + (Number.isFinite(added) ? added : 9e9);
       const problems = [...p.list, ...(!doh ? ['Public DNS lookups are off (DNS_HEALTH_DOH=off): delegation, DS and CNAME targets are not checked'] : [])];
       return {
         rows: { issues: [...issues, ...leakRows].sort((a, b) => Number(a._sort) - Number(b._sort)), cnames: prone, zones: [zoneRow] },

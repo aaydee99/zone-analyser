@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Pencil, Play, RefreshCw, Send, Trash2 } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
-import { SECTION_LABEL, scheduleLabel, type ReportDefinition, type ReportRunSummary } from '@/lib/report-types';
+import { SECTION_LABEL, fmtEastern, scheduleLabel, type ReportDefinition, type ReportRunSummary } from '@/lib/report-types';
 import { Alert, Button, ButtonLink, Card, EmptyState, Loading, Modal, PageHeader, SectionHeader, SkeletonTable } from '@/components/ui';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
@@ -15,7 +15,7 @@ import { RunState } from '../run-state';
 
 interface DetailView { definition: ReportDefinition; runs: ReportRunSummary[]; total: number; offset: number; generatedAt: string }
 
-const period = (r: ReportRunSummary) => `${r.periodStart.slice(0, 16).replace('T', ' ')} – ${r.periodEnd.slice(0, 16).replace('T', ' ')} UTC`;
+const period = (r: ReportRunSummary) => `${fmtEastern(r.periodStart)} – ${fmtEastern(r.periodEnd)}`;
 
 export default function ReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -63,7 +63,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
       {error && <Alert tone="bad" title="The report could not be read">{error}</Alert>}
       {d && (
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-[13px] text-muted">
-          <span>Next: {d.enabled && d.nextRunAt ? `${d.nextRunAt.slice(0, 16).replace('T', ' ')} UTC` : 'off (by hand only)'}</span>
+          <span>Next: {d.enabled && d.nextRunAt ? fmtEastern(d.nextRunAt) : 'off (by hand only)'}</span>
           <span>Sent to: {d.channels.length ? d.channels.map((c) => (c === 'slack' ? 'Slack' : 'webhook')).join(' and ') : 'nowhere (kept here)'}</span>
           <span>Changed {relTime(d.updatedAt)}{d.updatedBy ? ` by ${d.updatedBy}` : ''}</span>
           <span className="ml-auto text-faint">As of {data && new Date(data.generatedAt).toLocaleTimeString()}</span>
@@ -72,7 +72,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
       <Card>
         <SectionHeader title="History" description="The newest 50 reports made. A report goes to each channel once; a failed send is shown, not repeated." />
         {!data ? (!error && <Loading label="Loading history" className="p-5"><SkeletonTable rows={4} cols={3} /></Loading>)
-          : !data.runs.length ? <div className="p-5"><EmptyState icon={<Play className="size-5" />} title="Not made yet" description={d?.enabled && d.nextRunAt ? `The first one is made at ${d.nextRunAt.slice(0, 16).replace('T', ' ')} UTC.` : 'Make one by hand.'} /></div>
+          : !data.runs.length ? <div className="p-5"><EmptyState icon={<Play className="size-5" />} title="Not made yet" description={d?.enabled && d.nextRunAt ? `The first one is made at ${fmtEastern(d.nextRunAt)}.` : 'Make one by hand.'} /></div>
           : (
             <ul className="divide-y divide-line/70">
               {data.runs.map((r) => (
