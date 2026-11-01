@@ -5,7 +5,8 @@ export const dynamic = 'force-dynamic';
 
 /**
  * Zones and accounts for the investigation pages' pickers, from the cached zone list (no Cloudflare
- * call): ?q= matches zone or account names (and zone IDs), a page at a time (&offset, &limit: 50, at most 200).
+ * call): ?q= matches zone or account names (and zone IDs), a page at a time (&offset, &limit: 50, at most 200);
+ * &account=ID keeps that account's zones only.
  * &accounts=1 adds the accounts (one row each, with their zone count).
  */
 export const GET = route(async (req) => {
@@ -15,7 +16,9 @@ export const GET = route(async (req) => {
   const limit = Math.min(200, Math.max(1, Number(q.get('limit')) || 50));
   const list = await listZones();
   const readable = list.zones.filter((z) => list.credentialOf[z.id]);
-  const hits = term ? readable.filter((z) => z.name.toLowerCase().includes(term) || z.id === term || z.accountName.toLowerCase().includes(term)) : readable;
+  const account = q.get('account') ?? '';
+  const inAccount = account ? readable.filter((z) => z.accountId === account) : readable;
+  const hits = term ? inAccount.filter((z) => z.name.toLowerCase().includes(term) || z.id === term || z.accountName.toLowerCase().includes(term)) : inAccount;
   // Exact and leading matches first, then the rest by name.
   const rank = (n: string) => (n === term ? 0 : n.startsWith(term) ? 1 : 2);
   const sorted = term ? [...hits].sort((a, b) => rank(a.name.toLowerCase()) - rank(b.name.toLowerCase()) || a.name.localeCompare(b.name)) : hits;

@@ -171,6 +171,28 @@ export interface AuditListItem {
 }
 export interface AuditView extends AuditListItem { report: AuditReport | null }
 
+/** An audit of every zone in one account: its progress (each zone's audit is stored on its own). */
+export interface AccountAuditView {
+  id: string;
+  accountId: string;
+  accountName: string;
+  hours: number;
+  startedBy: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  state: 'running' | 'finished' | 'stopped';
+  total: number;
+  running: number;
+  queued: number;
+  ready: number;
+  failed: number;
+  /** A zone whose audit was running already. */
+  skipped: number;
+  /** Audited zones by their worst finding ('none': nothing found). */
+  worst: Partial<Record<Severity | 'none', number>>;
+  problems: { zoneId: string; zoneName: string; kind: 'failed' | 'skipped'; reason: string }[];
+}
+
 // ── The snapshot the rules read ─────────────────────────────────────────────
 
 /**

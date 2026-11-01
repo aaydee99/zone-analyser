@@ -104,7 +104,7 @@ export async function traceRequest(input: TraceInput): Promise<TraceResult> {
   if (!zone) throw new HttpError(404, `No zone the stored tokens read covers ${hostOf(host)}`);
   if (!/^[a-f0-9]{32}$/i.test(zone.accountId)) throw new HttpError(409, 'The zone list does not name this zone’s account — read the zone list again');
   const token = await tokenCache()(list.credentialOf[zone.id].id);
-  if (!token) throw new HttpError(409, 'The stored credential for this zone could not be decrypted');
+  if (!token) throw new HttpError(500, 'The stored credential for this zone could not be decrypted');
   const r = await cfCall<{ status_code?: number; trace?: unknown }>(token, 'POST', `/accounts/${zone.accountId}/request-tracer/trace`, request);
   if (!ok(r)) {
     throw new HttpError(refused(r) ? 403 : 502, refused(r)

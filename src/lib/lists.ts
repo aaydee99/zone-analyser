@@ -89,7 +89,7 @@ export async function listItems(accountId: string, listId: string, opts: { curso
   if (opts.cursor) q.set('cursor', opts.cursor);
   if (opts.search) q.set('search', opts.search);
   const r = await cfGet<RawItem[]>(token, `/accounts/${accountId}/rules/lists/${listId}/items?${q}`);
-  if (!ok(r)) throw new HttpError(refused(r) ? 403 : r.status === 404 ? 404 : 502, refused(r) ? `Cloudflare refused it: the stored token needs “Account Filter Lists Read” (${cfReason(r)})` : `Cloudflare: ${cfReason(r)}`);
+  if (!ok(r)) throw new HttpError(refused(r) ? 502 : r.status === 404 ? 404 : 502, refused(r) ? `Cloudflare refused it: the stored token needs “Account Filter Lists Read” (${cfReason(r)})` : `Cloudflare: ${cfReason(r)}`);
   const info = (r.body!.result_info ?? {}) as { cursors?: { after?: string } };
   const items: ListItem[] = (Array.isArray(r.body!.result) ? r.body!.result : []).map((x) => ({
     id: x.id,

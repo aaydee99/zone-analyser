@@ -25,7 +25,7 @@ const period = (days: Days) => {
 async function graphql<T>(token: string, query: string, variables: Record<string, unknown>): Promise<T> {
   const r = await cfCall<T>(token, 'POST', '/graphql', { query, variables });
   const body = r.body as unknown as { data?: T; errors?: { message?: string }[] } | null;
-  if (r.status !== 200 || !body) throw new HttpError(r.status === 403 ? 403 : 502, `Cloudflare: ${cfReason(r)}`);
+  if (r.status !== 200 || !body) throw new HttpError(502, `Cloudflare: ${cfReason(r)}`);
   if (body.errors?.length) throw new HttpError(502, `Cloudflare: ${body.errors.map((e) => e.message).join('; ')}`);
   return body.data as T;
 }
@@ -107,7 +107,7 @@ export function readsReport(accountId: string, days: Days, fresh = false): Promi
       const q = new URLSearchParams({ since: w.since, before: w.until, limit: '1000', direction: 'desc', action_type: 'view' });
       if (cursor) q.set('cursor', cursor);
       const r = await cfGet<RawEntry[]>(t.token, `/accounts/${accountId}/logs/audit?${q}`);
-      if (!ok(r)) throw new HttpError(r.status === 403 ? 403 : 502, r.status === 403 ? `The token cannot read the audit log — it needs “Account Settings Read” (${cfReason(r)})` : `Cloudflare: ${cfReason(r)}`);
+      if (!ok(r)) throw new HttpError(502, r.status === 403 ? `The token cannot read the audit log — it needs “Account Settings Read” (${cfReason(r)})` : `Cloudflare: ${cfReason(r)}`);
       const rows = (r.body!.result ?? []).filter((e) => (e.action?.type ?? '').toLowerCase() === 'view');
       for (const e of rows) {
         const kind: Reader['kind'] = e.actor?.email ? 'user' : e.actor?.token_name ? 'token' : 'other';

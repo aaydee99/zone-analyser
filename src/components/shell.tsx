@@ -66,7 +66,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { href: '/console/traffic', label: 'Traffic analytics', icon: BarChart3 },
       { href: '/console/analytics', label: 'DNS & Workers', icon: Activity },
       { href: '/console/cloudflare-activity', label: 'Cloudflare activity', icon: Cloud, perm: 'activity:read' },
-      { href: '/console/purge', label: 'Cache purge', icon: Eraser, locked: 'cloudflare:act' },
+      { href: '/console/purge', label: 'Cache purge', icon: Eraser, perm: 'cloudflare:act' },
       { href: '/console/lists', label: 'IP & ASN lists', icon: ListFilter },
       { href: '/console/logpush', label: 'Logpush', icon: FileOutput },
       { href: '/console/onboarding', label: 'Zone onboarding', icon: ScanSearch },

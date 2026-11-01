@@ -86,7 +86,7 @@ export const ACTIVITY: { key: string; label: string; actions: string[]; tone?: '
   { key: 'apiQueries', label: 'API console reads', actions: ['cloudflare.query'] },
   { key: 'workerTails', label: 'Live Worker log sessions', actions: ['worker_tail.started'] },
   { key: 'logpushOwnership', label: 'Logpush ownership challenges', actions: ['logpush.ownership_requested', 'logpush.ownership_failed'] },
-  { key: 'zoneAudits', label: 'Zone security audits', actions: ['zone_audit.started'] },
+  { key: 'zoneAudits', label: 'Zone security audits', actions: ['zone_audit.started', 'zone_audit.account_started', 'zone_audit.account_stopped'] },
 ];
 
 export interface ChangeReport {
@@ -204,6 +204,8 @@ export function describeChange(e: AuditEntry): string {
     case 'logpush.ownership_requested': return `Asked Cloudflare for a Logpush ownership challenge in ${str(e.target)} (${str(d.destination)})`;
     case 'logpush.ownership_failed': return `Cloudflare refused a Logpush ownership challenge in ${str(e.target)}: ${str(d.error)}`;
     case 'zone_audit.started': return `Ran a security audit of ${str(e.target)} (read-only, ${str(d.hours)}-hour traffic window)`;
+    case 'zone_audit.account_started': return `Started a security audit of every zone in ${str(e.target)} (${str(d.zones)} zones, read-only, ${str(d.hours)}-hour traffic window)`;
+    case 'zone_audit.account_stopped': return `Stopped the security audit of every zone in ${str(e.target)} after ${str(d.done)} of ${str(d.total)} zones`;
     case 'zone_audit.downloaded': return `Downloaded the security audit of ${str(e.target)} (${str(d.format)})`;
     default: return `${e.action}${e.target ? ` ${e.target}` : ''}`;
   }

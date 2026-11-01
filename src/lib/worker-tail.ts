@@ -114,7 +114,7 @@ export async function startTail(me: Me, raw: { accountId?: unknown; script?: unk
   if (!ok(r)) {
     const why = cfReason(r);
     await fail(`Cloudflare: ${why}`);
-    if (refused(r)) throw new HttpError(403, `Cloudflare refused it: the stored token needs “Account › Workers Tail Read” (${why})`);
+    if (refused(r)) throw new HttpError(502, `Cloudflare refused it: the stored token needs “Account › Workers Tail Read” (${why})`);
     if (r.status === 404) throw new HttpError(404, `Cloudflare has no Worker “${script}” in this account`);
     throw new HttpError(502, `Cloudflare: ${why}`);
   }

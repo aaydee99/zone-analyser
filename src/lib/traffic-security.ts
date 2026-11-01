@@ -417,7 +417,7 @@ async function readZoneDetail(scope: Scope, zoneId: string, month: string, f: De
     const cred = scope.credentialOf[zoneId];
     let token = '';
     try { token = cred ? (await credentialForRun(cred.id, 'cloudflare')).fields.apiToken : ''; } catch { /* below */ }
-    if (!token) throw new HttpError(409, 'The stored credential for this zone could not be decrypted');
+    if (!token) throw new HttpError(500, 'The stored credential for this zone could not be decrypted');
     progress.total += 1;
     const ask: Ask = (text) => gql(token, text, progress);
     const limits = await limitsOf(ask, zoneId).finally(() => { progress.done++; });

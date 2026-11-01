@@ -41,7 +41,7 @@ export const POST = publicRoute(async (req) => {
     if (err instanceof SchemaError) throw new HttpError(503, err.message);
     throw err;
   }
-  if (!checkSetupToken(token)) throw new HttpError(403, 'Setup token is missing or wrong — copy it from the terminal running the console');
+  if (!checkSetupToken(token)) throw new HttpError(401, 'Setup token is missing or wrong — copy it from the terminal running the console');
   await createFirstSuperAdmin({ email, password, name });
   clearSetupToken();
   return setSessionCookie(NextResponse.json({ ok: true }), await login(email, password, req.headers.get('user-agent')));

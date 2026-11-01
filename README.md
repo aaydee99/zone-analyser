@@ -219,12 +219,12 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | **Monitoring**: see findings and results (Tokens & members: admins and super admins only) | ✓ | ✓ | ✓ | ✓ |
 | **Monitoring**: run checks now, dismiss findings, accept drift, set up notifications | | | ✓ | ✓ |
 | Connect Cloudflare's own alerts (Monitoring › Cloudflare alerts) | | | | ✓ |
-| **Cache purge**, **roll back** a Worker or Pages deployment (others see the purge page locked) | | | ✓ (needs a super admin's approval) | ✓ |
+| **Cache purge**, **roll back** a Worker or Pages deployment (hidden from other roles; the page answers 403) | | | ✓ (needs a super admin's approval) | ✓ |
 | **Approve or reject** admins' cache purges and rollbacks | | | | ✓ |
 | **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, timeline), **Security audit** (run and read), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
 | **Zone tags**, owners and comparison templates: set and change (`zones:tag`) | | | ✓ | ✓ |
 | Live **Worker logs** (`workers:tail`) | ✓ | ✓ | ✓ | ✓ |
-| **API console** with the stored tokens (`cloudflare:query`); others see the page locked | | | ✓ | ✓ |
+| **API console** with the stored tokens (`cloudflare:query`); others see it locked in the menu and the page answers 403 | | | ✓ | ✓ |
 | **Logpush** job changes | | | ✓ (needs a super admin's approval) | ✓ |
 | Make reports and schedule them; rebuild the search index | | | ✓ | ✓ |
 | **Revert a change** from Cloudflare activity (hidden from viewers and operators) | | | ✓ + Global API Key | ✓ + Global API Key |
@@ -846,9 +846,12 @@ Permissions in the console: everything is `runs:read` (every role); running the 
 
 Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zone_health`, its triggers on `monitor_targets` and `monitor_findings`, readers for stored rows (`monitor_rows_filtered`, `monitor_rows_accounts`, `monitor_snapshot_dnssec`) and indexes. It scores what monitoring already stored. Without it the three pages answer 503 naming the file; DNS hygiene and load balancing still run, the lists check's account units wait for it. Rollback: `supabase/rollbacks/0018_zone_health.down.sql` (loses only the scores).
 
-## Security audit (one zone)
+## Security audit (one zone, or every zone of an account)
 
-**Console › Security audit** (`/console/security-audit`) checks one zone against a fixed set of rules derived from the `security-audit` skill (`.claude/skills/security-audit/`). It also reports how the zone's security rules acted on its traffic. Choose a zone with the search box (the search runs on the server, so the browser never loads the whole zone list). Pick a traffic window (24 hours, 7 days by default, or 30 days, shortened to what the plan keeps) and press **Run audit**. The report opens at `/console/security-audit/{id}`. The Zone explorer's zone view has a **Security audit** button that opens the page with that zone chosen.
+**Console › Security audit** (`/console/security-audit`) checks a zone against a fixed set of rules derived from the `security-audit` skill (`.claude/skills/security-audit/`). It also reports how the zone's security rules acted on its traffic. Choose the **account** first, then optionally a **zone** of that account with the search box (the search runs on the server, so the browser never loads the whole zone list). Pick a traffic window (24 hours, 7 days by default, or 30 days, shortened to what the plan keeps).
+
+- **A zone chosen:** **Run audit** audits that zone; the report opens at `/console/security-audit/{id}`. The server refuses a zone that is not in the chosen account.
+- **No zone:** **Audit all N zones** audits every zone of the account a stored credential reads, after a confirmation that shows the zone count and an estimate. The worker audits two zones at a time (one slot stays free for single audits) and stores each zone's report as usual, so they appear in **Latest audit of each zone** as they finish. The page shows the progress (done, waiting, failed, skipped, and the worst finding per zone) and refreshes it every 5 seconds; it can be left and reopened. One account audit runs at a time. Whoever started it, or an operator and up, can **Stop** it: no further zone starts, the ones running finish. A zone already being audited is skipped. The progress is kept in the worker's memory: a worker restart ends the account audit, and the zones audited so far keep their reports. API: `POST /api/security-audit` with `{ accountId }` (all zones) or `{ accountId, zoneId }`; `GET` / `DELETE /api/security-audit/account` for the progress and to stop it. Starting and stopping are in the audit log. The Zone explorer's zone view has a **Security audit** button that opens the page with that zone chosen.
 
 **No AI and no writes.** Every rule is plain code with a documented condition (`src/lib/zone-audit/rules.ts` and `rules-extra.ts` for configuration, `effectiveness.ts` and `passthrough.ts` for traffic). Each rule names the skill attack class it implements and the skill file it comes from. The audit only reads Cloudflare. Fixes are written out as dashboard steps and are never applied.
 
@@ -1253,7 +1256,7 @@ Every read-only Cloudflare view is its own endpoint, and its cached copy is kept
 | CAPTCHA on public forms | Cloudflare Turnstile on sign-in and first-run setup: set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. The server verifies every token with Cloudflare; the CSP then allows `challenges.cloudflare.com` only. Off until both keys are set. |
 | Log admin actions | The audit log records every user, role, setting, vault, credential (including each secret reveal), backup and restore action, plus refused (`security.denied`) and rate-limited (`security.rate_limited`) attempts. |
 | Private storage buckets | **Test** on an account set fails if a bucket can be listed without keys, or (AWS) if S3 reports it public. An R2 public `r2.dev` URL or custom domain is not visible to the S3 API — keep it off in the dashboard. |
-| Hide admin pages properly | Admin pages are guarded on the server (`src/lib/page-guard.ts`): without the permission they answer 404 and are never sent, not merely hidden. |
+| Hide admin pages properly | Admin pages are guarded on the server (`src/lib/page-guard.ts`): without the permission they answer 403 (signed in, but the role may not open it) and are never sent, not merely hidden. An address that does not exist answers 404; a signed-out visitor is sent to sign in, and the API answers 401. |
 | Update vulnerable packages | `npm audit` — currently 0 known vulnerabilities. Run it after every `npm install`. |
 | Check file upload types | The only upload is a `.env` file: plain text only (no binary/control characters), 64 KB at most — checked in the browser and again on the server. |
 | Security review | An independent code review (authorization, secrets, process spawning, SSRF, injection) found three issues, all fixed: **restore no longer trusts bucket content** — the backup's `provider.tf` is never used, only literal `cloudflare_*` resource blocks reach Terraform (no provisioners, provider overrides, interpolation or function calls such as `file()`; refused blocks are audited as `security.restore_blocks_refused`), and Terraform may install only the Cloudflare provider; **a run's output folder must be inside the admin-set output folder** (no other paths or network shares); **sign-in guesses cannot be raced** (one password check per account at a time) and the client address is the proxy-added (last) `X-Forwarded-For` hop, or the header named in `CONSOLE_CLIENT_IP_HEADER` (e.g. `cf-connecting-ip`). |

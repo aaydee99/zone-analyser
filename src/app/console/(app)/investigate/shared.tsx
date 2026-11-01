@@ -87,8 +87,8 @@ export function Reading({ what, pending }: { what: string; pending: InvestigateP
 
 export interface PickedZone { id: string; name: string; accountId: string; accountName: string; plan: string }
 
-/** A zone search box: matches come from the server (a page of 20), chosen with the mouse or the keyboard. */
-export function ZonePicker({ label, value, onChange, hint }: { label: string; value: PickedZone | null; onChange: (z: PickedZone | null) => void; hint?: string }) {
+/** A zone search box: matches come from the server (a page of 20), chosen with the mouse or the keyboard. `accountId`: that account's zones only. */
+export function ZonePicker({ label, value, onChange, hint, accountId, disabled, placeholder }: { label: string; value: PickedZone | null; onChange: (z: PickedZone | null) => void; hint?: string; accountId?: string; disabled?: boolean; placeholder?: string }) {
   const id = useId();
   const [typed, setTyped] = useState<string | null>(null);
   /** What the box shows: what is being typed, else the chosen zone. */
@@ -103,18 +103,18 @@ export function ZonePicker({ label, value, onChange, hint }: { label: string; va
     let live = true;
     // Asked when the user stops typing for a moment, not on every key.
     const t = setTimeout(() => {
-      api<{ zones: PickedZone[]; total: number }>(`/api/investigate/zones?limit=20&q=${encodeURIComponent(term)}`)
+      api<{ zones: PickedZone[]; total: number }>(`/api/investigate/zones?limit=20&q=${encodeURIComponent(term)}${accountId ? `&account=${encodeURIComponent(accountId)}` : ''}`)
         .then((r) => { if (live) { setHits(r.zones); setTotal(r.total); setActive(0); } }).catch(() => { if (live) setHits([]); });
     }, 200);
     return () => { live = false; clearTimeout(t); };
-  }, [q, open]);
+  }, [q, open, accountId]);
   const pick = (z: PickedZone) => { onChange(z); setTyped(null); setOpen(false); };
   return (
     <div className="relative space-y-1.5">
       <label htmlFor={id} className="flex items-center gap-2 text-[13px] font-medium text-ink-2">{label}</label>
       <input id={id} className="input" role="combobox" aria-expanded={open} aria-controls={`${id}-list`} aria-autocomplete="list" autoComplete="off"
         aria-activedescendant={open && hits[active] ? `${id}-${hits[active].id}` : undefined}
-        placeholder="Type a zone name…" value={q}
+        placeholder={placeholder ?? 'Type a zone name…'} value={q} disabled={disabled}
         onChange={(e) => { setTyped(e.target.value); setOpen(true); if (!e.target.value) onChange(null); }}
         onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => {

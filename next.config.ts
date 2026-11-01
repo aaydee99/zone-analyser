@@ -6,6 +6,8 @@ const SHORT = 'public, max-age=0, s-maxage=300, stale-while-revalidate=60';
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // forbidden(): a page a role may not open answers 403, not 404.
+  experimental: { authInterrupts: true },
   // The backup script is spawned by path at runtime, never bundled.
   outputFileTracingExcludes: { '*': ['./runner/**', './data/**'] },
   // The console moved under /console (the landing page is at /): old links and bookmarks still work.
