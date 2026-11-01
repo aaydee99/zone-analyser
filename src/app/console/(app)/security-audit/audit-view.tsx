@@ -169,11 +169,13 @@ function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][numb
       {open && hasDetail && (
         <tr id={panel} className="bg-raised/30">
           <td colSpan={6} className="px-5 pt-1 pb-4">
-            <div className="grid gap-5 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-3">
-              <RankList title="Top paths" mono items={x.topPaths.map((p) => ({ label: p.path || '/', count: p.count }))} />
-              <RankList title="Top countries" items={x.topCountries.map((p) => ({ label: p.country, count: p.count }))} />
-              <RankList title="Top networks" items={x.topAsns.map((p) => ({ label: p.name || `AS${p.asn}`, sub: `AS${p.asn}`, count: p.count }))} />
-            </div>
+            {x.topPaths.length + x.topCountries.length + x.topAsns.length > 0 ? (
+              <div className="grid gap-5 rounded-lg border border-line bg-surface/60 p-4 md:grid-cols-3">
+                <RankList title="Top paths" mono items={x.topPaths.map((p) => ({ label: p.path || '/', count: p.count }))} />
+                <RankList title="Top countries" items={x.topCountries.map((p) => ({ label: p.country, count: p.count }))} />
+                <RankList title="Top networks" items={x.topAsns.map((p) => ({ label: p.name || `AS${p.asn}`, sub: `AS${p.asn}`, count: p.count }))} />
+              </div>
+            ) : <p className="text-xs text-muted">Cloudflare returned no path, country or network breakdown for this rule in the window.</p>}
             {x.passthrough && <LetThrough p={x.passthrough} />}
           </td>
         </tr>
@@ -200,17 +202,17 @@ function LetThrough({ p }: { p: PassThrough }) {
         <div><dt className="text-muted">Automated</dt><dd className="tabular-nums text-ink">{whole.format(p.bots)} <span className="text-muted">({pct(p.botShare)}, {p.botBasis === 'score' ? 'bot score' : 'user agents — a heuristic'})</span></dd></div>
         <div><dt className="text-muted">Malicious</dt><dd className="tabular-nums text-ink">{whole.format(p.malicious)} <span className="text-muted">({pct(p.maliciousShare)}, {p.maliciousBasis === 'attack_score' ? 'attack score' : 'threat paths / repeat offenders — a heuristic'})</span></dd></div>
         <div><dt className="text-muted">Login, account, admin or API paths</dt><dd className="tabular-nums text-ink">{whole.format(p.sensitiveHits)}</dd></div>
-        <div><dt className="text-muted">From hosting networks</dt><dd className="tabular-nums text-ink">{pct(p.hostingShare)}</dd></div>
-        <div><dt className="text-muted">Browser user agents</dt><dd className="tabular-nums text-ink">{pct(p.browserShare)}</dd></div>
+        <div><dt className="text-muted">From hosting networks</dt><dd className="tabular-nums text-ink">{p.topAsns.length ? pct(p.hostingShare) : <span className="text-faint">no network data</span>}</dd></div>
+        <div><dt className="text-muted">Browser user agents</dt><dd className="tabular-nums text-ink">{p.topUas.length ? pct(p.browserShare) : <span className="text-faint">no user-agent data</span>}</dd></div>
         {st && <div><dt className="text-muted">Responses 2xx · 4xx · 5xx</dt><dd className="tabular-nums text-ink">{whole.format(st.s2xx)} · {whole.format(st.s4xx)} · {whole.format(st.s5xx)}</dd></div>}
-        {p.peakPerHour !== null && <div><dt className="text-muted">Busiest hour</dt><dd className="tabular-nums text-ink">{whole.format(p.peakPerHour)}</dd></div>}
+        {!!p.peakPerHour && <div><dt className="text-muted">Busiest hour</dt><dd className="tabular-nums text-ink">{whole.format(p.peakPerHour)}</dd></div>}
         {p.solveRate !== null && <div><dt className="text-muted">Challenge solve rate</dt><dd className="tabular-nums text-ink">{pct(p.solveRate)}</dd></div>}
       </dl>
-      <div className="mt-4 grid gap-5 md:grid-cols-3">
-        <RankList title="Paths it let through" mono items={p.topPaths.map((x) => ({ label: x.path || '/', count: x.count }))} />
-        <RankList title="Networks" items={p.topAsns.map((a) => ({ label: a.name || `AS${a.asn}`, sub: `AS${a.asn} · ${a.hosting ? 'hosting' : 'consumer'}`, count: a.count }))} />
-        <RankList title="User agents" mono items={p.topUas.map((u) => ({ label: u.ua || '(none)', sub: u.browser ? 'browser' : 'not a browser', count: u.count }))} />
-      </div>
+      {p.topPaths.length + p.topAsns.length + p.topUas.length > 0 && <div className="mt-4 grid gap-5 md:grid-cols-3">
+        {p.topPaths.length > 0 && <RankList title="Paths it let through" mono items={p.topPaths.map((x) => ({ label: x.path || '/', count: x.count }))} />}
+        {p.topAsns.length > 0 && <RankList title="Networks" items={p.topAsns.map((a) => ({ label: a.name || `AS${a.asn}`, sub: `AS${a.asn} · ${a.hosting ? 'hosting' : 'consumer'}`, count: a.count }))} />}
+        {p.topUas.length > 0 && <RankList title="User agents" mono items={p.topUas.map((u) => ({ label: u.ua || '(none)', sub: u.browser ? 'browser' : 'not a browser', count: u.count }))} />}
+      </div>}
       <RecommendationBox r={p.recommendation} />
     </div>
   );
