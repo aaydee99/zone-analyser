@@ -13,6 +13,8 @@
 // (6179ae15870a4bb7b2d480d4843b323c): 25 high, 40 medium (default), 60 low sensitivity.
 
 import { OWASP_ANOMALY_RULE, OWASP_RULESET } from '../traffic-types';
+import { normAction } from '../waf-fp-score';
+import { effectivenessOf } from './effectiveness';
 import { isBroad, isBroadPattern, norm, sensitivePaths } from './expr';
 import {
   ATTACK, CF_MANAGED, CLIENT, CLOUD, PAID, RES, WEB, active, ap, capped, ev, executes, obj, optRules, phasePath, plural, ruleName, rulesOf, setting, valueOf,
@@ -69,7 +71,7 @@ const MANAGED: RuleDef[] = [
         const weakRules = list(o.rules).filter((x) => x.enabled === false || x.action === 'log');
         const weakCats = list(o.categories).filter((x) => x.enabled === false || x.action === 'log');
         if (weakRules.length || weakCats.length) out.push({ resource: `${r.id}:overrides`, verdict: 'confirmed', severity: 'medium',
-          title: `${plural(weakRules.length, 'rule')} and ${cats(weakCats.length)} of the Cloudflare Managed Ruleset are off or only log`,
+          title: `${[weakRules.length ? plural(weakRules.length, 'rule') : '', weakCats.length ? cats(weakCats.length) : ''].filter(Boolean).join(' and ')} of the Cloudflare Managed Ruleset ${weakRules.length + weakCats.length === 1 ? 'is' : 'are'} off or only log${weakRules.length + weakCats.length === 1 ? 's' : ''}`,
           description: `Matches of these rules reach the origin: ${[...weakCats.map((x) => `category ${String(x.category)} (${x.enabled === false ? 'disabled' : 'log'})`), ...weakRules.slice(0, 10).map((x) => `rule ${String(x.id)} (${x.enabled === false ? 'disabled' : 'log'})`)].join(', ')}${weakRules.length > 10 ? ', …' : ''}.`,
           rootCause: 'Rule or category overrides on the deploy rule.', intendedBehavior: 'Overrides only for rules proven to cause false positives, preferably as narrow exceptions instead.',
           evidence: [ev(managedPath, `${name}.overrides.categories (off or log)`, weakCats.map((x) => String(x.category)).join(', ') || '(none)'), ev(managedPath, `${name}.overrides.rules (off or log)`, weakRules.map((x) => String(x.id)).join(', ') || '(none)')],
@@ -163,7 +165,11 @@ const MANAGED: RuleDef[] = [
         const p = ap(r);
         const sets = Array.isArray(p.rulesets) ? p.rulesets.map(String) : p.ruleset === 'current' ? ['all remaining managed rules'] : [];
         const skippedRules = Object.values(obj(p.rules)).reduce((a: number, v) => a + (Array.isArray(v) ? v.length : 0), 0);
-        const e = [ev(managedPath, `${ruleName(r)}.expression`, r.expression ?? ''), ev(managedPath, `${ruleName(r)}.action_parameters`, p)];
+        // The exception's traffic in the window (its skips are logged as events of the managed phase).
+        const row = effectivenessOf(c.s)?.eff.rules.find((x) => x.ruleId === r.id && x.kind === 'managed');
+        const skipped = row ? Object.entries(row.byAction).filter(([act]) => normAction(act) === 'skip').reduce((t, [, v]) => t + v, 0) : null;
+        const e = [ev(managedPath, `${ruleName(r)}.expression`, r.expression ?? ''), ev(managedPath, `${ruleName(r)}.action_parameters`, p),
+          ...(c.s.reads.events?.state === 'ok' ? [ev('GraphQL firewallEventsAdaptiveGroups', 'requests it skipped in the window (see Effectiveness)', `${skipped ?? 0}${row?.passthrough ? ` — ${row.passthrough.verdict}` : ''}`)] : [])];
         const what = sets.length ? sets.map(rsName).join(', ') : `${skippedRules} managed rules`;
         if (i > lastExec) out.push({ resource: `${r.id ?? i}:order`, verdict: 'confirmed', severity: 'info', title: `Exception “${ruleName(r)}” comes after every deploy rule and has no effect`,
           description: 'Rules run in order: an exception only skips managed rules deployed after it.', rootCause: 'The skip rule is placed below the deploy rules.', intendedBehavior: 'Exceptions sit above the deploy rule they apply to.', evidence: e,

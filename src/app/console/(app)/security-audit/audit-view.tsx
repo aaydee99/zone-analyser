@@ -1,18 +1,39 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { SeverityBadge } from '@/components/monitor-view';
 import { Alert, Badge, Card, SectionHeader, Stat, cx } from '@/components/ui';
 import {
-  COVERAGE_LABEL, COVERAGE_STATES, GROUP_LABEL, KIND_LABEL, PASS_LABEL, SEVERITIES, VERDICT_LABEL, windowLabel,
-  type AuditFinding, type AuditReport, type AuditStatus, type AuditSummary, type CoverageState, type Effectiveness, type PassThrough, type Recommendation, type RuleGroup,
+  COVERAGE_LABEL, COVERAGE_STATES, GROUP_LABEL, KIND_LABEL, PASS_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel,
+  type ActionItem, type AuditFinding, type AuditReport, type AuditStatus, type AuditSummary, type CoverageState, type Effectiveness, type ManagedOverview, type PassThrough,
+  type Recommendation, type RuleGroup, type RuleKind, type Severity, type Verdict,
 } from '@/lib/zone-audit/types';
 
-// The pieces of the audit report page: state, counts, findings, rule effectiveness and the coverage ledger.
+// The pieces of the audit report page: state, counts, findings, recommended actions, rule
+// effectiveness, managed rulesets and the coverage ledger. Links between tabs (an action to its
+// finding, an exception to its traffic) go through AuditNav: it switches the tab and the element
+// with that id opens itself and scrolls into view.
 
 const whole = new Intl.NumberFormat();
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+export type AuditTab = 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';
+/** Opens a finding (Findings tab) or an Effectiveness row by its fingerprint or rule key. */
+export const AuditNav = createContext<{ finding: (fingerprint: string) => void; effect: (key: string) => void }>({ finding: () => {}, effect: () => {} });
+export const findingId = (fp: string) => `f-${fp.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+export const effectId = (key: string) => `effect-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+/** True (once) when the URL hash names this element: it then opens and scrolls into view. */
+function useTargeted(id: string) {
+  const [hit, setHit] = useState(false);
+  useEffect(() => {
+    const check = () => { if (window.location.hash === `#${id}`) { setHit(true); requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: 'start' })); } };
+    check();
+    window.addEventListener('hashchange', check);
+    return () => window.removeEventListener('hashchange', check);
+  }, [id]);
+  return hit;
+}
 
 export function AuditState({ status }: { status: AuditStatus }) {
   return status === 'running' ? <Badge tone="signal">Running</Badge> : status === 'ready' ? <Badge tone="ok">Finished</Badge> : <Badge tone="bad">Failed</Badge>;
@@ -43,8 +64,10 @@ export function Summary({ r }: { r: AuditReport }) {
 }
 
 function FindingCard({ f }: { f: AuditFinding }) {
-  const [open, setOpen] = useState(false);
-  const id = `f-${f.fingerprint.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const id = findingId(f.fingerprint);
+  const targeted = useTargeted(id);
+  const [opened, setOpen] = useState(false);
+  const open = opened || targeted;
   return (
     <li id={id} className="scroll-mt-20 border-b border-line/70 last:border-0">
       <button type="button" aria-expanded={open} aria-controls={`${id}-body`} onClick={() => setOpen(!open)} className="flex w-full items-start gap-3 px-5 py-3 text-left hover:bg-raised/50">
@@ -79,35 +102,55 @@ function FindingCard({ f }: { f: AuditFinding }) {
   );
 }
 
-const SECTION_TITLE = { config: 'Configuration findings', managed: 'Managed rules', traffic: 'Recommendations from traffic' } as const;
-const inSection = (f: AuditFinding, section: keyof typeof SECTION_TITLE) => (section === 'config' ? f.group !== 'traffic' && f.group !== 'managed' : f.group === section);
-
-export function Findings({ r, section }: { r: AuditReport; section: keyof typeof SECTION_TITLE }) {
+/** A list of findings, worst first, with severity, verdict and area filters. */
+export function Findings({ findings, title, description, filters = true }: { findings: AuditFinding[]; title: string; description?: string; filters?: boolean }) {
+  const [sev, setSev] = useState<Severity | ''>('');
+  const [verdict, setVerdict] = useState<Verdict | ''>('');
   const [group, setGroup] = useState<RuleGroup | ''>('');
-  const mine = useMemo(() => r.findings.filter((f) => inSection(f, section)), [r, section]);
-  const groups = [...new Set(mine.map((f) => f.group))];
-  const shown = group ? mine.filter((f) => f.group === group) : mine;
-  const selectId = `group-${section}`;
+  const groups = useMemo(() => [...new Set(findings.map((f) => f.group))], [findings]);
+  const shown = findings.filter((f) => (!sev || f.severity === sev) && (!verdict || f.verdict === verdict) && (!group || f.group === group));
+  const sel = 'input py-1 text-xs';
+  const key = title.replace(/\W+/g, '-').toLowerCase();
   return (
     <Card>
-      <SectionHeader title={SECTION_TITLE[section]} description={section === 'managed' ? 'Cloudflare Managed, OWASP, Free and credential rulesets: deployment, overrides, tuning and exceptions. Worst first.' : 'Worst first. Open one for its evidence, the fix and how to validate it.'}
-        aside={section === 'config' && groups.length > 1 ? (
-          <span className="flex items-center gap-2 text-xs"><label htmlFor={selectId} className="text-muted">Area</label>
-            <select id={selectId} className="input py-1 text-xs" value={group} onChange={(e) => setGroup(e.target.value as RuleGroup | '')}>
-              <option value="">All ({mine.length})</option>{groups.map((g) => <option key={g} value={g}>{GROUP_LABEL[g]} ({mine.filter((f) => f.group === g).length})</option>)}
-            </select></span>) : undefined} />
-      {shown.length ? <ul>{shown.map((f) => <FindingCard key={f.fingerprint} f={f} />)}</ul> : <p className="px-5 py-4 text-[13px] text-muted">None in the rules that were read{section !== 'config' ? ' (the coverage ledger shows which of these rules were read)' : ''}.</p>}
+      <SectionHeader title={title} description={description ?? 'Worst first. Open one for its evidence, the fix and how to validate it.'} />
+      {filters && findings.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-2.5 text-xs">
+          <label className="flex items-center gap-1.5"><span className="text-muted">Severity</span>
+            <select className={sel} value={sev} onChange={(e) => setSev(e.target.value as Severity | '')} id={`${key}-sev`}>
+              <option value="">All</option>{SEVERITIES.filter((v) => findings.some((f) => f.severity === v)).map((v) => <option key={v} value={v}>{SEVERITY_LABEL[v]} ({findings.filter((f) => f.severity === v).length})</option>)}
+            </select></label>
+          <label className="flex items-center gap-1.5"><span className="text-muted">Verdict</span>
+            <select className={sel} value={verdict} onChange={(e) => setVerdict(e.target.value as Verdict | '')} id={`${key}-verdict`}>
+              <option value="">All</option>{(['confirmed', 'needs_validation'] as Verdict[]).map((v) => <option key={v} value={v}>{VERDICT_LABEL[v]} ({findings.filter((f) => f.verdict === v).length})</option>)}
+            </select></label>
+          {groups.length > 1 && <label className="flex items-center gap-1.5"><span className="text-muted">Area</span>
+            <select className={sel} value={group} onChange={(e) => setGroup(e.target.value as RuleGroup | '')} id={`${key}-area`}>
+              <option value="">All</option>{groups.map((g) => <option key={g} value={g}>{GROUP_LABEL[g]} ({findings.filter((f) => f.group === g).length})</option>)}
+            </select></label>}
+          {shown.length !== findings.length && <span className="text-muted">{shown.length} of {findings.length}</span>}
+        </div>
+      )}
+      {shown.length ? <ul>{shown.map((f) => <FindingCard key={f.fingerprint} f={f} />)}</ul> : <p className="px-5 py-4 text-[13px] text-muted">None in the rules that were read{findings.length ? ' with these filters' : ''} — the coverage ledger shows which rules were read.</p>}
     </Card>
   );
 }
 
-export function EffectivenessTable({ e, note }: { e: Effectiveness | null; note?: string }) {
-  if (!e) return <Card><SectionHeader title="Rule effectiveness" /><div className="px-5 py-4"><Alert tone="warn" title="Traffic was not read">{note ?? 'Security events could not be read.'}</Alert></div></Card>;
+export function EffectivenessTable({ e, note, only, title = 'Rule effectiveness' }: { e: Effectiveness | null; note?: string; only?: RuleKind; title?: string }) {
+  const [kind, setKind] = useState<RuleKind | ''>(only ?? '');
+  if (!e) return <Card><SectionHeader title={title} /><div className="px-5 py-4"><Alert tone="warn" title="Traffic was not read">{note ?? 'Security events could not be read.'}</Alert></div></Card>;
+  const kinds = [...new Set(e.rules.map((x) => x.kind))];
+  const rules = kind ? e.rules.filter((x) => x.kind === kind) : e.rules;
   return (
     <Card>
-      <SectionHeader title="Rule effectiveness" description={`How each security rule acted ${e.hours ? `in the last ${windowLabel(e.hours)}` : ''} (${e.since.slice(0, 10)} – ${e.until.slice(0, 10)}). ${whole.format(e.totalEvents)} security events, sampled by Cloudflare.`} />
+      <SectionHeader title={title} description={`How each security rule acted ${e.hours ? `in the last ${windowLabel(e.hours)}` : ''} (${e.since.slice(0, 10)} – ${e.until.slice(0, 10)}). ${whole.format(e.totalEvents)} security events, sampled by Cloudflare.`}
+        aside={!only && kinds.length > 1 ? (
+          <label className="flex items-center gap-2 text-xs"><span className="text-muted">Rules</span>
+            <select className="input py-1 text-xs" value={kind} onChange={(ev) => setKind(ev.target.value as RuleKind | '')}>
+              <option value="">All ({e.rules.length})</option>{kinds.map((k) => <option key={k} value={k}>{KIND_LABEL[k]} ({e.rules.filter((x) => x.kind === k).length})</option>)}
+            </select></label>) : undefined} />
       {e.notes.length > 0 && <ul className="space-y-1 px-5 pt-3 text-xs text-warn">{e.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
-      {!e.rules.length ? <p className="px-5 py-4 text-[13px] text-muted">No security events and no custom or rate limiting rules in the window.</p> : (
+      {!rules.length ? <p className="px-5 py-4 text-[13px] text-muted">{only ? `No ${KIND_LABEL[only].toLowerCase()} events in the window.` : 'No security events and no custom or rate limiting rules in the window.'}</p> : (
         <div className="overflow-x-auto pt-2">
           <table className="w-full min-w-[680px] text-left text-[13px]">
             <thead className="border-b border-line text-xs text-muted">
@@ -117,7 +160,7 @@ export function EffectivenessTable({ e, note }: { e: Effectiveness | null; note?
               </tr>
             </thead>
             <tbody>
-              {e.rules.map((x, i) => <EffectRow key={x.key} x={x} total={e.totalEvents} open={i === 0 && x.events > 0} />)}
+              {rules.map((x, i) => <EffectRow key={x.key} x={x} total={e.totalEvents} open={i === 0 && x.events > 0} />)}
             </tbody>
           </table>
         </div>
@@ -128,14 +171,16 @@ export function EffectivenessTable({ e, note }: { e: Effectiveness | null; note?
 
 /** One rule: the numbers on one line; its top paths, countries and networks in a panel below. */
 function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][number]; total: number; open: boolean }) {
-  const [open, setOpen] = useState(initial);
-  const panel = `effect-${x.key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const panel = effectId(x.key);
+  const targeted = useTargeted(panel);
+  const [toggled, setOpen] = useState<boolean | null>(null);
+  const open = toggled ?? (initial || targeted);
   const actions = Object.entries(x.byAction).sort((a, b) => b[1] - a[1]);
   const share = total ? x.events / total : 0;
   const hasDetail = x.topPaths.length + x.topCountries.length + x.topAsns.length > 0 || !!x.passthrough;
   return (
     <>
-      <tr className={cx('border-t border-line/70 align-top', open && 'bg-raised/30')}>
+      <tr id={`${panel}-row`} className={cx('border-t border-line/70 align-top', open && 'bg-raised/30')}>
         <td className="py-2.5 pr-3 pl-5">
           <span className="font-medium text-ink">{x.name}</span>
           <div className="text-xs text-muted">{KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
@@ -159,7 +204,7 @@ function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][numb
         <td className="px-3 py-2.5 tabular-nums">{x.trend === null ? <span className="text-faint">{x.previous === null ? '—' : 'new'}</span> : <span className={cx(x.trend > 0.5 ? 'text-warn' : 'text-ink-2')}>{x.trend >= 0 ? '+' : ''}{pct(x.trend)}</span>}</td>
         <td className="py-2 pr-5 pl-3 text-right">
           {hasDetail && (
-            <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen((v) => !v)}
+            <button type="button" aria-expanded={open} aria-controls={panel} onClick={() => setOpen(!open)}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink">
               Details <ChevronDown aria-hidden="true" className={cx('size-3.5 transition-transform', open && 'rotate-180')} />
             </button>
@@ -204,7 +249,7 @@ function LetThrough({ p }: { p: PassThrough }) {
         <div><dt className="text-muted">Login, account, admin or API paths</dt><dd className="tabular-nums text-ink">{whole.format(p.sensitiveHits)}</dd></div>
         <div><dt className="text-muted">From hosting networks</dt><dd className="tabular-nums text-ink">{p.topAsns.length ? pct(p.hostingShare) : <span className="text-faint">no network data</span>}</dd></div>
         <div><dt className="text-muted">Browser user agents</dt><dd className="tabular-nums text-ink">{p.topUas.length ? pct(p.browserShare) : <span className="text-faint">no user-agent data</span>}</dd></div>
-        {st && <div><dt className="text-muted">Responses 2xx · 4xx · 5xx</dt><dd className="tabular-nums text-ink">{whole.format(st.s2xx)} · {whole.format(st.s4xx)} · {whole.format(st.s5xx)}</dd></div>}
+        {st && st.s2xx + st.s4xx + st.s5xx > 0 && <div><dt className="text-muted">Responses 2xx · 4xx · 5xx</dt><dd className="tabular-nums text-ink">{whole.format(st.s2xx)} · {whole.format(st.s4xx)} · {whole.format(st.s5xx)}</dd></div>}
         {!!p.peakPerHour && <div><dt className="text-muted">Busiest hour</dt><dd className="tabular-nums text-ink">{whole.format(p.peakPerHour)}</dd></div>}
         {p.solveRate !== null && <div><dt className="text-muted">Challenge solve rate</dt><dd className="tabular-nums text-ink">{pct(p.solveRate)}</dd></div>}
       </dl>
@@ -232,28 +277,87 @@ function RecommendationBox({ r }: { r: Recommendation }) {
   );
 }
 
-/** Every analysed rule's recommendation, most impact first; each links to its finding. */
-export function RecommendedActions({ e }: { e: Effectiveness | null }) {
-  if (!e || (!e.recommendations.length && !e.notAnalysed.length)) return null;
-  const acting = e.recommendations.filter((x) => x.action !== 'keep' && x.action !== 'no_conclusion');
+/** The ranked action list: traffic recommendations and the fixes of confirmed high and critical findings; each links to its finding or rule. */
+export function RecommendedActions({ items, e }: { items: ActionItem[]; e: Effectiveness | null }) {
+  const nav = useContext(AuditNav);
+  const kept = (e?.recommendations ?? []).filter((x) => x.action === 'keep' || x.action === 'no_conclusion');
   return (
     <Card>
-      <SectionHeader title="Recommended actions" description={`For every rule that lets traffic through (log, skip, allow, solved challenges): ${acting.length} to change, ${e.recommendations.length - acting.length} to keep or look at again. Ordered by the bots and malicious requests each change would have stopped. Nothing is applied.`} />
-      <ol className="divide-y divide-line/70">
-        {e.recommendations.map((x) => (
-          <li key={x.ruleKey} className="px-5 py-3">
-            <div className="flex flex-wrap items-center gap-2 text-[13px]">
-              <Badge tone={ACTION_TONE[x.action]}>{ACTION_TEXT[x.action]}</Badge>
-              <span className="font-medium text-ink">{x.title}</span>
-              {x.impact > 0 && <span className="text-xs tabular-nums text-muted">{whole.format(x.impact)} requests</span>}
+      <SectionHeader title="Recommended actions" description={`${items.length} changes, most important first: what the traffic says about rules that let requests through, and the fix of every confirmed high or critical finding. Nothing is applied.`} />
+      {!items.length ? <p className="px-5 py-4 text-[13px] text-muted">Nothing to change in what was read{kept.length ? `; ${kept.length} rules that let traffic through can stay as they are (see Effectiveness)` : ''}.</p> : (
+        <ol className="divide-y divide-line/70">
+          {items.map((x, i) => (
+            <li key={`${x.fingerprint ?? x.ruleKey ?? x.title}:${i}`} className="px-5 py-3">
+              <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="tabular-nums text-xs text-faint">{i + 1}.</span>
+                {x.severity && <SeverityBadge s={x.severity} />}
+                <Badge tone={x.action === 'fix' ? 'info' : ACTION_TONE[x.action]}>{x.action === 'fix' ? 'Fix the finding' : ACTION_TEXT[x.action]}</Badge>
+                <span className="font-medium text-ink">{x.title}</span>
+                {x.impact > 0 && <span className="text-xs tabular-nums text-muted">{whole.format(x.impact)} requests in the window</span>}
+              </div>
+              <p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
+                <span>{x.source === 'traffic' ? 'From traffic' : 'From configuration'} · {x.ruleName}</span>
+                {x.fingerprint && <button type="button" className="text-signal hover:underline" onClick={() => nav.finding(x.fingerprint!)}>Finding and evidence</button>}
+                {x.ruleKey && <button type="button" className="text-signal hover:underline" onClick={() => nav.effect(x.ruleKey!)}>Its traffic</button>}
+              </p>
+              <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-[12.5px] text-ink-2">{x.steps.map((st, k) => <li key={k} className="break-words">{st}</li>)}</ol>
+              {x.expression && <pre className="mt-2 overflow-x-auto rounded-md border border-line bg-sunken/60 px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap break-all">{x.expression}</pre>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {e && e.notAnalysed.length > 0 && <p className="border-t border-line px-5 py-3 text-xs text-muted">Not analysed ({e.notAnalysed.length}): {e.notAnalysed.slice(0, 10).map((x) => `${x.ruleName} (${whole.format(x.passed)})`).join(', ')}{e.notAnalysed.length > 10 ? ', …' : ''} — {e.notAnalysed[0].reason}.</p>}
+    </Card>
+  );
+}
+
+const SET_TONE: Record<ManagedOverview['rulesets'][number]['state'], 'ok' | 'bad' | 'warn' | 'neutral'> = { deployed: 'ok', disabled: 'bad', not_deployed: 'warn', not_applicable: 'neutral', not_read: 'warn' };
+const SET_TEXT: Record<ManagedOverview['rulesets'][number]['state'], string> = { deployed: 'Deployed', disabled: 'Disabled', not_deployed: 'Not deployed', not_applicable: 'Not on this plan', not_read: 'Not read' };
+
+/** The Managed Ruleset tab's overview: each ruleset's state, overrides, OWASP tuning and events; then the exceptions with their traffic. */
+export function ManagedOverviewCard({ m }: { m: ManagedOverview }) {
+  const nav = useContext(AuditNav);
+  return (
+    <Card>
+      <SectionHeader title="Managed rulesets" description={`Deployment, scope and overrides from the configuration; what each did from the security events. Leaked credentials detection: ${m.leakedCredentials === 'on' ? 'on' : m.leakedCredentials === 'off' ? 'off' : 'not read'}.`} />
+      <ul className="divide-y divide-line/70">
+        {m.rulesets.map((r) => (
+          <li key={r.id} className="px-5 py-3 text-[13px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-ink">{r.name}</span><Badge tone={SET_TONE[r.state]}>{SET_TEXT[r.state]}</Badge>
+              {r.scope && r.state !== 'not_applicable' && <span className="font-mono text-[11.5px] text-muted">scope: {r.scope === 'true' ? 'all traffic' : r.scope}</span>}
+              {r.action && <Badge tone="warn">ruleset action {r.action}</Badge>}
+              {r.threshold !== undefined && <span className="text-xs text-muted">paranoia {r.paranoia === null ? 'PL1 (default)' : `PL${r.paranoia}`} · score threshold {r.threshold}</span>}
             </div>
-            <p className="mt-1 text-xs text-muted">{KIND_LABEL[x.kind]} · {x.ruleName}{x.fingerprint && <> · <a className="text-signal hover:underline" href={`#f-${x.fingerprint.replace(/[^A-Za-z0-9_-]/g, '_')}`}>evidence</a></>}</p>
-            <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-[12.5px] text-ink-2">{x.steps.map((st, i) => <li key={i} className="break-words">{st}</li>)}</ol>
-            {x.expression && <pre className="mt-2 overflow-x-auto rounded-md border border-line bg-sunken/60 px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap break-all">{x.expression}</pre>}
+            {r.reason && <p className="mt-0.5 text-xs text-muted">{r.reason}</p>}
+            {r.overrides.length > 0 && <p className="mt-1 text-xs text-ink-2">Overrides: {r.overrides.map((o) => `${o.kind} ${o.id} — ${o.change}`).join('; ')}</p>}
+            {r.events && r.events.total > 0 && (
+              <div className="mt-2 grid gap-4 md:grid-cols-[minmax(0,14rem)_1fr]">
+                <div className="text-xs text-ink-2"><div className="tabular-nums text-ink">{whole.format(r.events.total)} events</div>{Object.entries(r.events.byAction).sort((a, b) => b[1] - a[1]).map(([a, c]) => <div key={a}>{a.replace(/_/g, ' ')} <span className="tabular-nums text-muted">{whole.format(c)}</span></div>)}</div>
+                <RankList title="Top rules firing" mono items={r.events.topRules.map((x) => ({ label: x.description || x.ruleId, sub: `${x.ruleId}${x.logOnly ? ' · log only' : ''}`, count: x.total }))} />
+              </div>
+            )}
+            {r.events && !r.events.total && r.state === 'deployed' && <p className="mt-1 text-xs text-muted">No events in the window.</p>}
           </li>
         ))}
-      </ol>
-      {e.notAnalysed.length > 0 && <p className="border-t border-line px-5 py-3 text-xs text-muted">Not analysed ({e.notAnalysed.length}): {e.notAnalysed.slice(0, 10).map((x) => `${x.ruleName} (${whole.format(x.passed)})`).join(', ')}{e.notAnalysed.length > 10 ? ', …' : ''} — {e.notAnalysed[0].reason}.</p>}
+      </ul>
+      <div className="border-t border-line px-5 py-3">
+        <h4 className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-muted uppercase">Exceptions (skip rules), in order</h4>
+        {!m.exceptions.length ? <p className="text-xs text-muted">No managed-rule exceptions.</p> : (
+          <ol className="space-y-2 text-[12.5px]">
+            {m.exceptions.map((x) => (
+              <li key={x.id} className="rounded-md border border-line px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-ink">{x.name}</span>
+                  {!x.enabled && <Badge tone="neutral">disabled</Badge>}{x.position === 'after' && <Badge tone="warn">after the deploy rules — no effect</Badge>}
+                  <span className="text-xs text-muted">skips {x.skips}</span></div>
+                <code className="mt-1 block font-mono text-[11.5px] break-all text-ink-2">{x.expression || '(no expression)'}</code>
+                <p className="mt-1 text-xs text-muted">{x.skipped === null ? 'Traffic not read' : `${whole.format(x.skipped)} requests skipped in the window${x.verdict ? ` — ${VERDICT_TEXT[x.verdict].toLowerCase()}` : ''}`}
+                  {x.effectKey && <> · <button type="button" className="text-signal hover:underline" onClick={() => nav.effect(x.effectKey!)}>its traffic</button></>}</p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
     </Card>
   );
 }

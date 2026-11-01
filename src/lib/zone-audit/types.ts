@@ -96,6 +96,63 @@ export interface AuditReport {
   reads: { key: string; label: string; state: Got<unknown>['state']; reason?: string }[];
   /** How each security rule acted on traffic in the window (null when security events could not be read). */
   effectiveness: Effectiveness | null;
+  /** Everything about the managed rulesets: deployment, overrides, OWASP tuning, exceptions, and what they did in the window (null in reports made before it existed). */
+  managed?: ManagedOverview | null;
+}
+
+/** One managed ruleset's state in the zone's configuration, and its events in the window. */
+export interface ManagedRulesetState {
+  id: string;
+  name: string;
+  phase: string;
+  state: 'deployed' | 'disabled' | 'not_deployed' | 'not_applicable' | 'not_read';
+  reason?: string;
+  /** The deploy rule's expression ("true" = all traffic). */
+  scope?: string;
+  /** A ruleset-wide action override. */
+  action?: string | null;
+  overrides: { kind: 'rule' | 'category'; id: string; change: string }[];
+  /** OWASP only: paranoia level (null: not set, PL1 by default) and anomaly score threshold. */
+  paranoia?: number | null;
+  threshold?: number | null;
+  /** Events in the window (null: security events not read). */
+  events: { total: number; byAction: Record<string, number>; topRules: { ruleId: string; description: string; total: number; byAction: Record<string, number>; logOnly: boolean }[] } | null;
+}
+/** One managed-rule exception (skip rule in the managed phase). */
+export interface ManagedException {
+  id: string;
+  name: string;
+  expression: string;
+  /** What it skips: rulesets, rule counts, or "all remaining managed rules". */
+  skips: string;
+  /** Position relative to the deploy rules: before (works) or after all of them (no effect). */
+  position: 'before' | 'after';
+  enabled: boolean;
+  /** Requests it skipped in the window (null: not read), and their make-up. */
+  skipped: number | null;
+  verdict: PassThrough['verdict'] | null;
+  /** The Effectiveness row with its traffic, when it had any. */
+  effectKey: string | null;
+}
+export interface ManagedOverview {
+  rulesets: ManagedRulesetState[];
+  exceptions: ManagedException[];
+  /** Leaked credentials detection (zone setting). */
+  leakedCredentials: 'on' | 'off' | 'not_read';
+}
+
+/** One entry of the Recommended Actions list: a traffic recommendation or the fix of a confirmed high/critical finding. */
+export interface ActionItem {
+  source: 'traffic' | 'finding';
+  title: string;
+  steps: string[];
+  expression?: string;
+  severity: Severity | null;
+  impact: number;
+  action: RecommendationAction | 'fix';
+  fingerprint?: string;
+  ruleName: string;
+  ruleKey?: string;
 }
 
 export type AuditStatus = 'running' | 'ready' | 'failed';

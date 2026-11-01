@@ -4,9 +4,10 @@
 import { effectivenessOf, TRAFFIC_RULES } from './effectiveness';
 import { RULES, runRules, summarize, type RuleDef } from './rules';
 import { EXTRA_RULES } from './rules-extra';
+import { MANAGED_TRAFFIC_RULES, managedOverview } from './managed-effect';
 import { SOURCES, type AuditReport, type AuditZone, type Snapshot, type SourceKey, type ZoneInfo } from './types';
 
-export const ALL_RULES: RuleDef[] = [...RULES, ...EXTRA_RULES, ...TRAFFIC_RULES];
+export const ALL_RULES: RuleDef[] = [...RULES, ...EXTRA_RULES, ...TRAFFIC_RULES, ...MANAGED_TRAFFIC_RULES];
 
 export function buildReport(s: Snapshot, meta: { accountId: string; accountName: string; startedAt: string; finishedAt: string; calls: number; lookups: number }): AuditReport {
   const { findings, coverage } = runRules(s, ALL_RULES);
@@ -18,6 +19,7 @@ export function buildReport(s: Snapshot, meta: { accountId: string; accountName:
   });
   return {
     version: 1, zone, startedAt: meta.startedAt, finishedAt: meta.finishedAt, findings, coverage,
-    summary: summarize(findings, coverage, meta.calls, meta.lookups), reads, effectiveness: effectivenessOf(s)?.eff ?? null,
+    summary: summarize(findings, coverage, meta.calls, meta.lookups), reads, effectiveness: effectivenessOf(s)?.eff ?? null, managed: managedOverview(s),
   };
 }
+

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ALL_RULES, buildReport } from '@/lib/zone-audit/report';
+import { actionItems } from '@/lib/zone-audit/actions';
 import { CF_MANAGED, DDOS_L7, riskyLabel, runRules } from '@/lib/zone-audit/rules';
 import { isBroad, isBroadPattern, literalPaths, norm, onlyClientFields, sensitivePaths } from '@/lib/zone-audit/expr';
 import { auditCsv, auditMarkdown, findingsJson } from '@/lib/zone-audit/render';
@@ -46,7 +47,9 @@ function snap(edit: (r: Record<string, unknown>) => void = () => {}, plan = 'bus
     aop: { enabled: true }, bot: { sbfm_definitely_automated: 'block', sbfm_likely_automated: 'managed_challenge', enable_js: true, fight_mode: true, ai_bots_protection: 'block' }, page_shield: { enabled: true }, page_rules: [], worker_routes: [],
     managed_headers: { managed_response_headers: [{ id: 'add_security_headers', enabled: true }] },
     cname_lookups: { answers: {}, skipped: 0 },
-    events: evData({ rules: [{ ruleId: 'rl1', rulesetId: 'rs-rl', source: 'ratelimit', action: 'block', description: 'Login', count: 50 }] }),
+    events: evData({ rules: [{ ruleId: 'rl1', rulesetId: 'rs-rl', source: 'ratelimit', action: 'block', description: 'Login', count: 50 },
+      { ruleId: 'm1', rulesetId: CF_MANAGED, source: 'firewallManaged', action: 'block', description: 'SQLi', count: 20 },
+      { ruleId: '6179ae15870a4bb7b2d480d4843b323c', rulesetId: OWASP, source: 'firewallManaged', action: 'block', description: '949110', count: 15 }] }),
     events_previous: evData({ rules: [{ ruleId: 'rl1', rulesetId: 'rs-rl', source: 'ratelimit', action: 'block', description: 'Login', count: 25 }] }),
     requests: rqData({ paths: [{ host: 'example.test', path: '/', status: 200, count: 5000 }], asns: [{ asn: '64500', name: 'Example Broadband', status: 200, count: 5000 }] }),
   };
@@ -317,7 +320,7 @@ test('renderers: findings.json, REPORT.md and CSV', () => {
   const json = JSON.parse(findingsJson(r));
   assert.equal(json[0].ruleId, 'tls.ssl_mode');
   const md = auditMarkdown(r, 'Castellan');
-  for (const h of ['## Summary', '## Findings', '## Rule effectiveness', '## Coverage ledger', '## Method']) assert.ok(md.includes(h), h);
+  for (const h of ['## Summary', '## Findings', '## Recommended actions', '## Effectiveness', '## Managed ruleset', '## Coverage ledger', '## Method']) assert.ok(md.includes(h), h);
   assert.match(md, /rules could not be checked/);
   assert.match(md, /needs permission: Bot Management Read/);
   const csv = auditCsv({ ...r, findings: [{ ...r.findings[0], title: '=HYPERLINK("x")' }] }, 'findings');
@@ -504,4 +507,72 @@ test('traffic.passthrough: at most 25 rules are analysed, the rest are listed', 
   assert.equal(e.recommendations.length, 25);
   assert.equal(e.notAnalysed.length, 5);
   assert.deepEqual(e.notAnalysed.map((x) => x.passed).sort(), [100, 101, 102, 103, 104]);
+});
+
+// ── Managed rulesets: overview, effectiveness, OWASP, exceptions' traffic, report layout ──
+const report = (s: Snapshot) => buildReport(s, { accountId: 'a1', accountName: 'Test', startedAt: NOW, finishedAt: NOW, calls: 0, lookups: 0 });
+test('managed overview: state, overrides, OWASP tuning and exceptions with their traffic', () => {
+  const s = snap((r) => {
+    managed(
+      { id: 'x1', description: 'Upload exception', action: 'skip', expression: '(http.request.uri.path eq "/upload")', action_parameters: { rules: { [CF_MANAGED]: ['r1', 'r2'] } } },
+      cfDep({ overrides: { categories: [{ category: 'wordpress', enabled: false }], rules: [{ id: 'r9', action: 'log' }] } }),
+      owDep({ overrides: { categories: [{ category: 'paranoia-level-3', enabled: false }, { category: 'paranoia-level-4', enabled: false }], rules: [{ id: ANOMALY, score_threshold: 60 }] } }),
+    )(r);
+    events({ rules: [rl, { ruleId: 'x1', rulesetId: 'zrs-managed', source: 'firewallManaged', action: 'skip', description: 'Upload exception', count: 250 },
+      { ruleId: 'r9', rulesetId: CF_MANAGED, source: 'firewallManaged', action: 'log', description: 'XSS probe', count: 30 }, { ruleId: ANOMALY, rulesetId: OWASP, source: 'firewallManaged', action: 'block', description: '949110', count: 12 }],
+      uas: [{ ruleId: 'x1', source: 'firewallManaged', action: 'skip', ua: CHROME_UA, count: 250 }] })(r);
+  });
+  const m = report(s).managed!;
+  const cf = m.rulesets.find((x) => x.id === CF_MANAGED)!, ow = m.rulesets.find((x) => x.id === OWASP)!;
+  assert.equal(cf.state, 'deployed');
+  assert.deepEqual(cf.overrides.map((o) => `${o.kind} ${o.id} ${o.change}`), ['category wordpress disabled', 'rule r9 action log']);
+  assert.equal(cf.events!.topRules[0].logOnly, true);
+  assert.equal(ow.paranoia, 2);
+  assert.equal(ow.threshold, 60);
+  assert.equal(m.rulesets.find((x) => x.id === FREE)!.state, 'not_deployed');
+  assert.equal(m.rulesets.find((x) => x.id === SDD)!.state, 'not_applicable', 'Enterprise only');
+  assert.equal(m.rulesets.find((x) => x.id === DDOS_L7)!.state, 'deployed', 'always on');
+  assert.deepEqual(m.exceptions.map((x) => [x.name, x.skips, x.position, x.skipped, x.verdict]), [['Upload exception', '2 managed rules', 'before', 250, 'clean']]);
+  assert.ok(m.exceptions[0].effectKey);
+  assert.equal(m.leakedCredentials, 'on');
+});
+test('managed.exceptions evidence carries the traffic each exception skipped', () => {
+  const s = snap((r) => {
+    managed({ id: 'x1', description: 'All', action: 'skip', expression: 'true', action_parameters: { ruleset: 'current' } }, cfDep(), owDep())(r);
+    events({ rules: [rl, { ruleId: 'x1', rulesetId: 'zrs-managed', source: 'firewallManaged', action: 'skip', description: 'All', count: 500 }] })(r);
+  });
+  const f = fails('managed.exceptions', s, 'confirmed', 'high');
+  assert.ok(f[0].evidence.some((e) => /skipped/.test(e.field) && e.value.startsWith('500')), JSON.stringify(f[0].evidence));
+});
+test('traffic.managed_effect: zero matches (info) and rules matching only in log', () => {
+  fails('traffic.managed_effect', snap(events({ rules: [rl, { ruleId: ANOMALY, rulesetId: OWASP, source: 'firewallManaged', action: 'block', description: '949110', count: 15 }] })), 'confirmed', 'info');
+  const f = fails('traffic.managed_effect', snap(events({ rules: [rl, { ruleId: ANOMALY, rulesetId: OWASP, source: 'firewallManaged', action: 'block', description: '949110', count: 15 },
+    { ruleId: 'r9', rulesetId: CF_MANAGED, source: 'firewallManaged', action: 'log', description: 'XSS probe', count: 30 }] })), 'confirmed', 'low');
+  assert.match(f[0].description, /r9 \(XSS probe\): 30/);
+});
+test('traffic.owasp_effect: flagged but never blocked; likely false positives on the blocked slice', () => {
+  const owaspEvents = (action: string, count: number, extra: Partial<EventData> = {}) => events({ rules: [rl, { ruleId: 'm1', rulesetId: CF_MANAGED, source: 'firewallManaged', action: 'block', description: 'SQLi', count: 20 }, { ruleId: ANOMALY, rulesetId: OWASP, source: 'firewallManaged', action, description: '949110', count }], ...extra });
+  fails('traffic.owasp_effect', snap(owaspEvents('log', 300)), 'confirmed', 'medium');
+  const ips = Array.from({ length: 60 }, (_, i) => ({ ruleId: ANOMALY, source: 'firewallManaged', action: 'block', ip: `198.51.100.${i + 1}`, count: 5 }));
+  const asns = Array.from({ length: 10 }, (_, i) => ({ ruleId: ANOMALY, source: 'firewallManaged', action: 'block', asn: String(64500 + i), name: `Example Broadband ${i}`, count: 30 }));
+  const f = fails('traffic.owasp_effect', snap(owaspEvents('block', 300, { ips, asns, uas: [{ ruleId: ANOMALY, source: 'firewallManaged', action: 'block', ua: CHROME_UA, count: 300 }],
+    paths: [{ ruleId: ANOMALY, source: 'firewallManaged', action: 'block', host: 'example.test', path: '/checkout', count: 300 }] })), 'needs_validation', 'medium');
+  assert.ok(f[0].fix.some((x) => x.includes('from 40 to 60')), f[0].fix.join(' | '));
+  assert.ok(f[0].fix.some((x) => x.includes('http.request.uri.path eq "/checkout"')));
+  assert.equal(state('traffic.owasp_effect', snap(managed(cfDep()))), 'not_applicable');
+});
+test('recommended actions: traffic recommendations and fixes of confirmed high findings, most important first', () => {
+  const r = report(snap((x) => { setting('ssl', 'flexible')(x); logRule(400, PY)(x); }));
+  const items = actionItems(r);
+  assert.ok(items.some((i) => i.source === 'finding' && i.fingerprint === 'zone:z1:tls.ssl_mode'));
+  assert.ok(items.some((i) => i.source === 'traffic' && i.action === 'block_or_challenge'));
+  assert.equal(items[0].severity, 'high');
+  assert.ok(!items.some((i) => i.action === 'keep' || i.action === 'no_conclusion'));
+});
+test('REPORT.md follows the page order', () => {
+  const md = auditMarkdown(report(snap()), 'Castellan');
+  const at = (h: string) => md.indexOf(h);
+  const order = ['## Summary', '## Findings', '## Recommended actions', '## Effectiveness', '## Managed ruleset', '## Coverage ledger', '## Method'].map(at);
+  assert.ok(order.every((x, i) => x > 0 && (!i || x > order[i - 1])), JSON.stringify(order));
+  assert.ok(auditCsv(report(snap()), 'managed').startsWith('ruleset,id,state'));
 });

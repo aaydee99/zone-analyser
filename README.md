@@ -851,17 +851,14 @@ Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zon
 
 This keeps a clean result from being mistaken for "everything was checked".
 
-**Report contents:**
-- A summary by severity and verdict, and "N of M checks read" in the header.
-- **Recommended actions**: one per rule that lets traffic through, ordered by the bots and malicious requests the change would have stopped, each linking to its finding and evidence.
-- **Managed rules**: deployment, overrides, OWASP tuning, credential checks and exceptions.
-- Configuration findings, worst first, each with evidence (secret-looking values masked), root cause, fix and validation.
-- **Rule effectiveness**: per custom, managed, rate limiting, bot, DDoS and IP Access rule, the hits by action, the challenge solve rate, the top paths, countries and networks, and the trend against the previous window. The details panel of each rule that lets traffic through adds **Traffic it let through**: passed requests, the bot and malicious shares (with their basis), hosting vs consumer networks, browser vs automation user agents, response codes, the busiest hour, login/API paths reached, and the rule's recommendation.
-- Recommendations drawn from the traffic.
-- The coverage ledger.
-- What was read.
+**Report layout.** The summary (counts by severity and verdict, "N of M checks read") sits above five tabs. Tabs are keyboard accessible (arrow keys, Home/End). The selected tab is kept in the URL (`?tab=findings|actions|effectiveness|managed|coverage`) so a section can be linked; the default is Findings.
+1. **Findings**: every configuration finding, worst first, with severity, verdict and area filters. This includes the managed-rule findings and exceptions (`managed.exceptions`), followed by the findings from traffic.
+2. **Recommended Actions**: one ranked list, critical and high first, then by the requests the change would have stopped. It holds the traffic recommendations that change something, and the fix of every confirmed high or critical finding. Each item links to its finding and to the rule's traffic.
+3. **Effectiveness**: the per-rule table (custom, managed, OWASP, rate limiting, bot, DDoS and IP Access rules; filterable by kind). Hits are broken down by action, with the challenge solve rate, top paths, countries and networks, and the trend against the previous window. The details panel of each rule that lets traffic through adds **Traffic it let through** and the rule's recommendation.
+4. **Managed Ruleset**: each managed ruleset in turn — Cloudflare Managed, OWASP, Free, Exposed Credentials, Sensitive Data, HTTP DDoS. For each, its deployment state, scope, ruleset action, rule and category overrides, OWASP paranoia level and score threshold, events by action and the top rules firing (log-only rules marked). Then leaked-credentials status, the exceptions in order (scope, what they skip, whether they sit after the deploy rules, and the traffic each skipped, linked to Effectiveness), the managed findings, and the managed rows of Effectiveness. These are the same records as in Findings, not copies.
+5. **Coverage**: the coverage ledger and what was read.
 
-**Downloads:** `REPORT.md`, `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table or the coverage ledger.
+**Downloads:** `REPORT.md` (sections in the page's order), `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table, the managed rulesets or the coverage ledger.
 
 **Rule areas.**
 
@@ -880,7 +877,7 @@ This keeps a clean result from being mistaken for "everything was checked".
 | Client-side | Security headers set at the edge, Page Shield, email obfuscation, hotlink protection, server-side excludes |
 | API protection | API Shield schema validation and saved endpoints while API paths carry most traffic |
 | Edge | Worker routes, including Worker-less routes on sensitive paths; WebSockets |
-| Traffic | **Bots and malicious requests let through** by log, skip, IP Access allow and challenge rules (below); rules with no hits; likely false positives (the WAF false-positive score and draft exception); managed rules mostly logging; rate limits that never trigger on busy paths; busy failing paths and hosting networks with no rule acting |
+| Traffic | **Bots and malicious requests let through** by log, skip, IP Access allow and challenge rules (below); rules with no hits; likely false positives (the WAF false-positive score and draft exception); managed rules mostly logging; **managed rulesets in the traffic** (a deployed ruleset with no matches; managed rules that matched only in log, listed); **OWASP in the traffic** (rule 949110 flagged ≥ 100 requests and blocked none → confirmed medium; false-positive signals on what it blocked → an exception drafted for the path, or the next score threshold); rate limits that never trigger on busy paths; busy failing paths and hosting networks with no rule acting |
 
 **Traffic it let through.** For every rule that lets matched requests pass — Log (custom, managed overrides, rate limiting), Skip (custom and managed exceptions), IP Access allow, and challenges that were solved — the audit measures what passed. Up to 25 rules per audit are analysed: the ones that passed the most. The rest are listed as not analysed.
 - **Bots:**
@@ -947,6 +944,8 @@ A missing permission marks only the rules that need it as "not read".
 - `zone_audit_latest` pages the newest audit of each zone, sorted by worst severity, newest, or name.
 - RLS is on and only the service role has access.
 - Without the migration, the page and the API answer 503 and name the file.
+
+**What the managed effectiveness cannot show.** Cloudflare documents no OWASP anomaly-score field in the security-event datasets. So the audit does not estimate how many requests other thresholds (25/40/60/80) or paranoia levels would block or let through. It reports what 949110 did, the individual OWASP rules the events name (when Cloudflare reports them), and the false-positive signals on the blocked slice. Zero hits are reported per ruleset, not per individual managed rule: listing a ruleset's rules would need extra reads per ruleset.
 
 ## Operator tools: Worker logs, API console, Logpush
 

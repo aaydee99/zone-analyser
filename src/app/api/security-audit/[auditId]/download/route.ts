@@ -21,7 +21,7 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   else if (format === 'md') res = attachment(`${base}-REPORT.md`, auditMarkdown(a.report, BRAND.name), 'text/markdown; charset=utf-8');
   else if (format === 'csv') {
     const part = q.get('part') ?? 'findings';
-    if (!isCsvPart(part)) throw new HttpError(400, 'part must be findings, coverage or effectiveness');
+    if (!isCsvPart(part)) throw new HttpError(400, 'part must be findings, coverage, effectiveness or managed');
     res = attachment(`${base}-${part}.csv`, auditCsv(a.report, part), 'text/csv; charset=utf-8');
   } else throw new HttpError(400, 'format must be json, md or csv');
   res.headers.set('X-Content-Type-Options', 'nosniff');
