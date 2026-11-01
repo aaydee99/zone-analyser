@@ -54,6 +54,12 @@ const top = <T extends { count: number }>(xs: T[], k = 5) => [...xs].sort((a, b)
 
 interface Configured { phase: 'http_request_firewall_custom' | 'http_ratelimit'; rule: RulesetRule }
 
+/** The managed-rule exceptions (skip rules in the managed phase entrypoint), by rule ID. */
+export function managedExceptions(s: Snapshot): Map<string, RulesetRule> {
+  const g = s.reads['phase:http_request_firewall_managed'];
+  return new Map((g?.state === 'ok' ? g.value as RulesetRule[] : []).filter((r) => r.action === 'skip' && r.id).map((r) => [r.id!, r]));
+}
+
 /** The custom and rate limiting rules of the zone's entrypoints (the ones events can be matched to). */
 function configured(s: Snapshot): Configured[] {
   const out: Configured[] = [];
@@ -115,18 +121,22 @@ export function effectivenessOf(s: Snapshot) {
 
   const conf = configured(s);
   const confBy = new Map(conf.filter((c) => c.rule.id).map((c) => [c.rule.id!, c]));
+  const exceptions = managedExceptions(s);
   const rows: RuleEffect[] = [];
   for (const [k, st] of stats) {
     const events = Object.values(st.actions).reduce((a, b) => a + b, 0);
     let challenged = 0, solved = 0;
     for (const [a, c] of Object.entries(st.actions)) { if (isSolved(a)) solved += c; else if (isChallenge(a)) challenged += c; }
     const c = confBy.get(st.ruleId);
+    // A managed-rule exception logs what it skipped under its own rule ID.
+    const x = st.kind === 'managed' ? exceptions.get(st.ruleId) : undefined;
     const previous = prev ? prevBy.get(k) ?? 0 : null;
     const pathsActed = actedPaths.get(k);
     rows.push({
       key: k, kind: st.kind, source: st.source, ruleId: st.ruleId, rulesetId: st.rulesetId,
-      name: c?.rule.description?.trim() || st.description || MANAGED_RULESETS[st.rulesetId] || st.ruleId || KIND_LABEL[st.kind],
-      configured: !!c, configAction: c?.rule.action ?? null, enabled: c ? c.rule.enabled !== false : null,
+      name: c?.rule.description?.trim() || x?.description?.trim() || st.description || MANAGED_RULESETS[st.rulesetId] || st.ruleId || KIND_LABEL[st.kind],
+      ...(x ? { exception: true } : {}),
+      configured: !!(c || x), configAction: c?.rule.action ?? x?.action ?? null, enabled: c ? c.rule.enabled !== false : x ? x.enabled !== false : null,
       events, byAction: st.actions, challenged, solved, solveRate: challenged >= MIN_EVENTS ? solved / challenged : null,
       topPaths: pathsActed ? top([...pathsActed].map(([path, count]) => ({ path, count }))) : top(mergePaths(st.paths)),
       topCountries: top([...(countries.get(k) ?? new Map<string, number>())].map(([country, count]) => ({ country, count }))),
@@ -148,13 +158,15 @@ export function effectivenessOf(s: Snapshot) {
   const passedOf = (r: RuleEffect) => Object.entries(r.byAction).filter(([a]) => passes(a)).reduce((t, [, v]) => t + v, 0);
   const passing = rows.filter((r) => passedOf(r) > 0).sort((a, b) => passedOf(b) - passedOf(a) || a.key.localeCompare(b.key));
   const recommendations: Effectiveness['recommendations'] = [];
-  for (const r of passing.slice(0, PASS_MAX)) {
+  // The PASS_MAX that let most through, plus every managed-rule exception: what an exception lets
+  // skip the managed rules is always checked, however little it is.
+  for (const r of [...passing.slice(0, PASS_MAX), ...passing.slice(PASS_MAX).filter((x) => x.exception)]) {
     const a = r.kind === 'access' ? access.get(r.ruleId) : undefined;
     if (a?.notes && r.name === r.ruleId) r.name = `IP Access: ${a.notes}`;
     r.passthrough = analysePassThrough(d, {
-      key: r.key, source: r.source, ruleId: r.ruleId, name: r.name, kind: r.kind, actions: r.byAction,
-      expression: confBy.get(r.ruleId)?.rule.expression, allowTarget: a?.configuration ? `${a.configuration.target} ${a.configuration.value}` : undefined,
-    }, `zone:${s.zoneId}:traffic.passthrough:${r.key}`);
+      key: r.key, source: r.source, ruleId: r.ruleId, name: r.name, kind: r.kind, actions: r.byAction, exception: r.exception,
+      expression: confBy.get(r.ruleId)?.rule.expression ?? exceptions.get(r.ruleId)?.expression, allowTarget: a?.configuration ? `${a.configuration.target} ${a.configuration.value}` : undefined,
+    }, `zone:${s.zoneId}:${r.exception ? 'traffic.exception_passthrough' : 'traffic.passthrough'}:${r.key}`);
     if (r.passthrough) recommendations.push({ ...r.passthrough.recommendation, ruleKey: r.key, ruleName: r.name, kind: r.kind });
     if (!shown.includes(r)) shown.push(r);
   }
@@ -162,7 +174,7 @@ export function effectivenessOf(s: Snapshot) {
   const eff: Effectiveness = {
     hours: s.hours ?? 0, askedHours: s.askedHours ?? s.hours ?? 0, since: d.since, until: d.until, previousSince: prev?.since ?? null,
     totalEvents: rows.reduce((a, r) => a + r.events, 0), rules: shown, recommendations,
-    notAnalysed: passing.slice(PASS_MAX).map((r) => ({ ruleKey: r.key, ruleName: r.name, passed: passedOf(r), reason: `Only the ${PASS_MAX} rules that let the most traffic through are analysed per audit` })),
+    notAnalysed: passing.slice(PASS_MAX).filter((r) => !r.exception).map((r) => ({ ruleKey: r.key, ruleName: r.name, passed: passedOf(r), reason: `Only the ${PASS_MAX} rules that let the most traffic through are analysed per audit` })),
     notes: [...d.notes, ...(prev ? [] : ['The window before could not be read (older than the plan keeps, or refused): no trend.']),
       ...(d.bots ? [] : ['Bot scores are not offered on this plan: bot shares come from user agents (a heuristic).']),
       ...(d.attacks ? [] : ['WAF attack scores are not offered on this plan: malicious shares come from threat-like paths and clients other rules stopped (a heuristic).'])],
@@ -204,26 +216,53 @@ function okShareOf(c: Ctx, host: string, path: string): number | null {
 
 const T = { group: 'traffic' as const };
 
+const badPass = (r: RuleEffect) => !!r.passthrough && (r.passthrough.verdict === 'bots' || r.passthrough.verdict === 'malicious');
+
+/** The finding for one rule that let too many bots or malicious requests through (an exception: past the managed rules). */
+function passDraft(c: Ctx, r: RuleEffect): Draft {
+  const p = r.passthrough!;
+  const mal = p.verdict === 'malicious';
+  const byScore = mal ? p.maliciousBasis === 'attack_score' : p.botBasis === 'score';
+  const count = mal ? `${n.format(p.malicious)} malicious` : `${n.format(p.bots)} automated`;
+  const share = `(${pct(mal ? p.maliciousShare : p.botShare)} of ${n.format(p.passed)})`;
+  return { resource: r.key, verdict: byScore ? 'confirmed' : 'needs_validation', severity: mal ? 'high' : 'medium',
+    title: r.exception ? `Exception “${r.name}” let ${count} requests skip the managed rules ${share}` : `${KIND_LABEL[r.kind]} “${r.name}” let ${count} requests through ${share}`,
+    description: `${winText(c.s)} it ${r.exception ? 'let' : p.kinds.map((k) => PASS_LABEL[k].toLowerCase()).join(', ') + ' for'} ${n.format(p.passed)} requests${r.exception ? ' skip the managed rules (Cloudflare Managed Ruleset, OWASP or others), so none of them was inspected for attacks' : ''}. ${mal
+      ? (p.maliciousBasis === 'attack_score' ? `${n.format(p.malicious)} had a WAF attack score of 1–20 (attack).` : `${n.format(p.threatPathHits)} went to threat-like paths and ${n.format(p.repeatOffenderHits)} came from clients other rules blocked or challenged.`)
+      : (p.botBasis === 'score' ? `${n.format(p.bots)} had a bot score of 1–29 (verified bots left out).` : `${pct(1 - p.browserShare)} came with a user agent that is not an ordinary browser; ${pct(p.hostingShare)} from hosting networks.`)}${p.sensitiveHits ? ` ${n.format(p.sensitiveHits)} reached login, account, admin or API paths.` : ''}`,
+    rootCause: r.exception ? 'The exception matches more than the false positive it was made for, so attacks and bots that match it bypass the managed rules.' : 'The rule lets matched requests through without telling bots and attacks from the traffic it was written for.',
+    intendedBehavior: r.exception ? 'Exceptions skip only the rules that misfire, for only the path and clients they misfire on; everything else is still inspected.' : 'Rules that let traffic through match only the clients they are meant for; bots and attacks among them are challenged or blocked.',
+    evidence: [ev(evSrc, r.exception ? 'requests that skipped the managed rules' : 'passed requests', p.passed), ev(evSrc, `automated (${p.botBasis})`, `${compactNum(p.bots)} (${pct(p.botShare)})`), ev(evSrc, `malicious (${p.maliciousBasis})`, `${compactNum(p.malicious)} (${pct(p.maliciousShare)})`),
+      ev(evSrc, 'from hosting networks', pct(p.hostingShare)), ev(evSrc, 'with a browser user agent', pct(p.browserShare)), ...(p.statuses ? [ev(evSrc, 'responses 2xx / 4xx / 5xx', `${p.statuses.s2xx} / ${p.statuses.s4xx} / ${p.statuses.s5xx}`)] : []),
+      ...(p.peakPerHour !== null ? [ev(evSrc, 'busiest hour', p.peakPerHour)] : []), ...p.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${compactNum(a.count)}`)), ...p.topPaths.slice(0, 3).map((x) => ev(evSrc, `path ${x.path}`, x.count)), ev('window', 'hours', c.s.hours ?? 0)],
+    fix: [p.recommendation.title, ...p.recommendation.steps, ...(p.recommendation.expression ? [`Expression: ${p.recommendation.expression}`] : [])],
+    validation: byScore ? undefined : 'Open Security › Events filtered to this rule and look at a sample: scripted user agents, hosting networks and probe paths confirm it; a known partner or monitor means it is fine (exclude it by IP instead).' };
+}
+
 export const TRAFFIC_RULES: RuleDef[] = [
   {
     ...T, id: 'traffic.passthrough', title: 'Bots and malicious requests let through by log, skip, allow and challenge rules', attackClass: 'Security-control precedence drift', skillRef: CLOUD,
     needs: ['events'], passed: `No rule that lets traffic through let ${Math.round(BOT_SHARE * 100)}%+ bots (and ${BOT_MIN}+) or ${Math.round(MAL_SHARE * 100)}%+ malicious requests (and ${MAL_MIN}+) through; rules with fewer than ${PASS_MIN} passed requests are not judged.`,
-    check: (c) => eff(c).eff.rules.filter((r) => r.passthrough && (r.passthrough.verdict === 'bots' || r.passthrough.verdict === 'malicious')).map((r): Draft => {
-      const p = r.passthrough!;
-      const mal = p.verdict === 'malicious';
-      const byScore = mal ? p.maliciousBasis === 'attack_score' : p.botBasis === 'score';
-      return { resource: r.key, verdict: byScore ? 'confirmed' : 'needs_validation', severity: mal ? 'high' : 'medium',
-        title: `${KIND_LABEL[r.kind]} “${r.name}” let ${mal ? `${n.format(p.malicious)} malicious` : `${n.format(p.bots)} automated`} requests through (${pct(mal ? p.maliciousShare : p.botShare)} of ${n.format(p.passed)})`,
-        description: `${winText(c.s)} it ${p.kinds.map((k) => PASS_LABEL[k].toLowerCase()).join(', ')} for ${n.format(p.passed)} requests. ${mal
-          ? (p.maliciousBasis === 'attack_score' ? `${n.format(p.malicious)} had a WAF attack score of 1–20 (attack).` : `${n.format(p.threatPathHits)} went to threat-like paths and ${n.format(p.repeatOffenderHits)} came from clients other rules blocked or challenged.`)
-          : (p.botBasis === 'score' ? `${n.format(p.bots)} had a bot score of 1–29 (verified bots left out).` : `${pct(1 - p.browserShare)} came with a user agent that is not an ordinary browser; ${pct(p.hostingShare)} from hosting networks.`)}${p.sensitiveHits ? ` ${n.format(p.sensitiveHits)} reached login, account, admin or API paths.` : ''}`,
-        rootCause: 'The rule lets matched requests through without telling bots and attacks from the traffic it was written for.', intendedBehavior: 'Rules that let traffic through match only the clients they are meant for; bots and attacks among them are challenged or blocked.',
-        evidence: [ev(evSrc, 'passed requests', p.passed), ev(evSrc, `automated (${p.botBasis})`, `${compactNum(p.bots)} (${pct(p.botShare)})`), ev(evSrc, `malicious (${p.maliciousBasis})`, `${compactNum(p.malicious)} (${pct(p.maliciousShare)})`),
-          ev(evSrc, 'from hosting networks', pct(p.hostingShare)), ev(evSrc, 'with a browser user agent', pct(p.browserShare)), ...(p.statuses ? [ev(evSrc, 'responses 2xx / 4xx / 5xx', `${p.statuses.s2xx} / ${p.statuses.s4xx} / ${p.statuses.s5xx}`)] : []),
-          ...(p.peakPerHour !== null ? [ev(evSrc, 'busiest hour', p.peakPerHour)] : []), ...p.topAsns.slice(0, 3).map((a) => ev(evSrc, `network AS${a.asn}`, `${a.name}: ${compactNum(a.count)}`)), ...p.topPaths.slice(0, 3).map((x) => ev(evSrc, `path ${x.path}`, x.count)), ev('window', 'hours', c.s.hours ?? 0)],
-        fix: [p.recommendation.title, ...p.recommendation.steps, ...(p.recommendation.expression ? [`Expression: ${p.recommendation.expression}`] : [])],
-        validation: byScore ? undefined : 'Open Security › Events filtered to this rule and look at a sample: scripted user agents, hosting networks and probe paths confirm it; a known partner or monitor means it is fine (exclude it by IP instead).' };
-    }),
+    check: (c) => eff(c).eff.rules.filter((r) => !r.exception && badPass(r)).map((r) => passDraft(c, r)),
+  },
+  {
+    ...T, id: 'traffic.exception_passthrough', title: 'Managed-rule exceptions that let bots or malicious requests skip the managed rules', attackClass: 'Security-control precedence drift', skillRef: CLOUD,
+    needs: ['events', 'phase:http_request_firewall_managed'],
+    passed: `Every managed-rule exception that logs its matches let fewer than ${Math.round(BOT_SHARE * 100)}% bots (or ${BOT_MIN}) and ${Math.round(MAL_SHARE * 100)}% malicious requests (or ${MAL_MIN}) skip the managed rules; exceptions with fewer than ${PASS_MIN} skipped requests are not judged.`,
+    check: (c) => {
+      const out: Draft[] = eff(c).eff.rules.filter((r) => r.exception && badPass(r)).map((r) => passDraft(c, r));
+      // An exception that does not log leaves no events: what it lets skip the managed rules cannot be checked.
+      for (const [id, x] of managedExceptions(c.s)) {
+        if (x.enabled === false || x.logging?.enabled !== false) continue;
+        const name = x.description?.trim() || id;
+        out.push({ resource: `${id}:no_logging`, verdict: 'confirmed', severity: 'low', title: `Exception “${name}” does not log what it skips`,
+          description: 'With logging off, requests it lets past the managed rules leave no security events, so neither this audit nor Security › Events can show whether bots or attacks use it.',
+          rootCause: 'The skip rule has "Log matching requests" turned off.', intendedBehavior: 'Exceptions log their matches, so their traffic can be reviewed.',
+          evidence: [ev('GET /zones/{id}/rulesets/phases/http_request_firewall_managed/entrypoint', `${name}.logging.enabled`, 'false'), ev('GET /zones/{id}/rulesets/phases/http_request_firewall_managed/entrypoint', `${name}.expression`, x.expression ?? '')],
+          fix: [`Security › WAF › Managed rules › Exceptions › “${name}” › Edit: turn on "Log matching requests", then run the audit again after a few days of traffic.`] });
+      }
+      return out;
+    },
   },
   {
     ...T, id: 'traffic.zero_hits', title: 'Rules that did not act in the window', attackClass: 'Security-control precedence drift', skillRef: CLOUD,

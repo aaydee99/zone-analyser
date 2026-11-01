@@ -183,7 +183,7 @@ function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][numb
       <tr id={`${panel}-row`} className={cx('border-t border-line/70 align-top', open && 'bg-raised/30')}>
         <td className="py-2.5 pr-3 pl-5">
           <span className="font-medium text-ink">{x.name}</span>
-          <div className="text-xs text-muted">{KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
+          <div className="text-xs text-muted">{x.exception ? 'Managed-rule exception' : KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
         </td>
         <td className="w-36 px-3 py-2.5">
           <span className={cx('tabular-nums', !x.events && 'text-faint')}>{whole.format(x.events)}</span>

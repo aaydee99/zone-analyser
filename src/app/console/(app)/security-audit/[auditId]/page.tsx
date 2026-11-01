@@ -23,8 +23,8 @@ const TABS: { id: AuditTab; label: string }[] = [
   { id: 'managed', label: 'Managed Ruleset' }, { id: 'coverage', label: 'Coverage' },
 ];
 const isTab = (v: string | null): v is AuditTab => TABS.some((t) => t.id === v);
-/** Managed-ruleset findings: the managed group, and the two traffic rules about managed rulesets. */
-const MANAGED_TRAFFIC = new Set(['traffic.managed_effect', 'traffic.owasp_effect']);
+/** Managed-ruleset findings: the managed group, and the traffic rules about managed rulesets and their exceptions. */
+const MANAGED_TRAFFIC = new Set(['traffic.managed_effect', 'traffic.owasp_effect', 'traffic.exception_passthrough']);
 
 export default function AuditPage({ params }: { params: Promise<{ auditId: string }> }) {
   const { auditId } = use(params);

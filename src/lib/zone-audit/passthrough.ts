@@ -60,7 +60,9 @@ export interface PassRule {
   name: string;
   kind: RuleKind;
   actions: Record<string, number>;
-  /** The rule's expression in the zone's configuration (custom, rate limiting), for drafting. */
+  /** A managed-rule exception: what it let through skipped the managed rules. */
+  exception?: boolean;
+  /** The rule's expression in the zone's configuration (custom, rate limiting, exceptions), for drafting. */
   expression?: string;
   /** For an IP Access allow rule: what it allows ("ip 192.0.2.1", "country NL"). */
   allowTarget?: string;
@@ -165,9 +167,11 @@ function recommend(r: PassRule, p: Omit<PassThrough, 'recommendation'>, fingerpr
         : `Security › WAF › Custom rules › ${name}: change the action from Log to ${to}.`;
     return { action: 'block_or_challenge', impact, fingerprint, title: `Switch ${name} from Log to ${to}: it let ${what} through`, steps: [where, ...(rateLimit && p.sensitiveHits ? [rateLimit] : [])] };
   }
-  if (main === 'skip') return { action: 'narrow', impact, fingerprint, title: `Narrow ${name}: its skip let ${what} through`,
+  if (main === 'skip') return { action: 'narrow', impact, fingerprint,
+    title: r.exception ? `Narrow the exception ${name}: it let ${what} skip the managed rules` : `Narrow ${name}: its skip let ${what} through`,
     expression: ex ? `(${r.expression ?? "<the rule's current expression>"}) and not (${ex})` : undefined,
-    steps: [`Security › WAF › Custom rules (or Managed rules › Exceptions) › ${name}: ${ex ? 'replace the expression with the one below, so the bad slice no longer skips security.' : 'add a condition that limits the skip to the clients it is for (an IP list, a header only your partner sends, a client certificate).'}`, ...(rateLimit ? [rateLimit] : [])] };
+    steps: [`Security › WAF › ${r.exception ? 'Managed rules › Exceptions' : 'Custom rules (or Managed rules › Exceptions)'} › ${name}: ${ex ? `replace the expression with the one below, so the bad slice no longer ${r.exception ? 'skips the managed rules' : 'skips security'}.` : 'add a condition that limits the skip to the clients it is for (an IP list, a header only your partner sends, a client certificate).'}`,
+      ...(r.exception ? ['If the exception exists for one false positive, skip only that rule ID, not whole rulesets.'] : []), ...(rateLimit ? [rateLimit] : [])] };
   if (main === 'allow') return { action: 'replace_allow', impact, fingerprint, title: `Replace the IP Access allow rule ${r.allowTarget ? `for ${r.allowTarget} ` : ''}with a narrow skip: it let ${what} through`,
     expression: ex ? `(<the allowed address or range>) and not (${ex})` : undefined,
     steps: ['Security › WAF › Tools › IP Access Rules: delete the allow rule (it skips every security product).', `Security › WAF › Custom rules › Create: action Skip, only the products that must be skipped, expression ${ex ? 'as below' : 'limited to the allowed address and the paths it needs'}.`] };

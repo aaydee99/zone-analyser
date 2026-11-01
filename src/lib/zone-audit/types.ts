@@ -347,6 +347,8 @@ export interface RuleEffect {
   ruleId: string;
   rulesetId: string;
   name: string;
+  /** A managed-rule exception (a skip rule in the managed phase); its events are what it skipped. */
+  exception?: boolean;
   /** In the zone's configuration (an entrypoint rule), with its action there. */
   configured: boolean;
   configAction: string | null;
