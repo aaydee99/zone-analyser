@@ -31,6 +31,8 @@ export type Permission =
   /** The Tokens & members monitoring check: API tokens and account members. */
   | 'governance:read'
   | 'cloudflare:revert'
+  /** Revert a Cloudflare One (Zero Trust) change: Access, Gateway, tunnels, devices. */
+  | 'cloudflare:revert_one'
   | 'restore:run'
   /** Start a backup without approval, and approve or reject operators' backup requests. */
   | 'runs:approve'
@@ -55,8 +57,9 @@ export const PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   viewer: new Set(VIEWER),
   operator: new Set(OPERATOR),
   admin: new Set(ADMIN),
-  // Only super admins ever reach the vault or the console's audit log, or apply a restore without approval.
-  super_admin: new Set<Permission>([...ADMIN, 'vault:access', 'audit:read', 'restore:approve']),
+  // Only super admins ever reach the vault or the console's audit log, apply a restore without approval,
+  // or revert a Cloudflare One change (it decides who reaches internal applications).
+  super_admin: new Set<Permission>([...ADMIN, 'vault:access', 'audit:read', 'restore:approve', 'cloudflare:revert_one']),
 };
 
 export const can = (role: Role | undefined | null, perm: Permission) => !!role && PERMISSIONS[role].has(perm);

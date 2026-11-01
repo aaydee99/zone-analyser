@@ -228,6 +228,7 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | **Logpush** job changes | | | ✓ (needs a super admin's approval) | ✓ |
 | Make reports and schedule them; rebuild the search index | | | ✓ | ✓ |
 | **Revert a change** from Cloudflare activity (hidden from viewers and operators) | | | ✓ + Global API Key | ✓ + Global API Key |
+| **Revert a Cloudflare One (Zero Trust) change** (`cloudflare:revert_one`) | | | | ✓ + Global API Key |
 | Choose upload on/off and the bucket for a run, from the buckets approved on the credential | | ✓ | ✓ | ✓ |
 | **Credential vault** (view, add, edit, reveal, test, import): also decides **which buckets** uploads may go to, and the prefix, region and R2 lock rules | | | | ✓ + vault password |
 
@@ -367,7 +368,7 @@ The page also shows who made the changes and counts the rest of the activity: si
 
 A token missing either is named with the permission it needs.
 
-**Access:** every role (`activity:read`); only admins and super admins see **Revert**. Tokens are decrypted on the server and never sent to the browser. Secret-looking fields are masked. Every report viewed is recorded in the console's audit log as `cloudflare_audit.viewed`.
+**Access:** every role (`activity:read`); only admins and super admins see **Revert**, and only super admins on Cloudflare One changes. Tokens are decrypted on the server and never sent to the browser. Secret-looking fields are masked. Every report viewed is recorded in the console's audit log as `cloudflare_audit.viewed`.
 
 ### Reverting a Cloudflare change
 
@@ -393,7 +394,22 @@ Admins and super admins see **Revert** on each change in Cloudflare activity; vi
   - failed changes;
   - changes whose old values include secret or masked fields. Secret fields in an update are skipped, and the review lists them.
 - **One job at a time:** refused while a backup or restore is running.
+- **Cloudflare One changes: super admins only** (see below).
 - **API:** `POST /api/cloudflare-audit/revert/plan` `{accountId, entryId, time}` returns the request without sending it (30 a minute). `POST /api/cloudflare-audit/revert` `{…, planHash, email, apiKey, acknowledgeChangedSince?}` sends it (10 a minute).
+
+### Cloudflare One (Zero Trust) changes
+
+The **Cloudflare One** tab of Cloudflare activity (`?section=one`) lists only Zero Trust configuration changes from the same audit log, grouped **by area**: Access applications, application policies, reusable policies, groups, identity providers, service tokens, the Zero Trust organization and other Access settings; Gateway rules, lists, DNS locations, proxy endpoints and settings; tunnels, tunnel configuration, routes and virtual networks; device profiles, posture and WARP settings; DLP, digital experience monitoring and other Zero Trust settings. The other views (by account and zone, timeline), the filter and the CSV work on these changes only. Its numbers: Cloudflare One changes, areas changed, accounts and people. In **All changes** the same changes are in the **Cloudflare One** category.
+
+**Reverting them is for super admins only** (`cloudflare:revert_one`): these changes decide who can reach internal applications. Admins see the changes but no **Revert**, and the server refuses both the review and the send for them (403). Otherwise reverting works as above, with the review, the Global API Key typed in for it and the checks, plus:
+
+| The change | Reverting it |
+|---|---|
+| Access application or policy, Gateway rule … updated with `PUT` | Sends the **whole earlier object** with `PUT` (Cloudflare One replaces these whole, so sending only the changed fields would clear the rest) |
+| Gateway list items added or removed (`PATCH` with `append` / `remove`) | Removes the added items and adds the removed ones back (without their descriptions, which the audit log doesn't keep) |
+| Created / deleted | As above: deletes it / creates it again with a new id |
+
+Not reverted: service tokens and identity providers (they carry secrets the audit log doesn't keep), Access signing keys and short-lived certificates, revoked sessions and users, tunnel tokens and connections, and device enrolment or revocation. A revert of a Cloudflare One change is recorded in the console's audit log with `cloudflareOne: true`.
 
 **API:**
 - `GET /api/cloudflare-audit?credentialId=all|<id>&range=day|week|month|year|custom[&since=YYYY-MM-DD&before=YYYY-MM-DD]`

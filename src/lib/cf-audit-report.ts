@@ -189,6 +189,26 @@ export function byCategory(changes: CfChange[]): CategoryGroup[] {
   return groups.sort((a, b) => (ORDER.get(a.category) ?? 99) - (ORDER.get(b.category) ?? 99));
 }
 
+export interface FeatureGroup { feature: string; tally: Tally; scopes: CategoryGroup['scopes'] }
+
+/** Feature (e.g. the Cloudflare One areas: Access applications, Gateway rules …) → account/zone → changes; most changes first. */
+export function byFeature(changes: CfChange[]): FeatureGroup[] {
+  const map = new Map<string, FeatureGroup>();
+  for (const c of changes) {
+    let g = map.get(c.feature);
+    if (!g) { g = { feature: c.feature, tally: emptyTally(), scopes: [] }; map.set(c.feature, g); }
+    add(g.tally, c);
+    const key = `${c.accountId}/${c.zoneId || '-'}`;
+    let s = g.scopes.find((x) => x.key === key);
+    if (!s) { s = { key, zone: zoneLabel(c), account: c.accountName || c.accountId, tally: emptyTally(), changes: [] }; g.scopes.push(s); }
+    add(s.tally, c);
+    s.changes.push(c);
+  }
+  const groups = [...map.values()];
+  for (const g of groups) g.scopes.sort((a, b) => b.tally.total - a.tally.total || a.zone.localeCompare(b.zone));
+  return groups.sort((a, b) => b.tally.total - a.tally.total || a.feature.localeCompare(b.feature));
+}
+
 export interface AccountGroup {
   accountId: string;
   accountName: string;

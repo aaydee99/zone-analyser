@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PERMISSIONS, ROLES, can, canManageRole, isRole } from '@/lib/rbac';
 
-test('every role reads runs; only super admins reach the vault, the audit log or approve restores', () => {
+test('every role reads runs; only super admins reach the vault, the audit log, approve restores or revert Cloudflare One changes', () => {
   for (const r of ROLES) assert.ok(can(r, 'runs:read'), r);
-  for (const p of ['vault:access', 'audit:read', 'restore:approve'] as const) {
+  for (const p of ['vault:access', 'audit:read', 'restore:approve', 'cloudflare:revert_one'] as const) {
     assert.deepEqual(ROLES.filter((r) => can(r, p)), ['super_admin'], p);
   }
 });

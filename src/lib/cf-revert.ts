@@ -4,8 +4,9 @@ import { HttpError } from './http';
 import { audit } from './audit';
 import { uncache } from './cache';
 import type { Me } from './auth';
+import { can } from './rbac';
 import { CF_API, actionOf, credentialForAccount, entryAt, historyFor, type RawEntry } from './cf-audit';
-import { SECRET_KEY, stateAfter, targetName, unwrap } from './cf-classify';
+import { SECRET_KEY, isOnePath, stateAfter, targetName, unwrap } from './cf-classify';
 import { activeRestore } from './job-lock';
 import { activeRunId } from './runner';
 import { db } from './supabase';
@@ -18,6 +19,11 @@ import { db } from './supabase';
 // the stored read-only token and shown for review; it is sent with the Global API Key typed in for
 // it, which is never stored. Applying works the request out again and refuses if it no longer
 // matches what was reviewed.
+//
+// Cloudflare One (Zero Trust) changes decide who reaches internal applications, so only super admins
+// revert them (cloudflare:revert_one). An Access application or policy, or a Gateway rule, is replaced
+// whole by PUT, so its update is reverted with the whole earlier object; items added to or removed from
+// a Gateway list (PATCH append/remove) are removed or added back. Secrets, sessions and enrolments are not.
 
 export interface CfRevertPlan {
   accountId: string;
@@ -35,6 +41,8 @@ export interface CfRevertPlan {
   changedSince: boolean;
   /** Anything else worth knowing before sending. */
   notes: string[];
+  /** A Cloudflare One (Zero Trust) change: only super admins revert it. */
+  cloudflareOne: boolean;
   /** Identifies this exact request; applying refuses a different one. */
   planHash: string;
 }
@@ -48,6 +56,13 @@ const BLOCKED: [RegExp, string][] = [
   [/\/purge_cache$/, 'A cache purge cannot be undone'],
   [/\/workers\/scripts|\/pages\/projects\/[^/]+\/deployments/, 'The audit log does not keep Worker or Pages code, so a deploy cannot be reverted'],
   [/certificate|\/origin_tls_client_auth|\/keyless_certificates|\/mtls/, 'Certificates and keys are not in the audit log, so they cannot be put back'],
+  // Cloudflare One
+  [/\/access\/service_tokens/, 'Service tokens carry a client secret the audit log does not keep, so they are not reverted here'],
+  [/\/access\/identity_providers/, 'Identity providers carry client secrets the audit log does not keep, so they are not reverted here'],
+  [/\/access\/(keys|apps\/[^/]+\/ca)(\/|$)/, 'Access signing keys and short-lived certificates cannot be put back'],
+  [/\/access\/(users|organizations\/revoke_user|logs)(\/|$)|\/revoke(_tokens)?$/, 'Revoking sessions or users cannot be undone'],
+  [/\/cfd_tunnel\/[^/]+\/(token|connections|connectors)(\/|$)|\/warp_connector\/[^/]+\/token/, 'Tunnel tokens and connections cannot be reverted'],
+  [/\/devices\/(revoke|unrevoke|registrations)(\/|$)|\/devices\/[0-9a-f-]{36}$/, 'Device enrolment and revocation are not reverted here'],
 ];
 /** Set by Cloudflare, never sent. */
 const READ_ONLY = new Set(['created_on', 'modified_on', 'created_at', 'updated_at', 'modified_at', 'last_updated', 'etag', 'meta']);
@@ -111,6 +126,11 @@ async function current(token: string, path: string): Promise<unknown | null | un
 const hash = (method: string, path: string, body: unknown) => crypto.createHash('sha256').update(stable({ method, path, body })).digest('hex').slice(0, 24);
 
 /** Works out the request that reverts one audit-log entry, without sending anything. */
+/** Only super admins revert a Cloudflare One change. */
+export function mayRevert(me: Me, plan: CfRevertPlan) {
+  if (plan.cloudflareOne && !can(me.role, 'cloudflare:revert_one')) throw new HttpError(403, 'Only a super admin can revert a Cloudflare One (Zero Trust) change');
+}
+
 export async function planCfRevert(accountId: string, entryId: string, time: string): Promise<CfRevertPlan> {
   const t = Date.parse(time);
   if (!/^[0-9a-f]{32}$/.test(accountId) || !/^[A-Za-z0-9-]{1,64}$/.test(entryId) || Number.isNaN(t)) throw new HttpError(400, 'Invalid audit entry');
@@ -136,8 +156,9 @@ export async function planCfRevert(accountId: string, entryId: string, time: str
     if (h.status === 'approximate') notes.push('Cloudflare matched the earlier state approximately (Resource History “approximate”) — check the values below');
     return unwrap(stateAfter(actionOf(h.prev!), h.prev!.resource?.request, h.prev!.resource?.response));
   };
+  const one = isOnePath(path);
   const done = (summary: string, m: CfRevertPlan['method'], p: string, body: unknown, skipped: string[], changedSince: boolean): CfRevertPlan =>
-    ({ ...base, summary, method: m, path: p, body, skipped, changedSince, notes, planHash: hash(m, p, body) });
+    ({ ...base, summary, method: m, path: p, body, skipped, changedSince, notes, cloudflareOne: one, planHash: hash(m, p, body) });
 
   if (type === 'create') {
     let target = path;
@@ -165,8 +186,37 @@ export async function planCfRevert(accountId: string, entryId: string, time: str
   if (type === 'update') {
     if (method !== 'PATCH' && method !== 'PUT') refuse(`An update made with ${method} is not reverted automatically`);
     if (!isObj(req) || !Object.keys(req).length) refuse('The audit log did not record what this change sent, so it cannot be reverted');
+    // A Gateway list's items added (append) or removed (remove): remove or add them back.
+    if (one && method === 'PATCH' && /\/gateway\/lists\/[^/]+$/.test(path) && ('append' in req || 'remove' in req)) {
+      const added = (Array.isArray(req.append) ? req.append : []).map((x) => (isObj(x) ? x.value : x)).filter((x): x is string => typeof x === 'string');
+      const removed = (Array.isArray(req.remove) ? req.remove : []).filter((x): x is string => typeof x === 'string');
+      if (!added.length && !removed.length) refuse('This change added and removed nothing');
+      notes.push('Items added back get no description (the audit log keeps only their values)');
+      notes.push('The list is not read first: an item added back that is there already, or removed that is gone already, is left as it is by Cloudflare');
+      const body = { ...(removed.length ? { append: removed.map((value) => ({ value })) } : {}), ...(added.length ? { remove: added } : {}) };
+      const parts = [added.length && `remove the ${added.length} item${added.length === 1 ? '' : 's'} it added`, removed.length && `add back the ${removed.length} it removed`].filter(Boolean).join(' and ');
+      return done(`On ${what}: ${parts}`, 'PATCH', path, body, [], false);
+    }
     const before = await old();
     if (!isObj(before)) refuse('The earlier state is not an object that can be sent back');
+    // Cloudflare One objects are replaced whole by PUT (Access applications and policies, Gateway rules):
+    // send the whole earlier object, not only the fields this change sent, or the rest would be cleared.
+    if (one && method === 'PUT') {
+      const body = clean(before, true);
+      const leaked = secrets(body);
+      if (leaked.length) refuse(`The earlier object includes secret or masked fields (${leaked.slice(0, 3).join(', ')}) that cannot be sent back`);
+      const now = await current(token, path);
+      if (now === null) refuse('It has been deleted since');
+      let changedSince = false;
+      if (now === undefined) notes.push('The stored token could not read it now, so whether it changed since is not known');
+      else {
+        const keys = Object.keys(body as object);
+        if (stable(clean(pick(now, keys), true)) === stable(body)) refuse('It already has these old values');
+        changedSince = isObj(after) && stable(clean(pick(now, keys), true)) !== stable(clean(pick(after, keys), true));
+      }
+      notes.push('Cloudflare One replaces this object whole, so the whole earlier object is sent');
+      return done(`Put ${what} back as it was before this change`, 'PUT', path, body, [], changedSince);
+    }
     const sent = Object.keys(req);
     const skipped = sent.filter((k) => SECRET_KEY.test(k));
     const keys = sent.filter((k) => !SECRET_KEY.test(k));
@@ -239,6 +289,7 @@ export async function applyCfRevert(me: Me, input: { accountId?: string; entryId
   sending.add(key);
   try {
     const plan = await planCfRevert(String(input.accountId ?? ''), String(input.entryId ?? ''), String(input.time ?? ''));
+    mayRevert(me, plan);
     if (plan.planHash !== input.planHash) throw new HttpError(409, 'Cloudflare changed since you reviewed this revert — review it again');
     if (plan.changedSince && input.acknowledgeChangedSince !== true) throw new HttpError(400, 'It changed again after this entry — confirm that reverting also undoes that');
     const auth = { 'X-Auth-Email': email, 'X-Auth-Key': apiKey };
@@ -255,7 +306,7 @@ export async function applyCfRevert(me: Me, input: { accountId?: string; entryId
     }
     const body = (await res.json().catch(() => null)) as { success?: boolean; errors?: { code?: number; message?: string }[]; result?: { id?: string } } | null;
     const where = plan.zoneName || plan.accountId;
-    const details = { entryId: plan.entryId, accountId: plan.accountId, method: plan.method, path: plan.path, summary: plan.summary, auth: 'global_api_key', keyEmail: email };
+    const details = { entryId: plan.entryId, accountId: plan.accountId, method: plan.method, path: plan.path, summary: plan.summary, cloudflareOne: plan.cloudflareOne, auth: 'global_api_key', keyEmail: email };
     if (!res.ok || !body?.success) {
       const why = body?.errors?.map((x) => `${x.message} (${x.code})`).join('; ') || `HTTP ${res.status}`;
       await audit(me, 'cloudflare.revert_failed', where, { ...details, error: why });

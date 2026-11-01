@@ -23,7 +23,7 @@ export const CATEGORIES: { key: CategoryKey; label: string; description: string 
   { key: 'ssl', label: 'SSL/TLS & certificates', description: 'Encryption mode, TLS settings, edge and origin certificates, custom hostnames' },
   { key: 'zone', label: 'Zone settings', description: 'Other zone-level settings' },
   { key: 'traffic', label: 'Load balancing & traffic', description: 'Load balancers, pools, monitors, health checks, Waiting Room, Spectrum' },
-  { key: 'zerotrust', label: 'Zero Trust', description: 'Access, Gateway, tunnels and devices' },
+  { key: 'zerotrust', label: 'Cloudflare One', description: 'Zero Trust: Access, Gateway, tunnels, devices and DLP' },
   { key: 'developer', label: 'Workers & developer platform', description: 'Workers, Pages, R2, KV, D1, Queues, Images, Stream' },
   { key: 'access', label: 'Members, roles & API tokens', description: 'Account members, roles and API tokens' },
   { key: 'logs', label: 'Logs & analytics', description: 'Logpush jobs and log settings' },
@@ -78,6 +78,36 @@ settingGroup('cdn', ['cache_level', 'browser_cache_ttl', 'development_mode', 'al
 
 // ── Path rules: first match wins ──────────────────────────────────────────────
 
+// Cloudflare One (Zero Trust): its areas, most specific first. Account-level paths
+// (/accounts/{id}/access/…, /gateway/…, /cfd_tunnel/…, /devices/…), and zone-level Access (/zones/{id}/access/…).
+export const ONE_AREAS: [RegExp, string][] = [
+  [/\/access\/apps\/[^/]+\/policies/, 'Access application policies'],
+  [/\/access\/apps\/[^/]+\/ca|\/access\/certificates|\/access\/keys/, 'Access certificates & keys'],
+  [/\/access\/apps/, 'Access applications'],
+  [/\/access\/policies/, 'Access policies'],
+  [/\/access\/groups/, 'Access groups'],
+  [/\/access\/identity_providers/, 'Identity providers'],
+  [/\/access\/service_tokens/, 'Service tokens'],
+  [/\/access\/organizations/, 'Zero Trust organization'],
+  [/\/access\//, 'Access settings'],
+  [/\/gateway\/rules/, 'Gateway rules'],
+  [/\/gateway\/lists/, 'Gateway lists'],
+  [/\/gateway\/locations/, 'Gateway DNS locations'],
+  [/\/gateway\/proxy_endpoints/, 'Gateway proxy endpoints'],
+  [/\/gateway/, 'Gateway settings'],
+  [/\/cfd_tunnel\/[^/]+\/configurations/, 'Tunnel configuration'],
+  [/\/cfd_tunnel|\/tunnels|\/warp_connector/, 'Tunnels'],
+  [/\/teamnet/, 'Tunnel routes & virtual networks'],
+  [/\/devices\/(policy|policies)/, 'Device profiles'],
+  [/\/devices\/posture/, 'Device posture'],
+  [/\/devices/, 'Devices & WARP settings'],
+  [/\/dlp\//, 'Data loss prevention'],
+  [/\/dex\//, 'Digital experience monitoring'],
+  [/\/zt_risk_scoring|\/zerotrust/, 'Zero Trust settings'],
+];
+/** An API path of Cloudflare One (Zero Trust). */
+export const isOnePath = (path: string) => ONE_AREAS.some(([re]) => re.test(path.split('?')[0]));
+
 const PATH_RULES: [RegExp, CategoryKey, string][] = [
   [/\/dns_records/, 'dns', 'DNS records'],
   [/\/dnssec/, 'dns', 'DNSSEC'],
@@ -103,7 +133,7 @@ const PATH_RULES: [RegExp, CategoryKey, string][] = [
   [/\/healthchecks/, 'traffic', 'Health checks'],
   [/\/waiting_rooms/, 'traffic', 'Waiting Room'],
   [/\/spectrum/, 'traffic', 'Spectrum'],
-  [/\/access\/|\/gateway|\/teamnet|\/devices|\/cfd_tunnel|\/tunnels|\/zerotrust/, 'zerotrust', 'Zero Trust'],
+  ...ONE_AREAS.map(([re, label]) => [re, 'zerotrust', label] as [RegExp, CategoryKey, string]),
   [/\/workers|\/pages\/|\/r2\/|\/storage\/kv|\/d1\/|\/queues|\/images\/|\/stream|\/ai\/|\/hyperdrive|\/vectorize/, 'developer', 'Developer platform'],
   [/\/members|\/roles|\/memberships/, 'access', 'Members & roles'],
   [/\/tokens/, 'access', 'API tokens'],

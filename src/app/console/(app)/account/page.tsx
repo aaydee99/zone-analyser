@@ -24,6 +24,7 @@ const PERM_LABEL: Record<Permission, string> = {
   'workers:tail': 'Follow live Worker logs',
   'governance:read': 'See the Tokens & members monitoring check',
   'cloudflare:revert': 'Revert a change from Cloudflare activity (with a Global API Key)',
+  'cloudflare:revert_one': 'Revert a Cloudflare One (Zero Trust) change from Cloudflare activity',
   'restore:run': 'Restore zone configuration from a backup (plan, then apply — a super admin approves the apply unless you can approve)',
   'runs:approve': 'Start backups without approval, and approve or reject operator backup requests',
   'restore:approve': 'Apply restores and Cloudflare changes without approval, and approve or reject admins’ requests',

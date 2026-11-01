@@ -2,12 +2,13 @@
 
 import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ChevronRight, Cloud, Copy, Download, History as HistoryIcon, Lock, RefreshCw, Search, Undo2 } from 'lucide-react';
+import { ChevronRight, Cloud, Copy, Download, History as HistoryIcon, Lock, RefreshCw, Search, ShieldCheck, Undo2 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 import { api, copyText, fmtDate } from '@/lib/client';
 import { zoneList } from '@/lib/zone-list-client';
 import type { CredentialOption } from '@/lib/kinds';
 import {
-  CATEGORIES, CATEGORY_LABEL, CF_RANGES, actorLabel, byAccount, byCategory, changeTitle, contextLabel, filterChanges, summaryText, totals, zoneLabel,
+  CATEGORIES, CATEGORY_LABEL, CF_RANGES, actorLabel, byAccount, byCategory, byFeature, changeTitle, contextLabel, filterChanges, summaryText, totals, zoneLabel,
   type CategoryKey, type CfAuditReport, type CfChange, type CfHistoryResult, type CfRange, type CfZoneEvent, type Tally,
 } from '@/lib/cf-audit-report';
 import { Alert, Badge, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Skeleton, SkeletonStats, Stat, cx } from '@/components/ui';
@@ -22,6 +23,9 @@ const VIEWS: { value: View; label: string }[] = [
   { value: 'zone', label: 'By account & zone' },
   { value: 'timeline', label: 'Timeline' },
 ];
+/** Every change, or only Cloudflare One (Zero Trust): Access, Gateway, tunnels, devices, DLP. */
+type Section = 'all' | 'one';
+const isOne = (c: CfChange) => c.category === 'zerotrust';
 const TIMELINE_PAGE = 200;
 const FIELD_ROWS = 6;
 
@@ -220,6 +224,10 @@ export default function CloudflareActivityPage() {
   const { can } = useMe();
   const allowed = can('activity:read');
   const canRevert = can('cloudflare:revert');
+  // A Cloudflare One change decides who reaches internal applications: super admins revert it.
+  const canRevertOne = can('cloudflare:revert_one');
+  const params = useSearchParams();
+  const [section, setSectionState] = useState<Section>(params.get('section') === 'one' ? 'one' : 'all');
   const [reverting, setReverting] = useState<CfChange | null>(null);
   const [creds, setCreds] = useState<CredentialOption[] | null>(null);
   // One Cloudflare account ('' = all of them), not a stored credential: a token can reach several accounts.
@@ -244,6 +252,13 @@ export default function CloudflareActivityPage() {
   const [shown, setShown] = useState(TIMELINE_PAGE);
   const [history, setHistory] = useState<Record<string, CfHistoryResult>>({});
   const [looking, setLooking] = useState('');
+  const setSection = (next: Section) => {
+    setSectionState(next);
+    setShown(TIMELINE_PAGE);
+    const u = new URL(window.location.href);
+    if (next === 'one') u.searchParams.set('section', 'one'); else u.searchParams.delete('section');
+    window.history.replaceState(null, '', u);
+  };
 
   useEffect(() => {
     if (!allowed) return;
@@ -286,7 +301,9 @@ export default function CloudflareActivityPage() {
   }, [toast]);
 
   const searched = useMemo(() => filterChanges(report?.changes ?? [], query), [report, query]);
-  const filtered = useMemo(() => filterChanges(searched, '', category), [searched, category]);
+  const oneCount = useMemo(() => searched.filter(isOne).length, [searched]);
+  const filtered = useMemo(() => (section === 'one' ? searched.filter(isOne) : filterChanges(searched, '', category)), [searched, category, section]);
+  const areas = useMemo(() => (section === 'one' && view === 'category' ? byFeature(filtered) : []), [filtered, section, view]);
   const categoryCounts = useMemo(() => {
     const m = new Map<CategoryKey, number>();
     for (const c of searched) m.set(c.category, (m.get(c.category) ?? 0) + 1);
@@ -304,20 +321,21 @@ export default function CloudflareActivityPage() {
     if (!report) return;
     const q = new URLSearchParams(query0);
     if (query.trim()) q.set('q', query.trim());
-    if (category) q.set('category', category);
+    if (section === 'one') q.set('category', 'zerotrust');
+    else if (category) q.set('category', category);
     try {
       const res = await fetch(`/api/cloudflare-audit/export.csv?${q}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `HTTP ${res.status}`);
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement('a');
       a.href = url;
-      a.download = `cloudflare-changes-${report.since.slice(0, 10)}-to-${report.before.slice(0, 10)}.csv`;
+      a.download = `cloudflare-${section === 'one' ? 'one-' : ''}changes-${report.since.slice(0, 10)}-to-${report.before.slice(0, 10)}.csv`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { toast((e as Error).message, 'bad'); }
   };
   const row = (c: CfChange, show: { zone?: boolean; category?: boolean }, indent: string) => (
-    <ChangeRow key={c.id} c={c} show={show} indent={indent} history={history[c.id]} onLookup={lookup} looking={looking === c.id} onRevert={canRevert ? setReverting : undefined} />
+    <ChangeRow key={c.id} c={c} show={show} indent={indent} history={history[c.id]} onLookup={lookup} looking={looking === c.id} onRevert={canRevert && (!isOne(c) || canRevertOne) ? setReverting : undefined} />
   );
   const problems = report?.accounts.filter((a) => a.error || a.truncated) ?? [];
   const ignored = report?.accounts.reduce((n, a) => n + (a.ignored ?? 0), 0) ?? 0;
@@ -388,27 +406,41 @@ export default function CloudflareActivityPage() {
 
           {!report && !error ? (
             <Loading label="Loading Cloudflare activity stats" className="mb-6"><SkeletonStats className="sm:!gap-4 md:!grid-cols-2 lg:!grid-cols-4" /></Loading>
-          ) : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          ) : section === 'one' ? <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+            <Stat label="Cloudflare One changes" value={report ? compactNum(t.total) : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
+            <Stat label="Areas changed" value={report ? new Set(filtered.map((c) => c.feature)).size : '—'} sub={report ? ([...new Set(filtered.map((c) => c.feature))].slice(0, 2).join(', ') || 'nothing changed') : ' '} />
+            <Stat label="Accounts" value={report ? compactNum(t.accounts) : '—'} sub={report ? `${compactNum(t.zones)} zone${t.zones === 1 ? '' : 's'} with zone-level Access changes` : ' '} />
+            <Stat label="People" value={report ? compactNum(t.people) : '—'} sub={report ? 'made these changes' : ' '} />
+          </div> : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <Stat label="Changes" value={report ? compactNum(t.total) : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
             <Stat label="Zones changed" value={report ? compactNum(t.zones) : '—'} sub={report ? `in ${compactNum(t.accounts)} account${t.accounts === 1 ? '' : 's'}` : ' '} />
             <Stat label="Categories" value={report ? t.categories : '—'} sub={groups[0] ? `${groups.map((x) => x.label).slice(0, 2).join(', ')}${groups.length > 2 ? '…' : ''}` : report ? 'nothing changed' : ' '} />
             <Stat label="Zones onboarded" value={report ? compactNum(onboarded) : '—'} sub={report ? (removed ? `${compactNum(removed)} removed` : 'none removed') : ' '} tone={onboarded ? 'ok' : undefined} />
           </div>}
 
-          {report && <ZoneOnboarding events={report.zoneEvents} accountsWithoutList={noZoneList} />}
+          {report && section === 'all' && <ZoneOnboarding events={report.zoneEvents} accountsWithoutList={noZoneList} />}
+          {section === 'one' && canRevert && !canRevertOne && (
+            <div className="mb-4"><Alert tone="info" title="Reverting Cloudflare One changes is for super admins">These changes decide who can reach internal applications, so only a super admin can revert them.</Alert></div>
+          )}
 
           <Card>
-            <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Category">
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Section">
+              <Chip active={section === 'all'} onClick={() => setSection('all')}>All changes</Chip>
+              <Chip active={section === 'one'} onClick={() => setSection('one')}>
+                <span className="inline-flex items-center gap-1.5"><ShieldCheck className="size-3.5" aria-hidden />Cloudflare One</span> {report ? <span className="tabular-nums text-faint">{compactNum(oneCount)}</span> : null}
+              </Chip>
+            </div>
+            {section === 'all' && <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-5 py-3" role="group" aria-label="Category">
               <Chip active={category === ''} onClick={() => setCategory('')}>All {report || error ? <span className="tabular-nums text-faint">{compactNum(searched.length)}</span> : <Skeleton className="!inline-block h-2.5 w-3 align-middle" />}</Chip>
               {CATEGORIES.filter((c) => categoryCounts.get(c.key)).map((c) => (
                 <Chip key={c.key} active={category === c.key} onClick={() => setCategory(c.key)}>
                   <span title={c.description}>{c.label}</span> <span className="tabular-nums text-faint">{categoryCounts.get(c.key)}</span>
                 </Chip>
               ))}
-            </div>
+            </div>}
             <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
               <div className="flex flex-wrap gap-1.5" role="group" aria-label="View">
-                {VIEWS.map((v) => <Chip key={v.value} active={view === v.value} onClick={() => setView(v.value)}>{v.label}</Chip>)}
+                {VIEWS.map((v) => <Chip key={v.value} active={view === v.value} onClick={() => setView(v.value)}>{section === 'one' && v.value === 'category' ? 'By area' : v.label}</Chip>)}
               </div>
               <label className="relative ml-auto w-full sm:w-72">
                 <span className="sr-only">Filter changes</span>
@@ -431,8 +463,23 @@ export default function CloudflareActivityPage() {
                 ))}
               </Loading>
             ) :  !filtered.length ? (
-              <EmptyState icon={<Cloud className="size-5" />} title={query || category ? 'No changes match' : 'No changes in this period'}
-                description={query || category ? 'Try another category, zone or value.' : 'Cloudflare recorded no changes for the selected accounts.'} />
+              section === 'one'
+                ? <EmptyState icon={<ShieldCheck className="size-5" />} title={query ? 'No Cloudflare One changes match' : 'No Cloudflare One changes in this period'}
+                  description={query ? 'Try another value or person.' : 'Cloudflare recorded no Zero Trust changes (Access, Gateway, tunnels, devices) for the selected accounts.'} />
+                : <EmptyState icon={<Cloud className="size-5" />} title={query || category ? 'No changes match' : 'No changes in this period'}
+                  description={query || category ? 'Try another category, zone or value.' : 'Cloudflare recorded no changes for the selected accounts.'} />
+            ) : section === 'one' && view === 'category' ? (
+              <div>
+                {areas.map((g) => (
+                  <Group key={g.feature} title={g.feature} sub={`${g.scopes.length} account/zone scope${g.scopes.length === 1 ? '' : 's'}`} tally={g.tally} defaultOpen={areas.length <= 3}>
+                    {g.scopes.map((sc) => (
+                      <Group key={sc.key} level={1} title={sc.zone} sub={sc.account} tally={sc.tally} defaultOpen={g.scopes.length === 1 && sc.changes.length <= 10}>
+                        <ul>{sc.changes.map((c) => row(c, {}, 'pl-9 sm:pl-14'))}</ul>
+                      </Group>
+                    ))}
+                  </Group>
+                ))}
+              </div>
             ) : view === 'category' ? (
               <div>
                 {groups.map((g) => (
