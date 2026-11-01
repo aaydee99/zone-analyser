@@ -212,11 +212,11 @@ const R2_SKIP_UPLOAD = envOr('R2_SKIP_UPLOAD', 'true');
 
 // ── R2 Bucket Lock ────────────────────────────────────────────────────────────
 // Bucket-lock rules use the Cloudflare API (CF_API_TOKEN), not the R2 S3 keys.
-// The bucket stays locked at rest; each run saves the bucket's current rules,
-// unlocks just long enough to upload, then re-applies the rule set from
-// R2_LOCK_RULES_FILE (JSON, top-level "rules") when that file exists and has
-// rules — otherwise exactly the rules the bucket had before. The restore also
-// runs on SIGINT/SIGTERM/SIGHUP and uncaught errors; if it fails, the run fails.
+// Optional. Only when R2_LOCK_RULES_FILE (JSON, top-level "rules") exists and has
+// rules does a run manage the lock: it saves the bucket's current rules, unlocks
+// just long enough to upload, then applies the configured rules. Without lock
+// rules the bucket's lock is never touched. The re-lock also runs on
+// SIGINT/SIGTERM/SIGHUP and uncaught errors; if it fails, the run fails.
 const R2_LOCK_RULES_FILE = `${SCRIPT_DIR}/r2_lock_rules.json`;
 
 // ── AWS S3 Upload ─────────────────────────────────────────────────────────────
@@ -3220,6 +3220,12 @@ async function r2Unlock() {
   }
 }
 
+// Whether this run manages the bucket lock at all: only when lock rules are configured.
+function r2LockManaged() {
+  const rules = r2ConfiguredLockRules();
+  return !!(rules && rules.length);
+}
+
 // Puts the lock policy back: the rules in R2_LOCK_RULES_FILE when it has any,
 // else exactly the rules saved by r2Unlock — never less protected than before.
 // Idempotent — every caller gets the same promise. Resolves true when the
@@ -3492,7 +3498,11 @@ async function r2Upload(backupRoot, manifest) {
   const destPrefix = `${R2_PREFIX ? `${R2_PREFIX}/` : ''}${path.basename(backupRoot)}`;
   let failed = ['(upload did not run)'];
   try {
-    await r2Unlock();
+    // Locking is optional: only with lock rules set on the credential does a run unlock the bucket
+    // and lock it again afterwards. Without them the lock is never touched (uploads go to new keys,
+    // which a lock does not block).
+    if (r2LockManaged()) await r2Unlock();
+    else logInfo(`  R2: bucket lock not managed (no lock rules set on the credential) — '${R2_BUCKET_NAME}' is left exactly as it is`);
     logSection(`R2: uploading backup to ${R2_BUCKET_NAME}/${destPrefix}`);
     logInfo(`  Source  : ${backupRoot}/`);
     logInfo(`  Dest    : ${R2_BUCKET_NAME}/${destPrefix}/`);

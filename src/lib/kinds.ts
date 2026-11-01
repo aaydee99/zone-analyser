@@ -79,7 +79,7 @@ const R2_FIELDS: FieldDef[] = [
   {
     key: 'lockRules', label: 'Bucket lock rules', secret: false, required: false, multiline: true, json: true,
     placeholder: DEFAULT_LOCK_RULES,
-    help: 'JSON with a top-level "rules" array, re-applied after each upload. Leave empty to keep whatever rules the bucket already has.',
+    help: 'Optional. JSON with a top-level "rules" array: each backup unlocks the bucket for its upload and applies these rules afterwards. Leave empty and backups never touch the bucket lock.',
   },
 ];
 
