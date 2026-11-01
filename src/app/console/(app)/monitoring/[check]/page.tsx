@@ -12,7 +12,7 @@ import { coverageLabel, useSnapshot } from '../use-run';
 import { AlertsConnect, DriftAccept, RollbackButton } from './extras';
 
 const LABELS = Object.fromEntries(CHECKS.map((c) => [c.id, c.label]));
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 export default function CheckPage({ params }: { params: Promise<{ check: string }> }) {
   const { check } = use(params);

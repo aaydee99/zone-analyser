@@ -9,7 +9,7 @@ import { Alert, Badge, Button, Card, EmptyState, Loading, Modal, PageHeader, Ske
 import { when } from '@/components/monitor-view';
 import { useSnapshot } from '../monitoring/use-run';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const PAGE = 50;
 const kindLabel = (k: string) => LIST_KIND_LABEL[k as keyof typeof LIST_KIND_LABEL] ?? k;
 
@@ -77,7 +77,7 @@ function ListDialog({ list, onClose }: { list: ListRow; onClose: () => void }) {
           </div>
         </section>
         <section aria-labelledby="refs-title">
-          <h3 id="refs-title" className="mb-2 text-[14px] font-semibold">Rules that use it {refs && <span className="font-mono text-[11px] text-faint">{refs.total}</span>}</h3>
+          <h3 id="refs-title" className="mb-2 text-[14px] font-semibold">Rules that use it {refs && <span className="font-mono text-[11px] text-faint">{whole.format(refs.total)}</span>}</h3>
           {!refs ? <SkeletonTable rows={2} cols={4} /> : refs.rows.length === 0 ? <p className="text-sm text-muted">{list.refs === null ? 'Monitoring has not read this account’s rules yet (IP & ASN lists check), so the rules that use this list are not known.' : list.referencedBy === 'zones not read yet' ? 'Not every zone of this account has been read yet.' : 'No rule uses this list.'}</p> : (
             <ul className="divide-y divide-line/60 rounded-lg border border-line text-[13px]">
               {refs.rows.map((r, i) => (

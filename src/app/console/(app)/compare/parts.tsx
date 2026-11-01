@@ -90,14 +90,14 @@ export function ZonePicker({ label, value, onChange }: { label: string; value: {
   );
 }
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 export function Pager({ offset, limit, shown, total, onPage }: { offset: number; limit: number; shown: number; total: number; onPage: (offset: number) => void }) {
   if (!total) return null;
   const end = offset + shown;
   return (
     <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2.5 text-[12px] text-muted">
-      <span>{whole.format(offset + 1)}–{whole.format(end)} of {whole.format(total)}</span>
+      <span>{(offset + 1).toLocaleString('en-US')}–{end.toLocaleString('en-US')} of {whole.format(total)}</span>
       <span className="flex gap-2">
         <Button size="sm" variant="ghost" disabled={!offset} onClick={() => onPage(Math.max(0, offset - limit))}>Previous</Button>
         <Button size="sm" variant="ghost" disabled={end >= total} onClick={() => onPage(end)}>Next</Button>

@@ -1,3 +1,4 @@
+import { compactNum } from '@/lib/num';
 import 'server-only';
 import { db } from './supabase';
 import { HttpError } from './http';
@@ -151,7 +152,7 @@ const BULK_CHUNK = 2_000;
 /** Adds and removes tags on many zones at once (and sets their owner when `owner` is a string). */
 export async function bulkTag(zones: ZoneListItem[], add: unknown, remove: unknown, owner: unknown, by: string): Promise<{ zones: number; changed: number; add: string[]; remove: string[] }> {
   if (!zones.length) throw new HttpError(400, 'No zone matches — nothing to change');
-  if (zones.length > MAX_BULK) throw new HttpError(400, `At most ${MAX_BULK.toLocaleString()} zones at once`);
+  if (zones.length > MAX_BULK) throw new HttpError(400, `At most ${compactNum(MAX_BULK)} zones at once`);
   const a = parseTags(Array.isArray(add) || typeof add === 'string' ? add as string[] : []);
   const r = parseTags(Array.isArray(remove) || typeof remove === 'string' ? remove as string[] : []);
   if (a.bad.length || r.bad.length) throw new HttpError(400, `Not a tag: ${[...a.bad, ...r.bad].slice(0, 3).join(', ')}`);

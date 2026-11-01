@@ -20,7 +20,7 @@ export function SeverityBadge({ s }: { s: Severity }) {
   return <Badge tone={SEV_TONE[s]} className={s === 'critical' ? '!border-bad/50 !bg-bad/20 font-semibold' : ''}>{SEV_LABEL[s]}</Badge>;
 }
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 /** "3d ago" for the past, "in 12d" for the future (expiry dates). */
 export function when(iso: string): string {
@@ -91,7 +91,7 @@ export function ReportTable({ check, section, version, action }: { check: CheckI
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-faint" />
           <input className="input !py-1.5 !pl-8 !text-[13px]" placeholder={`Search ${whole.format(section.total)} rows`} value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${section.title}`} />
         </label>
-      ) : <span className="font-mono text-[11px] text-faint">{section.total}</span>} />
+      ) : <span className="font-mono text-[11px] text-faint">{whole.format(section.total)}</span>} />
       {error ? <p className="px-5 py-6 text-sm text-bad">{error}</p>
         : rows === null ? <div className="p-5"><SkeletonTable rows={5} cols={Math.min(6, section.columns.length)} /></div>
           : rows.length === 0 ? (

@@ -401,7 +401,7 @@ export default function TrafficPage() {
             <select id="traffic-account" className="input w-full" value={form.account} disabled={!zoneList}
               onChange={(e) => setForm({ ...form, account: e.target.value, zone: '' })}>
               <option value="">{zoneList ? 'Choose an account…' : 'Loading accounts…'}</option>
-              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zone{a.zones === 1 ? '' : 's'})</option>)}
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({whole.format(a.zones)} zone{a.zones === 1 ? '' : 's'})</option>)}
             </select>
           </label>
           <label className="block text-sm">

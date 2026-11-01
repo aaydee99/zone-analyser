@@ -7,7 +7,7 @@ import type { ReadsReport } from '@/lib/cf-insights';
 import { Alert, Badge, Button, Card, SectionHeader, SkeletonTable, cx } from '@/components/ui';
 
 const DAYS = [1, 7, 30] as const;
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 /**
  * Who READ the configuration (Audit Logs v2 "view" entries, which the change timeline leaves out):

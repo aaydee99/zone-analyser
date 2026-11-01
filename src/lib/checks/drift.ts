@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import crypto from 'node:crypto';
 import { BudgetError, ReadError, cfGet, cfList, cfOne, cfReason, inParallel, ok, mask, refused } from '../cf-read';
 import { db } from '../supabase';
@@ -164,7 +165,7 @@ export const drift: CheckDef = {
         const from = last && Date.parse(last) > Date.parse(since) ? last : since;
         return {
           rows: {}, findings: [], complete: false, counts: { auditChanged: zones.size }, dueInHours: 0.1,
-          problems: [`More than ${(AUDIT_PAGES * 1000).toLocaleString('en-US')} changes in the audit log since ${since}: read up to ${from}, the rest in a few minutes`],
+          problems: [`More than ${compactNum((AUDIT_PAGES * 1000))} changes in the audit log since ${since}: read up to ${from}, the rest in a few minutes`],
           state: { since: from },
           ...(zones.size ? { wake: { kind: 'zone' as const, ids: [...zones] } } : {}),
         };

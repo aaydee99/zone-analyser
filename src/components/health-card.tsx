@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { HeartPulse } from 'lucide-react';
@@ -28,7 +29,7 @@ export function HealthCard() {
         <div className="px-5 py-4">
           <div className="flex items-baseline gap-3">
             <span className={cx('text-[28px] font-semibold tabular-nums', v.summary.average === null ? 'text-ink' : tone(v.summary.average))}>{v.summary.average ?? '—'}</span>
-            <span className="text-xs text-muted">average of {v.summary.zones.toLocaleString()} zones · {v.summary.poor.toLocaleString()} below 50</span>
+            <span className="text-xs text-muted">average of {compactNum(v.summary.zones)} zones · {compactNum(v.summary.poor)} below 50</span>
           </div>
           {v.worst.length > 0 && (
             <ul className="mt-3 space-y-1 text-[13px]">

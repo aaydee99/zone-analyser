@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
@@ -38,7 +39,7 @@ function Table({ head, rows }: { head: string[]; rows: unknown[][] }) {
       </table>
       {rows.length > ROWS && (
         <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-line/50 px-3 py-1.5 text-left text-xs text-muted hover:text-ink">
-          {all ? 'Show fewer' : `Show all ${rows.length.toLocaleString()} rows`}
+          {all ? 'Show fewer' : `Show all ${compactNum(rows.length)} rows`}
         </button>
       )}
     </div>
@@ -74,8 +75,8 @@ function SectionView({ s, open }: { s: ZoneSection; open: boolean }) {
         <span className="text-[13px] font-medium">{s.label}</span>
         <span className="font-mono text-[11px] text-faint">GET {s.path}</span>
         <span className="ml-auto flex items-center gap-2">
-          {s.truncated && <Badge tone="warn">first {s.count?.toLocaleString()}</Badge>}
-          {s.count !== undefined && <Badge>{s.count.toLocaleString()}</Badge>}
+          {s.truncated && <Badge tone="warn">first {(s.count === undefined ? undefined : compactNum(s.count))}</Badge>}
+          {s.count !== undefined && <Badge>{compactNum(s.count)}</Badge>}
         </span>
       </summary>
       <div className="space-y-2 px-5 pb-4">
@@ -593,7 +594,7 @@ export default function ZoneExplorerPage() {
 
                 <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
                   <Stat label="Sections read" value={allSections.filter((s) => s.status === 'ok').length} sub={`of ${allSections.length} endpoints`} />
-                  <Stat label="DNS records" value={dns?.count?.toLocaleString() ?? '—'} sub={dns?.truncated ? 'first ones only' : ' '} />
+                  <Stat label="DNS records" value={(dns?.count === undefined ? undefined : compactNum(dns?.count)) ?? '—'} sub={dns?.truncated ? 'first ones only' : ' '} />
                   <Stat label="Rules" value={allRules.reduce((n, p) => n + p.rules.length, 0)} sub={`on ${allRules.filter((p) => p.rules.length).length} rule pages`} />
                   <Stat label="Certificates" value={certs?.length ?? '—'} tone={certSoon ? 'warn' : undefined} sub={certs ? (certSoon ? `${certSoon} expired or expiring within 30 days` : 'none expiring within 30 days') : 'reading…'} />
                   <Stat label="Not readable" value={allSections.filter((s) => s.status === 'unavailable' || s.status === 'error').length} sub="token permission or plan" />

@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import { cfOne } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { Row } from '../monitor-types';
@@ -14,7 +15,7 @@ const HOUR = 3_600_000;
 function batch(j: RawJob) {
   const parts = [
     j.max_upload_bytes ? `${Math.round(j.max_upload_bytes / 1e6)} MB` : '',
-    j.max_upload_records ? `${j.max_upload_records.toLocaleString('en-US')} records` : '',
+    j.max_upload_records ? `${compactNum(j.max_upload_records)} records` : '',
     j.max_upload_interval_seconds ? `${j.max_upload_interval_seconds} s` : '',
   ].filter(Boolean);
   return parts.length ? `max ${parts.join(' · ')}` : j.frequency ? `${j.frequency} frequency` : 'default';

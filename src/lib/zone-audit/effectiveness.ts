@@ -49,7 +49,7 @@ const passes = (a: string) => ['log', 'skip', 'bypass', 'allow', 'whitelist'].in
 /** Same impact: the stronger change first. */
 const ORDER: Record<string, number> = { block_or_challenge: 0, narrow: 1, replace_allow: 2, rate_limit: 3, keep: 4, no_conclusion: 5 };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
-const n = new Intl.NumberFormat('en-US');
+import { whole as n } from '@/lib/num';
 const top = <T extends { count: number }>(xs: T[], k = 5) => [...xs].sort((a, b) => b.count - a.count).slice(0, k);
 
 interface Configured { phase: 'http_request_firewall_custom' | 'http_ratelimit'; rule: RulesetRule }

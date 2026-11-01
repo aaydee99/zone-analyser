@@ -18,7 +18,7 @@ interface SearchPage { zones: ZoneRow[]; meta: Record<string, ZoneMetaLite>; tot
 interface ImportResult { rows: number; matched: number; changed: number; unknown: string[]; unknownCount: number; errors: string[]; dryRun: boolean }
 
 const PAGE = 50;
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const zoneHref = (f: ZoneMetaFilter) => `/console/zone-explorer?${filterToParams(f)}`;
 
 /** Waits until `value` has stopped changing for `ms`. */
@@ -75,7 +75,7 @@ function TagList({ tags, owners, editable, onChanged, onFilter }: { tags: TagCou
       {owners.length > 0 && (
         <div className="border-t border-line px-5 py-3 text-[12.5px]">
           <span className="text-muted">Owners: </span>
-          {owners.slice(0, 40).map((o, i) => <span key={o.owner}>{i ? ', ' : ''}<button type="button" className="text-ink-2 hover:text-signal" onClick={() => onFilter({ owner: o.owner })}>{o.owner}</button> <span className="text-faint">{o.count}</span></span>)}
+          {owners.slice(0, 40).map((o, i) => <span key={o.owner}>{i ? ', ' : ''}<button type="button" className="text-ink-2 hover:text-signal" onClick={() => onFilter({ owner: o.owner })}>{o.owner}</button> <span className="text-faint">{whole.format(o.count)}</span></span>)}
         </div>
       )}
       <Modal open={!!renaming} onClose={() => setRenaming(null)} title={`Rename ${renaming?.tag ?? ''}`} description={`On all ${renaming?.count ?? 0} zones that carry it. An existing tag's name merges the two.`}
@@ -161,7 +161,7 @@ function BulkTagger({ filter, setFilter, editable, version, onChanged }: { filte
             <input className="input !text-[13px]" aria-label="Owner to set" disabled={!setOwnerToo} maxLength={200} value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Blank clears it" />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={!ready || !picked.size} onClick={() => setConfirm('picked')}>Apply to {picked.size} picked</Button>
+            <Button size="sm" disabled={!ready || !picked.size} onClick={() => setConfirm('picked')}>Apply to {whole.format(picked.size)} picked</Button>
             <Button size="sm" variant="primary" disabled={!ready || !page?.total} onClick={() => setConfirm('all')}>Apply to all {page ? whole.format(page.total) : ''}</Button>
           </div>
         </div>

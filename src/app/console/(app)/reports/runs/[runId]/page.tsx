@@ -14,7 +14,7 @@ import { RunState } from '../../run-state';
 
 interface RunView { run: ReportRun; definition: ReportDefinition | null; generatedAt: string }
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const utc = (iso: string) => fmtEastern(iso);
 
 function Table({ head, rows, empty = 'Nothing.' }: { head: string[]; rows: ReactNode[][]; empty?: string }) {

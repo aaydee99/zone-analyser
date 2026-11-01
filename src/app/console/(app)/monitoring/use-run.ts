@@ -22,7 +22,7 @@ export function useSnapshot<T>(path: string) {
   return { data, error, loading, reload, version };
 }
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 /** "6,410 of 6,532 read · 122 waiting · 3 failing". */
 export function coverageLabel(c: Coverage) {

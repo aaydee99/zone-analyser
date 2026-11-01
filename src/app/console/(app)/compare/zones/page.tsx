@@ -9,7 +9,7 @@ import type { ZoneDiffPage } from '@/lib/compare';
 import { Alert, Badge, Button, Card, EmptyState, Field, Loading, PageHeader, SectionHeader, SkeletonTable } from '@/components/ui';
 import { Pager, Values, ZonePicker } from '../parts';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const PAGE = 50;
 const KIND_LABEL = Object.fromEntries(INDEX_KINDS.map((k) => [k.kind, k.label])) as Record<IndexKind, string>;
 type Answer = ZoneDiffPage & { generatedAt: string };

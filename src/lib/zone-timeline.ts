@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import type { Progress } from './bg-job';
 import { cached } from './cache';
 import { cachedActivity } from './cf-audit-cache';
@@ -89,9 +90,9 @@ function spikeEvents(series: TimelineSeries[], bucketMs: number): TimelineEvent[
       if (s.key !== 'blocked' && share !== null && share < 0.02) continue;
       out.push({
         at: sp.start, kind: 'spike', tone: s.key === '5xx' ? 'bad' : 'warn',
-        title: `${s.label} spike: ${sp.peak.toLocaleString('en-US')} per ${mins} min at its peak`,
-        detail: `Typical ${Math.round(sp.typical).toLocaleString('en-US')} per ${mins} min in this window; flagged above ${Math.round(sp.threshold).toLocaleString('en-US')} (3× the median and 6 robust deviations above it). `
-          + `${sp.start === sp.end ? 'One bucket' : `From ${sp.start.slice(11, 16)} to ${sp.end.slice(11, 16)} UTC`}, ${sp.total.toLocaleString('en-US')} in all${share !== null ? `; ${(share * 100).toFixed(1)}% of requests at the peak` : ''}.`,
+        title: `${s.label} spike: ${compactNum(sp.peak)} per ${mins} min at its peak`,
+        detail: `Typical ${compactNum(Math.round(sp.typical))} per ${mins} min in this window; flagged above ${compactNum(Math.round(sp.threshold))} (3× the median and 6 robust deviations above it). `
+          + `${sp.start === sp.end ? 'One bucket' : `From ${sp.start.slice(11, 16)} to ${sp.end.slice(11, 16)} UTC`}, ${compactNum(sp.total)} in all${share !== null ? `; ${(share * 100).toFixed(1)}% of requests at the peak` : ''}.`,
       });
     }
   }

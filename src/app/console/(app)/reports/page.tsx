@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useState } from 'react';
 import Link from 'next/link';
 import { FileText, MessageSquare, Plus, RefreshCw } from 'lucide-react';
@@ -61,7 +62,7 @@ export default function ReportsPage() {
             </tbody>
           </table>
           <div className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
-            <span>{data.offset + 1}–{data.offset + data.definitions.length} of {data.total} · As of {new Date(data.generatedAt).toLocaleTimeString()}</span>
+            <span>{data.offset + 1}–{data.offset + data.definitions.length} of {compactNum(data.total)} · As of {new Date(data.generatedAt).toLocaleTimeString()}</span>
             <span className="flex gap-2">
               <Button size="sm" variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>Previous</Button>
               <Button size="sm" variant="ghost" disabled={data.offset + data.definitions.length >= data.total} onClick={() => setOffset(offset + PAGE)}>Next</Button>

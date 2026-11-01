@@ -4,6 +4,9 @@
 // parentheses over several lines, quoted strings (with ";" inside), comments, and Cloudflare's
 // "; cf_tags=cf-proxied:true" marks in its own exports. $INCLUDE and $GENERATE are reported, not followed.
 
+import { compactNum } from '@/lib/num';
+
+
 export interface ZoneRecord { name: string; ttl: number | null; type: string; content: string; proxied: boolean | null; line: number }
 export interface ParseResult { records: ZoneRecord[]; errors: { line: number; text: string }[]; origin: string }
 
@@ -108,7 +111,7 @@ export function parseZone(text: string, defaultOrigin = ''): ParseResult {
     const tags = /cf_tags=([^\s;]+)/.exec(comment)?.[1] ?? '';
     const proxied = /cf-proxied:true/.test(tags) ? true : /cf-proxied:false/.test(tags) ? false : null;
     records.push({ name, ttl: ttl ?? defTtl, type, content: normalize(type, data, origin), proxied, line: lineNo });
-    if (records.length >= MAX_RECORDS) { errors.push({ line: lineNo, text: `Only the first ${MAX_RECORDS.toLocaleString('en-US')} records are compared` }); break; }
+    if (records.length >= MAX_RECORDS) { errors.push({ line: lineNo, text: `Only the first ${compactNum(MAX_RECORDS)} records are compared` }); break; }
   }
   return { records, errors, origin };
 }

@@ -1,6 +1,8 @@
 // Zone tags and owners: the shapes and checks shared by server and client — no Node imports.
 // Console data only (supabase/migrations/0015_zone_meta.sql): never sent to Cloudflare.
 
+import { compactNum } from '@/lib/num';
+
 export interface ZoneMeta {
   zoneId: string;
   zoneName: string;
@@ -135,7 +137,7 @@ export function readMetaCsv(text: string, maxRows = 20_000): { rows: CsvMetaRow[
   const iOwner = col('owner'), iContact = col('contact'), iNotes = col('notes', 'note');
   if (iId < 0 && iName < 0) return { rows: [], errors: ['The first line must name the columns, with zone_id or zone_name among them'] };
   if (iTags < 0 && iOwner < 0 && iContact < 0 && iNotes < 0) return { rows: [], errors: ['Nothing to import: add a tags, owner, contact or notes column'] };
-  if (all.length - 1 > maxRows) errors.push(`Only the first ${maxRows.toLocaleString()} rows are read`);
+  if (all.length - 1 > maxRows) errors.push(`Only the first ${compactNum(maxRows)} rows are read`);
   const rows: CsvMetaRow[] = [];
   for (let n = 1; n < all.length && rows.length < maxRows; n++) {
     const r = all[n];

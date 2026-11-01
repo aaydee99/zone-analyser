@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowRight, Bookmark, ChevronDown, ChevronRight, Copy, Play, Trash2 } from 'lucide-react';
 import { api, copyText } from '@/lib/client';
@@ -147,7 +148,7 @@ export default function ApiConsolePage() {
                     {accounts?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </Field>
-                <Field label="Zone" hint={zones ? `Fills {zone_id} · ${zones.total.toLocaleString()} zone${zones.total === 1 ? '' : 's'}${zones.total > zones.zones.length ? ' (search to narrow)' : ''}` : 'Fills {zone_id}'}>
+                <Field label="Zone" hint={zones ? `Fills {zone_id} · ${compactNum(zones.total)} zone${zones.total === 1 ? '' : 's'}${zones.total > zones.zones.length ? ' (search to narrow)' : ''}` : 'Fills {zone_id}'}>
                   <div className="space-y-2">
                     <input className="input" aria-label="Search zones" placeholder="Search zones" value={zoneQ} onChange={(e) => setZoneQ(e.target.value)} />
                     <select className="input" aria-label="Zone" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
@@ -186,7 +187,7 @@ export default function ApiConsolePage() {
               {result.info && (result.info.total_count !== undefined || result.info.total_pages !== undefined) && (
                 <p className="px-5 pt-3 text-[12.5px] text-muted">
                   {result.info.page !== undefined && `Page ${result.info.page}${result.info.total_pages ? ` of ${result.info.total_pages}` : ''}`}
-                  {result.info.total_count !== undefined && ` · ${result.info.total_count.toLocaleString()} in all`}
+                  {result.info.total_count !== undefined && ` · ${compactNum(result.info.total_count)} in all`}
                 </p>
               )}
               {body}

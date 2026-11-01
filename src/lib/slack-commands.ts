@@ -28,7 +28,7 @@ export function helpText() {
 }
 
 const visibleChecks = (me: Me): CheckId[] => CHECKS.filter((c) => can(me.role, c.perm)).map((c) => c.id);
-const whole = (n: number) => n.toLocaleString('en-US');
+import { compactNum as whole } from '@/lib/num';
 
 async function findZone(arg: string): Promise<{ zone: ZoneListItem | null; similar: ZoneListItem[] }> {
   const name = arg.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/\.$/, '');

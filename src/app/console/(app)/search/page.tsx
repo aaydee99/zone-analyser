@@ -11,7 +11,7 @@ import { Alert, Badge, Button, Card, EmptyState, Field, Loading, PageHeader, Sec
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const PAGE = 50;
 const KIND_LABEL = Object.fromEntries(INDEX_KINDS.map((k) => [k.kind, k.label])) as Record<IndexKind, string>;
 

@@ -111,7 +111,7 @@ function build(s: Snapshot): ManagedOverview {
 
 const evSrc = 'GraphQL firewallEventsAdaptiveGroups';
 const T = { group: 'traffic' as const };
-const n = new Intl.NumberFormat('en-US');
+import { whole as n } from '@/lib/num';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const win = (s: Snapshot) => `in the last ${windowLabel(s.hours ?? 0)}`;
 

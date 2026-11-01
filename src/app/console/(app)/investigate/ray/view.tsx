@@ -210,7 +210,7 @@ export function RayView({ initialRay, initialZone, initialHours, initialAt }: { 
             <Field label="Account">
               <select className="input" value={account} onChange={(e) => setAccount(e.target.value)}>
                 <option value="">{accounts ? 'Choose an account' : 'Loading accounts…'}</option>
-                {(accounts ?? []).map((a) => <option key={a.id} value={a.id}>{a.name} ({a.zones} zones)</option>)}
+                {(accounts ?? []).map((a) => <option key={a.id} value={a.id}>{a.name} ({whole.format(a.zones)} zones)</option>)}
               </select>
             </Field>
           )}

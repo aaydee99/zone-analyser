@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import { BudgetError, ReadError } from '../cf-read';
 import type { NewFinding } from '../monitor-store';
 import type { CheckId, Column, ReportStat, Row, Severity } from '../monitor-types';
@@ -142,6 +143,6 @@ export function severityStats(open: Record<Severity, number>): ReportStat[] {
 
 /** "6,410 of 6,532 read" for a check's coverage stat. */
 export const readStat = (t: Totals, what = 'Read'): ReportStat => ({
-  label: what, value: `${t.targets.read.toLocaleString('en-US')} of ${t.targets.total.toLocaleString('en-US')}`,
+  label: what, value: `${compactNum(t.targets.read)} of ${compactNum(t.targets.total)}`,
   tone: t.targets.failing ? 'warn' : t.targets.total && t.targets.read === t.targets.total ? 'ok' : undefined,
 });

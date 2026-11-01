@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BellPlus, CheckCheck, Undo2 } from 'lucide-react';
@@ -22,7 +23,7 @@ export function DriftAccept({ zoneId, zoneName, onDone, compact = false }: { zon
     setBusy(true);
     try {
       const r = await api<{ accepted: string[]; count: number }>('/api/monitors/drift/accept', { method: 'POST', json: zoneId ? { zoneId } : {} });
-      toast(`Accepted ${r.count === 1 ? r.accepted[0] : `${r.count.toLocaleString()} zones`} as the new baseline`, 'ok');
+      toast(`Accepted ${r.count === 1 ? r.accepted[0] : `${compactNum(r.count)} zones`} as the new baseline`, 'ok');
       setOpen(false);
       onDone();
     } catch (err) { toast((err as Error).message, 'bad'); } finally { setBusy(false); }

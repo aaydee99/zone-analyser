@@ -11,7 +11,7 @@ import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 import { Pager, Values } from '../../parts';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const PAGE = 50;
 const KIND_LABEL = Object.fromEntries(INDEX_KINDS.map((k) => [k.kind, k.label])) as Record<IndexKind, string>;
 const MATCH_LABEL: Record<TemplateMatch, string> = { equals: 'is', contains: 'contains', present: 'exists', absent: 'does not exist' };

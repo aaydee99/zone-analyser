@@ -10,7 +10,7 @@ import { Alert, Badge, Button, Card, EmptyState, Loading, PageHeader, SkeletonSt
 import { SeverityBadge } from '@/components/monitor-view';
 import { useSnapshot } from '../monitoring/use-run';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const FIRST = 20;
 const MORE = 50;
 const label = (c: string) => (isCheckId(c) ? CHECK[c].label : c);

@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useEffect, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -79,7 +80,7 @@ function EditorDialog({ open, onClose, initial, onSaved }: Props) {
             </Field>
             <ul className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-line p-2" aria-label="Accounts">
               {shown.map((a) => (
-                <li key={a.id}><Checkbox checked={accounts.includes(a.id)} onChange={(v) => setAccounts((l) => toggle(l, a.id, v))} label={`${a.name} (${a.zones.toLocaleString()} zones)`} /></li>
+                <li key={a.id}><Checkbox checked={accounts.includes(a.id)} onChange={(v) => setAccounts((l) => toggle(l, a.id, v))} label={`${a.name} (${compactNum(a.zones)} zones)`} /></li>
               ))}
               {opts && !shown.length && <li className="px-1 text-[13px] text-muted">No account matches.</li>}
               {!opts && !optsError && <li className="px-1 text-[13px] text-muted">Loading accounts…</li>}

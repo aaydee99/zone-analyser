@@ -1,8 +1,6 @@
 // Number and date formatting shared by the traffic page and its zone detail.
 
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-export const whole = new Intl.NumberFormat();
-export const num = (n: number) => (n < 10_000 ? whole.format(n) : compact.format(n));
+export { compactNum as num, whole } from '@/lib/num';
 
 export function bytes(b: number) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];

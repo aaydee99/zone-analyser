@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import { db } from './supabase';
 import { HttpError } from './http';
 import { cachedActivity } from './cf-audit-cache';
@@ -42,7 +43,7 @@ export async function resolveScope(d: Pick<ReportDefinition, 'scope' | 'accounts
   }
   if (d.scope === 'tag') {
     const zones = await zonesTagged(d.tags);
-    return { label: `Zones tagged ${d.tags.join(' + ')} (${zones.length.toLocaleString('en-US')})`, accounts: null, zones };
+    return { label: `Zones tagged ${d.tags.join(' + ')} (${compactNum(zones.length)})`, accounts: null, zones };
   }
   return { label: 'All zones and accounts', accounts: null, zones: null };
 }

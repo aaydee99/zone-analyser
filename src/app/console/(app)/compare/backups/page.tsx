@@ -9,7 +9,7 @@ import type { BackupRef } from '@/lib/backup-sources';
 import { Alert, Badge, Button, Card, EmptyState, Field, Loading, PageHeader, SectionHeader, SkeletonTable } from '@/components/ui';
 import { Pager, Values, ZonePicker } from '../parts';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const PAGE = 50;
 type List = { zone: { id: string; name: string }; backups: BackupRef[]; problems: string[]; generatedAt: string };
 type Answer = BackupDiffPage & { generatedAt: string };

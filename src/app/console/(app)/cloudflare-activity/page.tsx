@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Cloud, Copy, Download, History as HistoryIcon, Lock, RefreshCw, Search, Undo2 } from 'lucide-react';
 import { api, copyText, fmtDate } from '@/lib/client';
@@ -72,7 +73,7 @@ function Group({ title, sub, tally, children, defaultOpen, level = 0 }: { title:
         {sub && <span className="text-xs text-muted">{sub}</span>}
         <span className="ml-auto flex items-center gap-2">
           <TallyBadges t={tally} />
-          <span className="font-mono text-[12px] text-muted tabular-nums">{tally.total}</span>
+          <span className="font-mono text-[12px] text-muted tabular-nums">{compactNum(tally.total)}</span>
         </span>
       </summary>
       <div className="pb-2">{children}</div>
@@ -380,7 +381,7 @@ export default function CloudflareActivityPage() {
           {problems.map((a) => (
             <div key={a.accountId} className="mb-4">
               <Alert tone={a.error ? 'bad' : 'warn'} title={a.accountName || a.credentialName}>
-                {a.error ?? `Only the newest ${a.count.toLocaleString()} changes were read. Choose a shorter period to see everything.`}
+                {a.error ?? `Only the newest ${compactNum(a.count)} changes were read. Choose a shorter period to see everything.`}
               </Alert>
             </div>
           ))}
@@ -388,7 +389,7 @@ export default function CloudflareActivityPage() {
           {!report && !error ? (
             <Loading label="Loading Cloudflare activity stats" className="mb-6"><SkeletonStats className="sm:!gap-4 md:!grid-cols-2 lg:!grid-cols-4" /></Loading>
           ) : <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-            <Stat label="Changes" value={report ? t.total.toLocaleString() : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
+            <Stat label="Changes" value={report ? compactNum(t.total) : '—'} sub={report ? `${t.create} created · ${t.update} updated · ${t.delete} deleted` : loading ? 'Loading…' : ' '} />
             <Stat label="Zones changed" value={report ? t.zones : '—'} sub={report ? `in ${t.accounts} account${t.accounts === 1 ? '' : 's'}` : ' '} />
             <Stat label="Categories" value={report ? t.categories : '—'} sub={groups[0] ? `${groups.map((x) => x.label).slice(0, 2).join(', ')}${groups.length > 2 ? '…' : ''}` : report ? 'nothing changed' : ' '} />
             <Stat label="Zones onboarded" value={report ? onboarded : '—'} sub={report ? (removed ? `${removed} removed` : 'none removed') : ' '} tone={onboarded ? 'ok' : undefined} />
@@ -470,7 +471,7 @@ export default function CloudflareActivityPage() {
                 ))}
                 {shown < filtered.length && (
                   <div className="flex justify-center border-t border-line p-3">
-                    <Button size="sm" onClick={() => setShown(shown + TIMELINE_PAGE)}>Show {Math.min(TIMELINE_PAGE, filtered.length - shown)} more of {(filtered.length - shown).toLocaleString()}</Button>
+                    <Button size="sm" onClick={() => setShown(shown + TIMELINE_PAGE)}>Show {Math.min(TIMELINE_PAGE, filtered.length - shown)} more of {compactNum((filtered.length - shown))}</Button>
                   </div>
                 )}
               </div>

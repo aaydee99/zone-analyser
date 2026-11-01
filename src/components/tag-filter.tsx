@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Tag, X } from 'lucide-react';
 import { api } from '@/lib/client';
@@ -89,7 +90,7 @@ export function TagFilter({ value, onChange, showOwner = true, className }: { va
             if (e.key === 'Backspace' && !text && tags.length) remove(tags[tags.length - 1]);
           }} />
         <datalist id={listId}>
-          {(data?.tags ?? []).filter((x) => !tags.includes(x.tag)).slice(0, 300).map((x) => <option key={x.tag} value={x.tag}>{`${x.count} zone${x.count === 1 ? '' : 's'}`}</option>)}
+          {(data?.tags ?? []).filter((x) => !tags.includes(x.tag)).slice(0, 300).map((x) => <option key={x.tag} value={x.tag}>{`${compactNum(x.count)} zone${x.count === 1 ? '' : 's'}`}</option>)}
         </datalist>
       </div>
       {showOwner && (

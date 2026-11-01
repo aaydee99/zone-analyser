@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, RefreshCw, Search, Square, Trash2 } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
@@ -212,7 +213,7 @@ export default function WorkerLogsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-3">
           <p className="text-[13px] text-muted" aria-live="polite">
             {session ? (live
-              ? <>Following <span className="font-mono text-ink-2">{session.script}</span> · stops by {clock(session.expiresAt)} · {session.events.toLocaleString()} events{session.dropped ? ` · ${session.dropped.toLocaleString()} left out (too many per second — lower the sampling)` : ''}</>
+              ? <>Following <span className="font-mono text-ink-2">{session.script}</span> · stops by {clock(session.expiresAt)} · {compactNum(session.events)} events{session.dropped ? ` · ${compactNum(session.dropped)} left out (too many per second — lower the sampling)` : ''}</>
               : <>Stopped{session.reason ? `: ${session.reason}` : ''}.</>) : 'Not running.'}
           </p>
           {live
@@ -221,7 +222,7 @@ export default function WorkerLogsPage() {
         </div>
       </Card>
       <Card>
-        <SectionHeader title="Events" description={events.length ? `${events.length.toLocaleString()} in this tab, newest first` : undefined} aside={(
+        <SectionHeader title="Events" description={events.length ? `${compactNum(events.length)} in this tab, newest first` : undefined} aside={(
           <div className="flex items-center gap-2">
             <label className="relative block w-48 sm:w-60">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-faint" />

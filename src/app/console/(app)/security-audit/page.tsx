@@ -1,5 +1,6 @@
 'use client';
 
+import { compactNum } from '@/lib/num';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -147,7 +148,7 @@ export default function SecurityAuditPage() {
         </div>
         {list.data && list.data.total > 0 && (
           <div className="flex items-center justify-between border-t border-line px-5 py-3 text-xs text-muted">
-            <span>{list.data.offset + 1}–{list.data.offset + list.data.audits.length} of {list.data.total} · As of {fmtDate(list.data.generatedAt)}</span>
+            <span>{list.data.offset + 1}–{list.data.offset + list.data.audits.length} of {compactNum(list.data.total)} · As of {fmtDate(list.data.generatedAt)}</span>
             <span className="flex gap-2">
               <Button size="sm" variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>Previous</Button>
               <Button size="sm" variant="ghost" disabled={list.data.offset + list.data.audits.length >= list.data.total} onClick={() => setOffset(offset + PAGE)}>Next</Button>

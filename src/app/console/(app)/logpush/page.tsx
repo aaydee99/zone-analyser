@@ -15,7 +15,7 @@ import { useToast } from '@/components/toast';
 import { coverageLabel } from '../monitoring/use-run';
 
 const PAGE = 50;
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const TONE: Record<LogpushStatus, 'bad' | 'warn' | 'neutral' | 'info' | 'ok'> = { failing: 'bad', stale: 'warn', disabled: 'neutral', waiting: 'info', healthy: 'ok' };
 
 type Result = { done?: string; approval?: { id: string } };

@@ -15,7 +15,7 @@ import {
 // finding, an exception to its traffic) go through AuditNav: it switches the tab and the element
 // with that id opens itself and scrolls into view.
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 export type AuditTab = 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';

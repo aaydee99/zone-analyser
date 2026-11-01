@@ -1,6 +1,8 @@
 // Logpush jobs: how healthy each one is, what of its destination may be shown, and which changes
 // the console may ask Cloudflare for. Shared by server and client — no Node imports.
 
+import { compactNum } from '@/lib/num';
+
 export type LogpushStatus = 'failing' | 'stale' | 'disabled' | 'waiting' | 'healthy';
 export const LOGPUSH_STATUSES: LogpushStatus[] = ['failing', 'stale', 'disabled', 'waiting', 'healthy'];
 /** Stored as the row's sort key, so the worst come first and a status filter uses the page index. */
@@ -94,7 +96,7 @@ export class ChangeError extends Error {}
 /** Cloudflare's ranges for the batch limits: 0 turns one off. */
 function ranged(v: unknown, label: string, min: number, max: number): number {
   const n = typeof v === 'number' ? v : Number(v);
-  if (!Number.isInteger(n) || (n !== 0 && (n < min || n > max))) throw new ChangeError(`${label} must be 0 (off) or between ${min.toLocaleString('en-US')} and ${max.toLocaleString('en-US')}`);
+  if (!Number.isInteger(n) || (n !== 0 && (n < min || n > max))) throw new ChangeError(`${label} must be 0 (off) or between ${compactNum(min)} and ${compactNum(max)}`);
   return n;
 }
 
@@ -196,7 +198,7 @@ export function summarizeJob(j: Partial<RawJob> & { destination?: string }): Rec
   if (j.output_options !== undefined) out.output = o ? [o.output_type ?? 'ndjson', Array.isArray(o.field_names) ? `${o.field_names.length} fields` : '', typeof o.sample_rate === 'number' && o.sample_rate < 1 ? `${o.sample_rate * 100}% sampled` : '', o.timestamp_format ? `timestamps ${String(o.timestamp_format)}` : ''].filter(Boolean).join(' · ') : 'default';
   if (j.frequency !== undefined) out.frequency = j.frequency || '—';
   if (j.max_upload_bytes !== undefined) out.max_upload_bytes = j.max_upload_bytes ? `${Math.round(j.max_upload_bytes / 1e6)} MB` : 'off';
-  if (j.max_upload_records !== undefined) out.max_upload_records = j.max_upload_records ? j.max_upload_records.toLocaleString('en-US') : 'off';
+  if (j.max_upload_records !== undefined) out.max_upload_records = j.max_upload_records ? compactNum(j.max_upload_records) : 'off';
   if (j.max_upload_interval_seconds !== undefined) out.max_upload_interval_seconds = j.max_upload_interval_seconds ? `${j.max_upload_interval_seconds} s` : 'off';
   return out;
 }

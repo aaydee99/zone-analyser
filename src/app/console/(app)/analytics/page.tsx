@@ -9,9 +9,7 @@ import { Alert, Button, Card, Loading, PageHeader, SectionHeader, SkeletonChart,
 
 type Tab = 'dns' | 'workers';
 const DAYS = [1, 7, 30] as const;
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-const whole = new Intl.NumberFormat();
-const num = (n: number) => (n < 10_000 ? whole.format(n) : compact.format(n));
+import { compactNum as num, whole } from '@/lib/num';
 
 function label(l: string, days: number) {
   const d = new Date(l.length === 10 ? `${l}T00:00:00Z` : l);

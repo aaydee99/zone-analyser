@@ -14,7 +14,7 @@ import { useToast } from '@/components/toast';
 import { coverageLabel, every, useSnapshot } from '../use-run';
 
 const INTERVALS = [0.25, 0.5, 1, 3, 6, 12, 24, 48, 168];
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 
 export default function MonitoringOverview() {
   const { can } = useMe();

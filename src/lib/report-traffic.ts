@@ -1,4 +1,5 @@
 import 'server-only';
+import { compactNum } from '@/lib/num';
 import { asMonitor, cfCall, cfReason, inParallel } from './cf-read';
 import { accountTargets } from './cf-targets';
 import { zoneToken } from './zone-explorer';
@@ -116,7 +117,7 @@ export async function zoneTraffic(zoneIds: string[], cur: Window, prev: Window):
   const problems: TrafficSection['problems'] = [];
   if (zoneIds.length > MAX_TRAFFIC_ZONES) {
     return {
-      status: 'unavailable', note: `The tags match ${zoneIds.length.toLocaleString('en-US')} zones; traffic is read for at most ${MAX_TRAFFIC_ZONES} zones per report (use an account report for more)`,
+      status: 'unavailable', note: `The tags match ${compactNum(zoneIds.length)} zones; traffic is read for at most ${MAX_TRAFFIC_ZONES} zones per report (use an account report for more)`,
       read: 0, of: zoneIds.length, unit: 'zones', current: null, previous: null, security: null, securityPrevious: null, problems,
     };
   }

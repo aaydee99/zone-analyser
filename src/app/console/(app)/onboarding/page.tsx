@@ -11,7 +11,7 @@ import { when } from '@/components/monitor-view';
 import { useToast } from '@/components/toast';
 import { useSnapshot } from '../monitoring/use-run';
 
-const whole = new Intl.NumberFormat();
+import { whole } from '@/lib/num';
 const MAX_BYTES = 512 * 1024;
 const KINDS: { kind: DiffKind; label: string; tone: 'bad' | 'warn' | 'info' | 'neutral' }[] = [
   { kind: 'missing', label: 'Missing on Cloudflare', tone: 'bad' }, { kind: 'breaks', label: 'Will break', tone: 'bad' }, { kind: 'different', label: 'Different', tone: 'warn' },

@@ -157,4 +157,4 @@ export function Code({ children, className }: { children: string; className?: st
   return <pre className={cx('overflow-x-auto rounded-lg border border-line bg-sunken/60 px-3 py-2 font-mono text-[12px] whitespace-pre-wrap break-all text-ink-2', className)}>{children}</pre>;
 }
 
-export const whole = new Intl.NumberFormat();
+export { whole } from '@/lib/num';
