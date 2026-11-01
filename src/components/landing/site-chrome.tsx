@@ -32,8 +32,7 @@ export function Fill({ v }: { v: string }) {
 }
 
 export function SiteFooter({ home = true }: { home?: boolean }) {
-  const sales = salesHref();
-  const a = 'text-ink-2 hover:text-ink';
+  const a ='text-ink-2 hover:text-ink';
   return (
     <footer className="border-t border-line">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[minmax(0,1fr)_auto] lg:px-8">
@@ -44,7 +43,7 @@ export function SiteFooter({ home = true }: { home?: boolean }) {
         <nav aria-label="Footer">
           <ul className="flex flex-wrap gap-x-6 gap-y-3 text-[14px]">
             <li><Link href="/console/login" className={a}>Sign in</Link></li>
-            {sales && <li><a href={sales} className={a}>Contact sales</a></li>}
+            <li><a href={salesHref()} className={a}>Contact sales</a></li>
             <li><Link href={home ? '#faq' : '/#faq'} className={a}>FAQ</Link></li>
           </ul>
         </nav>

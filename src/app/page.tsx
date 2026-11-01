@@ -4,7 +4,7 @@ import {
   Activity, ArrowRight, BarChart3, Building2, Check, ClipboardCheck, Cloud, Database, Eraser, FileCode2, FileJson, FileOutput, FileText, Fingerprint, Folder, Gauge, GitCompare, Globe,
   HardDrive, History, KeyRound, ListFilter, Mail, MessageSquare, Minus, Plus, ScrollText, Search, Server, ShieldAlert, ShieldCheck, Star, Tags, Terminal, Undo2, Users, Webhook, Workflow,
 } from 'lucide-react';
-import { BRAND, SALES_EMAIL_TODO, salesHref } from '@/lib/brand';
+import { BRAND, salesHref } from '@/lib/brand';
 import { TF_ACCOUNT_TYPES, TF_ZONE_TYPES } from '@/lib/landing-numbers';
 import { CHECKS } from '@/lib/monitor-types';
 import { RULE_PHASES, SETTING_IDS, ZONE_ENDPOINTS, ZONE_GROUPS } from '@/lib/zone-catalog';
@@ -62,7 +62,7 @@ const NAV = [
 ];
 
 /** mailto: sales, or (while NEXT_PUBLIC_SALES_EMAIL is unset) the Plans section, which shows the TODO. */
-const SALES_HREF = salesHref() ?? '#plans';
+const SALES_HREF = salesHref();
 
 const d = (ms: number) => ({ '--lp-d': `${ms}ms` } as React.CSSProperties);
 const i = (n: number, extra: Record<string, string> = {}) => ({ '--i': n, ...extra } as React.CSSProperties);
@@ -721,14 +721,8 @@ function Plans() {
             <h2 id="plans-title" className="lp-rv lp-h2 text-ink">Plans fitted to how you run Cloudflare.</h2>
             <p className="lp-rv lp-copy mt-5" style={i(1)}>A plan depends on how many accounts and zones you keep, how often you audit and back up, and where the console should run. Tell us about your setup and we will put one together with you.</p>
             <div className="lp-rv mt-8 flex flex-wrap items-center gap-x-5 gap-y-3" style={i(2)}>
-              {BRAND.salesEmail ? (
-                <>
-                  <a href={SALES_HREF} className="lp-btn lp-btn-primary"><Mail aria-hidden="true" className="size-4" />Talk to us</a>
-                  <a href={SALES_HREF} className="lp-link font-mono text-[14px] text-ink-2 hover:text-ink">{BRAND.salesEmail}</a>
-                </>
-              ) : (
-                <span className="inline-flex items-center gap-2 rounded-lg bg-warn/15 px-3 py-2 font-mono text-[14px] text-warn"><Mail aria-hidden="true" className="size-4" />{SALES_EMAIL_TODO}</span>
-              )}
+              <a href={SALES_HREF} className="lp-btn lp-btn-primary"><Mail aria-hidden="true" className="size-4" />Talk to us</a>
+              <a href={SALES_HREF} className="lp-link font-mono text-[14px] text-ink-2 hover:text-ink">{BRAND.salesEmail}</a>
             </div>
           </div>
           <ul className="grid content-start gap-4">

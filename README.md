@@ -75,7 +75,7 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 | `MONITOR_TICK_MS` | `5000` | How often the monitoring queue looks for due units. |
 | `MONITOR_NOTIFY_SECONDS` | `300` | Longest gap between notification batches while units run. |
 | `CLOUDFLARE_BASE_URL` | `https://api.cloudflare.com/client/v4/` | Upstream of the read-only Cloudflare proxy that restore plans use (tests point it elsewhere). |
-| `NEXT_PUBLIC_SALES_EMAIL` | empty | Where the landing page's "Contact sales" links go. While empty, the page shows a visible `[TODO: contact email]` and no mailto link. Built into the page: rebuild after changing it. |
+| `NEXT_PUBLIC_SALES_EMAIL` | `sales@castellan.com` | Where the landing page's "Contact sales" links go (default set in `src/lib/brand.ts`). Built into the page: rebuild after changing it. |
 | `VERCEL`, `VERCEL_GIT_COMMIT_SHA` | set by Vercel | Detects Vercel (role `web`, temporary data folder) and the deployed commit. |
 | `GITHUB_SHA` | set by GitHub Actions | The worker's version label. |
 | `NODE_ENV`, `NEXT_RUNTIME` | set by Next.js | Standard Next.js variables. |
@@ -123,7 +123,7 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 ## Legal pages and open-source notices
 
 - **`/privacy`, `/terms`, `/licenses`** are static public pages, linked from the landing footer (and Privacy · Terms from sign-in and setup). The privacy and terms texts are **examples drafted for legal review, not legal advice**: each page says so at the top.
-- **Company facts and lawyer clauses** are `[TODO: …]` placeholders in one place, [`src/lib/legal.ts`](src/lib/legal.ts) (`LEGAL`). They show highlighted on the pages and in the footer until replaced; while any is left, the legal pages are marked `noindex`.
+- **Company facts and legal clauses** live in one place, [`src/lib/legal.ts`](src/lib/legal.ts) (`LEGAL`). They are **sample values** (entity name and company number are real; address, contacts, providers, retention periods and clause wording are examples). While `LEGAL_DRAFT` is `true`, the legal pages are marked `noindex` and keep their "example text" notice; set it to `false` once the details are real and reviewed.
 - **Notices:** `npm run notices` ([`scripts/gen-notices.mjs`](scripts/gen-notices.mjs)) walks the production dependency tree in `node_modules` and writes [`public/THIRD_PARTY_NOTICES.txt`](public/THIRD_PARTY_NOTICES.txt) (every package with its licence text, the SIL OFL 1.1 for the fonts, the caniuse-lite CC BY 4.0 attribution, an LGPL note for sharp/libvips) and `src/app/licenses/packages.json` (what `/licenses` lists). Run it again after changing dependencies, ideally on the build platform (optional native packages differ per OS).
 - `tests/landing-numbers.test.ts` checks the landing page's Terraform type counts ([`src/lib/landing-numbers.ts`](src/lib/landing-numbers.ts)) against `runner/backup.js`.
 
