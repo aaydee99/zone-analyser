@@ -22,18 +22,30 @@ const gradeTone = (g: string | null) => (g === 'A' || g === 'B' ? 'text-ok' : g 
 
 function FindingLink({ fp, children }: { fp: string; children: ReactNode }) {
   const nav = useContext(AuditNav);
-  return <button type="button" className="text-left text-ink-2 hover:text-signal hover:underline" onClick={() => nav.finding(fp)}>{children}</button>;
+  return <button type="button" className="min-w-0 text-left wrap-anywhere text-ink-2 hover:text-signal hover:underline" onClick={() => nav.finding(fp)}>{children}</button>;
 }
 
 /** "How this was worked out": the inputs and the arithmetic behind a number. */
-function HowWorkedOut({ children, label = 'How this was worked out' }: { children: ReactNode; label?: string }) {
+function HowWorkedOut({ children, label = 'How this was worked out', className }: { children: ReactNode; label?: string; className?: string }) {
   return (
-    <details className="mt-2 text-xs">
-      <summary className="cursor-pointer text-signal">{label}</summary>
-      <div className="mt-1.5 space-y-1 rounded-md bg-sunken/60 px-3 py-2 text-ink-2">{children}</div>
+    <details className={cx('group mt-2 min-w-0 text-xs', className)}>
+      <summary className="w-fit cursor-pointer list-none text-signal select-none hover:underline [&::-webkit-details-marker]:hidden">
+        <span className="mr-1 inline-block transition-transform group-open:rotate-90" aria-hidden>›</span>{label}
+      </summary>
+      <div className="mt-2 space-y-2 rounded-md border border-line bg-sunken/60 px-3 py-2.5 leading-relaxed break-words text-ink-2">{children}</div>
     </details>
   );
 }
+/** One line of a breakdown: a number in a fixed right-aligned column, then what it is. */
+function Row({ n, children, strong }: { n: ReactNode; children: ReactNode; strong?: boolean }) {
+  return (
+    <div className={cx('grid grid-cols-[3.25rem_minmax(0,1fr)] items-baseline gap-x-3', strong && 'border-t border-line pt-1.5 font-medium text-ink')}>
+      <span className="text-right font-mono tabular-nums">{n}</span>
+      <span className="min-w-0">{children}</span>
+    </div>
+  );
+}
+const SEV_TEXT: Record<string, string> = { critical: 'text-bad', high: 'text-bad', medium: 'text-warn', low: 'text-info', info: 'text-muted' };
 const counts = (m: Record<string, number>) => Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k.replace(/_/g, ' ')} ${whole.format(v)}`).join(' + ') || 'none';
 
 function StepList({ title, hint, steps }: { title: string; hint: string; steps: Step[] }) {
@@ -76,10 +88,13 @@ export function PostureView({ r }: { r: AuditReport }) {
         <div className="border-t border-line px-5 pb-3">
           <HowWorkedOut label="How the grade was worked out">
             {p.gradeProof.rows.length ? <>
-              <p>Weighted mean of the graded areas = Σ (score × weight) ÷ Σ weight:</p>
-              <ul className="list-disc pl-5">{p.gradeProof.rows.map((x) => <li key={x.area}>{x.area}: {x.score} × {x.weight} = {x.score * x.weight}</li>)}</ul>
-              <p>= {p.gradeProof.rows.reduce((a, x) => a + x.score * x.weight, 0)} ÷ {p.gradeProof.rows.reduce((a, x) => a + x.weight, 0)} = <strong>{p.gradeProof.mean}</strong>{p.gradeProof.cap ? <> — {p.gradeProof.cap}</> : null}</p>
-              <p>Grade floors: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 55, else F. Score {p.score} → <strong>{p.grade}</strong>.</p>
+              <p>The weighted mean of the graded areas: each area&apos;s score × its weight, added up, divided by the weights added up.</p>
+              <div className="max-w-xl space-y-1">
+                {p.gradeProof.rows.map((x) => <Row key={x.area} n={x.score * x.weight}>{x.area} <span className="text-muted">({x.score} × {x.weight})</span></Row>)}
+                <Row strong n={p.gradeProof.rows.reduce((a, x) => a + x.score * x.weight, 0)}>Total, ÷ {p.gradeProof.rows.reduce((a, x) => a + x.weight, 0)} (the weights) = {p.gradeProof.mean}</Row>
+              </div>
+              {p.gradeProof.cap && <p className="text-warn">{p.gradeProof.cap}</p>}
+              <p>Grade floors: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 55, else F. Score {p.score} → <strong className="text-ink">{p.grade}</strong>.</p>
             </> : <p>No area had at least half of its checks read, so there is no grade.</p>}
             {p.areas.some((a) => a.rating === 'unknown') && <p>Not graded (less than half of their checks read): {p.areas.filter((a) => a.rating === 'unknown').map((a) => `${a.label} (${a.read} of ${a.applicable})`).join(', ')}.</p>}
           </HowWorkedOut>
@@ -90,21 +105,29 @@ export function PostureView({ r }: { r: AuditReport }) {
         <SectionHeader title="Scorecard" description="Each area's checks. A finding costs points by severity, half when it needs validation. Areas with less than half of their checks read are not graded." />
         <ul className="grid gap-px bg-line/70 sm:grid-cols-2 lg:grid-cols-3">
           {areas.map((a) => (
-            <li key={a.id} className="bg-surface px-5 py-3">
+            <li key={a.id} className="min-w-0 bg-surface px-5 py-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-medium text-ink" title={a.what}>{a.label}</span>
+                <span className="min-w-0 text-[13px] font-medium text-ink" title={a.what}>{a.label}</span>
                 <Badge tone={RATING_TONE[a.rating]}>{RATING_LABEL[a.rating]}{a.score !== null ? ` · ${a.score}` : ''}</Badge>
               </div>
               <p className="mt-0.5 text-xs text-muted">{a.read} of {a.applicable} checks read · {a.findings ? `${a.findings} finding${a.findings === 1 ? '' : 's'}` : 'no findings'}</p>
-              {a.top ? <div className="mt-1.5 flex items-start gap-1.5 text-xs"><SeverityBadge s={a.top.severity} /><FindingLink fp={a.top.fingerprint}>{a.top.title}</FindingLink></div>
+              {a.top ? <div className="mt-1.5 flex min-w-0 items-start gap-1.5 text-xs"><SeverityBadge s={a.top.severity} /><FindingLink fp={a.top.fingerprint}>{a.top.title}</FindingLink></div>
                 : a.good[0] ? <p className="mt-1.5 text-xs text-ok">{a.good[0]}</p> : null}
               {a.score !== null && (
                 <HowWorkedOut>
                   {a.penalties.length ? <>
-                    <p>100 minus each finding&apos;s points (critical {PENALTY.critical}, high {PENALTY.high}, medium {PENALTY.medium}, low {PENALTY.low}; half when it needs validation):</p>
-                    <ul className="list-disc pl-5">{a.penalties.map((x) => <li key={x.fingerprint}>−{x.points} · {x.severity}{x.verdict === 'needs_validation' ? ' (needs validation)' : ''}: <FindingLink fp={x.fingerprint}>{x.title}</FindingLink></li>)}</ul>
-                    <p>= 100 − {a.penalties.reduce((t, x) => t + x.points, 0)} = <strong>{a.score}</strong> (never below 0)</p>
-                  </> : <p>No findings: 100. {a.passed} of {a.read} checks read passed.</p>}
+                    <p className="text-muted">100 minus each finding&apos;s points: critical {PENALTY.critical}, high {PENALTY.high}, medium {PENALTY.medium}, low {PENALTY.low}; half when it needs validation.</p>
+                    <div className="space-y-1.5">
+                      <Row n="100">Start</Row>
+                      {a.penalties.map((x) => (
+                        <Row key={x.fingerprint} n={`−${x.points}`}>
+                          <span className={cx('block text-[10.5px] font-semibold tracking-[0.04em] uppercase', SEV_TEXT[x.severity])}>{x.severity}{x.verdict === 'needs_validation' ? ' · to validate' : ''}</span>
+                          <FindingLink fp={x.fingerprint}>{x.title}</FindingLink>
+                        </Row>
+                      ))}
+                      <Row strong n={a.score}>Score{100 - a.penalties.reduce((t, x) => t + x.points, 0) < 0 ? ' (never below 0)' : ''}</Row>
+                    </div>
+                  </> : <p>No findings, so 100. {a.passed} of {a.read} checks read passed.</p>}
                 </HowWorkedOut>
               )}
             </li>
@@ -125,13 +148,13 @@ export function PostureView({ r }: { r: AuditReport }) {
         {pr && (
           <div className="border-t border-line px-5 pb-3">
             <HowWorkedOut label="How these numbers were worked out">
-              <p>All from the security events of the window (GraphQL firewallEventsAdaptiveGroups, grouped by rule and action; the queries are listed under Coverage › Analytics queries).</p>
+              <p className="text-muted">All from the security events of the window (GraphQL firewallEventsAdaptiveGroups, grouped by rule and action; the queries are listed under Coverage › Analytics queries).</p>
               <p><strong>Security events</strong> = the sum of every rule&apos;s events = {en.events === null ? '—' : whole.format(en.events)}.{pr.previous !== null ? ` Window before: ${whole.format(pr.previous)}${en.trend !== null ? ` → (${whole.format(en.events ?? 0)} − ${whole.format(pr.previous)}) ÷ ${whole.format(pr.previous)} = ${en.trend > 0 ? '+' : ''}${pct(en.trend)}` : ''}.` : ''}</p>
               <p><strong>Blocked or challenged</strong> = blocking and challenge actions ({counts(pr.enforcedByAction)}) ÷ those plus the actions that let the request on ({counts(pr.passiveByAction)}) = {share(en.enforcedShare)}. Solved challenges and other outcomes are left out of both.</p>
               <p><strong>WAF matches only logged</strong> = managed and custom rule matches with the action Log ({whole.format(pr.wafLogged)}) ÷ all their decided matches ({whole.format(pr.wafDecided)}) = {share(en.logOnlyShare)}.</p>
               <p><strong>Challenge solve rate</strong> = solved ({whole.format(pr.solved)}) ÷ challenges issued ({whole.format(pr.challenged)}){pr.challenged < 10 ? ' — fewer than 10 issued, so not measured' : ` = ${share(en.solveRate)}`}.</p>
               <p><strong>Bad traffic let through</strong> = bot + malicious requests counted on the rules that log, skip or allow{pr.badByRule.length ? ':' : ' — none found.'}</p>
-              {pr.badByRule.length > 0 && <ul className="list-disc pl-5">{pr.badByRule.slice(0, 10).map((x) => <li key={x.rule}>{x.rule}: {whole.format(x.bots)} bots + {whole.format(x.malicious)} malicious</li>)}</ul>}
+              {pr.badByRule.length > 0 && <div className="max-w-xl space-y-1">{pr.badByRule.slice(0, 10).map((x) => <Row key={x.rule} n={whole.format(x.bots + x.malicious)}>{x.rule} <span className="text-muted">({whole.format(x.bots)} bots + {whole.format(x.malicious)} malicious)</span></Row>)}</div>}
               <p><strong>Rules with no match</strong>: {pr.silentRules.length ? pr.silentRules.slice(0, 15).join(', ') : 'none'}.</p>
             </HowWorkedOut>
           </div>
@@ -139,30 +162,39 @@ export function PostureView({ r }: { r: AuditReport }) {
       </Card>
 
       <Card>
-        <SectionHeader title="Threat coverage" description="The attack types a zone audit can judge: what is in place against each, and the gaps. Open a gap for its evidence and fix." />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-[13px]">
-            <thead className="border-b border-line text-xs text-muted"><tr><th scope="col" className="px-5 py-2 font-medium">Threat</th><th scope="col" className="px-3 py-2 font-medium">Status</th><th scope="col" className="px-3 py-2 font-medium">In place</th><th scope="col" className="px-5 py-2 font-medium">Gaps and what to do</th></tr></thead>
-            <tbody className="divide-y divide-line/70">
-              {threats.map((t) => (
-                <tr key={t.id} className="align-top">
-                  <td className="px-5 py-2 text-ink">{t.label}</td>
-                  <td className="px-3 py-2"><Badge tone={THREAT_TONE[t.status]}>{THREAT_LABEL[t.status]}</Badge>
-                    <HowWorkedOut label="Why">
-                      <ul className="space-y-0.5">{t.checks.map((c) => <li key={c.ruleId}><code className="font-mono text-[11px]">{c.ruleId}</code>: {COVERAGE_LABEL[c.state]}{c.findings ? ` (${c.findings})` : ''}</li>)}</ul>
-                      <p className="mt-1 text-muted">Gap: a confirmed high or critical finding. Partly covered: a medium or worse finding. Covered: the rest. Not read: none of the checks could be read.</p>
-                    </HowWorkedOut></td>
-                  <td className="px-3 py-2 text-xs text-ink-2">{t.controls.length ? <ul className="space-y-0.5">{t.controls.map((c, i) => <li key={i}>{c}</li>)}</ul> : <span className="text-faint">—</span>}</td>
-                  <td className="px-5 py-2 text-xs">
-                    {t.gaps.length > 0 && <ul className="space-y-0.5">{t.gaps.map((g) => <li key={g.fingerprint}><FindingLink fp={g.fingerprint}>{g.title}</FindingLink></li>)}</ul>}
-                    {t.playbook.length > 0 && <p className="mt-1 text-muted">{t.playbook.join(' ')}</p>}
-                    {!t.gaps.length && !t.playbook.length && <span className="text-faint">—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SectionHeader title="Threat coverage" description="The attack types a zone audit can judge: what is in place against each, and the gaps. Gap: a confirmed high or critical finding. Partly covered: a medium or worse finding. Covered: the rest. Not read: none of its checks could be read." />
+        <ul className="divide-y divide-line/70">
+          {threats.map((t) => (
+            <li key={t.id} className="min-w-0 px-5 py-3.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <h3 className="text-[13.5px] font-medium text-ink">{t.label}</h3>
+                <Badge tone={THREAT_TONE[t.status]}>{THREAT_LABEL[t.status]}</Badge>
+              </div>
+              <div className="mt-2 grid gap-x-8 gap-y-3 text-xs md:grid-cols-2">
+                <div className="min-w-0">
+                  <h4 className="mb-1 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">In place</h4>
+                  {t.controls.length ? <ul className="space-y-1 text-ink-2">{t.controls.map((c, i) => <li key={i} className="break-words">{c}</li>)}</ul> : <p className="text-faint">Nothing that passed.</p>}
+                </div>
+                <div className="min-w-0">
+                  <h4 className="mb-1 text-[11px] font-semibold tracking-[0.06em] text-muted uppercase">Gaps and what to do</h4>
+                  {t.gaps.length > 0 && <ul className="space-y-1">{t.gaps.map((g) => <li key={g.fingerprint} className="flex min-w-0 items-start gap-1.5"><SeverityBadge s={g.severity} /><FindingLink fp={g.fingerprint}>{g.title}</FindingLink></li>)}</ul>}
+                  {t.playbook.length > 0 && <p className={cx('break-words text-muted', t.gaps.length > 0 && 'mt-1.5')}>{t.playbook.join(' ')}</p>}
+                  {!t.gaps.length && !t.playbook.length && <p className="text-faint">None.</p>}
+                </div>
+              </div>
+              <HowWorkedOut label={`Why “${THREAT_LABEL[t.status]}” — ${t.checks.length} check${t.checks.length === 1 ? '' : 's'}`}>
+                <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+                  {t.checks.map((c) => (
+                    <li key={c.ruleId} className="flex min-w-0 items-baseline justify-between gap-2">
+                      <code className="min-w-0 truncate font-mono text-[11px]" title={c.ruleId}>{c.ruleId}</code>
+                      <span className={cx('shrink-0', c.state === 'finding' ? 'text-warn' : c.state === 'passed' ? 'text-ok' : 'text-muted')}>{COVERAGE_LABEL[c.state]}{c.findings ? ` (${c.findings})` : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              </HowWorkedOut>
+            </li>
+          ))}
+        </ul>
       </Card>
 
       <Card>

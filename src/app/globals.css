@@ -138,6 +138,11 @@
     -webkit-backdrop-filter: blur(var(--glass-blur));
     backdrop-filter: blur(var(--glass-blur));
   }
+  /* The blur makes each panel its own stacking context, so a dropdown's z-index only counts inside
+     its panel and the next panel paints over it. While a panel holds an open dropdown (a listbox or
+     a menu), the panel itself is lifted above its neighbours. `relative` lets z-index apply; a
+     panel that is sticky, absolute or fixed keeps that (utilities win over this layer). */
+  .panel:has([role="listbox"], [role="menu"]) { position: relative; z-index: 40; }
   .glass {
     background: var(--glass-bg);
     -webkit-backdrop-filter: blur(var(--glass-blur));

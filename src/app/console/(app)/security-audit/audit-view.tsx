@@ -79,10 +79,10 @@ function Proof({ f }: { f: AuditFinding }) {
         {f.evidence.map((e, i) => {
           const cmd = report ? reproduce(e, report) : null;
           return (
-            <li key={i} className="rounded-md border border-line px-3 py-2">
+            <li key={i} className="min-w-0 rounded-md border border-line px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 {e.check ? <Badge tone={CHECK_TONE[e.check]}>{CHECK_LABEL[e.check]}</Badge> : <Badge tone="neutral">Not checked (older audit)</Badge>}
-                <span className="font-mono text-[11.5px] text-faint">{e.source}</span>
+                <span className="min-w-0 font-mono text-[11.5px] break-all text-faint">{e.source}</span>
               </div>
               <p className="mt-1 break-words">{e.field}: <code className="font-mono text-xs text-ink">{e.value}</code></p>
               {e.raw && <details className="mt-1"><summary className="cursor-pointer text-xs text-signal">{e.check === 'matches' ? 'The record in Cloudflare’s answer' : 'Cloudflare’s answer the rule read'}</summary>

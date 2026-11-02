@@ -142,6 +142,8 @@ const ENFORCE = new Set(['block', 'managed_challenge', 'challenge', 'jschallenge
 const PASSIVE = new Set(['log', 'skip', 'allow', 'bypass', 'whitelist']);
 const act = (a: string) => a.toLowerCase().replace(/[\s-]/g, '_');
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+/** A label inside a sentence: the first letter lower-cased unless the word is an acronym ("Origin and DNS" → "origin and DNS", "API protection" stays). */
+const midSentence = (l: string) => (/^[A-Z]{2}/.test(l) ? l : l.charAt(0).toLowerCase() + l.slice(1));
 /** Rules whose finding a no-cost control (on every plan) closes. */
 const NO_COST = new Set(['bots.login_turnstile', 'access.admin_paths', 'waf.bot_fight', 'managed.leaked_credentials', 'tls.origin_pulls', 'dns.dnssec', 'email.spf', 'email.dmarc', 'email.caa', 'tls.always_https', 'tls.hsts']);
 
@@ -285,7 +287,7 @@ export function postureOf(r: AuditReport): Posture {
   const top = findings[0];
   const parts: string[] = [];
   parts.push(g ? `${name} rates ${g.grade} (${g.label}, ${score}/100).` : `${name} could not be graded: too few checks were read.`);
-  if (graded.length) parts.push(`${strong.length} of ${graded.length} graded areas are strong${weakest.length ? `; the weakest ${weakest.length === 1 ? 'is' : 'are'} ${weakest.slice(0, 3).map((a) => a.label.toLowerCase()).join(', ')}` : ''}.`);
+  if (graded.length) parts.push(`${strong.length} of ${graded.length} graded areas are strong${weakest.length ? `; the weakest ${weakest.length === 1 ? 'is' : 'are'} ${weakest.slice(0, 3).map((a) => midSentence(a.label)).join(', ')}` : ''}.`);
   if (top) parts.push(`The biggest risk: ${top.title.replace(/\.$/, '')} (${top.severity}${top.verdict === 'needs_validation' ? ', needs validation' : ''}).`);
   else parts.push('No findings in the checks that were read.');
   if (enforcement.events !== null && hours) {

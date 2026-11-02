@@ -142,6 +142,9 @@ function IdleCountdown({ expiresAt }: { expiresAt: number }) {
 
 /** Same answer as before (compared as JSON): keep the old object, so useMe() users do not re-render. */
 const same = (a: MeState, b: MeState) => JSON.stringify(a) === JSON.stringify(b);
+/** A zone-store read that failed at sign-in is tried again this many times, this far apart. */
+const ZONE_RETRIES = 3;
+const ZONE_RETRY_MS = 15_000;
 
 export function Shell({ initial, children }: { initial: MeState; children: ReactNode }) {
   const pathname = usePathname();
@@ -174,13 +177,25 @@ export function Shell({ initial, children }: { initial: MeState; children: React
 
   // Rendered without the live state (it was slow): ask for it now.
   useEffect(() => { if (initial.stale) void refresh(false); }, [initial.stale, refresh]);
-  // The zone list is what most pages start from: read it into the zone store as soon as the worker
-  // runs (at once when this server runs the jobs itself), so the Zone explorer, the zone panel and the
-  // zone pickers open with it. Once per tab and 10 minutes (the store keeps it); a failure is retried
-  // by the next page that asks.
+  // At sign-in (and on any page load), the Zone explorer's data goes into the zone store unless the
+  // store already has it (its saved copy for this person): the zone list and the console tags and
+  // owners, as soon as the worker runs (at once when this server runs the jobs itself). Every page,
+  // the zone panel and the zone pickers then open with it. A failed read is tried again
+  // ZONE_RETRIES times, ZONE_RETRY_MS apart; Refresh on the Zone explorer reads it all again.
   const workerUp = !me.worker || me.worker.online;
   useEffect(() => {
-    if (workerUp && me.permissions.includes('runs:read')) void useZoneStore.getState().loadList().catch(() => {});
+    if (!workerUp || !me.permissions.includes('runs:read')) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      const zs = useZoneStore.getState();
+      // Both answer from the store when it has them; only what is missing is read.
+      void Promise.all([zs.loadList(), zs.loadMeta('')]).then(() => {
+        if (useZoneStore.getState().matches['']?.error) throw new Error('tags not read');
+      }).catch(() => { if (++tries <= ZONE_RETRIES) timer = setTimeout(load, ZONE_RETRY_MS); });
+    };
+    load();
+    return () => clearTimeout(timer);
   }, [workerUp, me.permissions]);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
   const mobileMenu = useRef<HTMLElement>(null);
