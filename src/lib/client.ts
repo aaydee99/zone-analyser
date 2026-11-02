@@ -5,18 +5,30 @@ export class ApiError extends Error {
 }
 
 // ── Answers shared by every page of this browser tab ─────────────────────────
-// Heavy reads (Cloudflare data) are asked for once: a page that needs what another page already
-// read uses that answer, also while it is still being read. Refresh (`fresh`, or &fresh=1) reads
-// again; a change made through the API (POST, PUT, PATCH, DELETE) forgets what it can make stale
-// (WRITES), everything for a change not listed there. Live state (runs, approvals, the worker,
-// the vault) is never kept.
+// Lists that change only when someone edits them (the zone list, stored credentials, tags,
+// accounts, saved views) are asked for once: a page that needs what another page already read
+// uses that answer, also while it is still being read, for up to KEPT_MS. Refresh (`fresh`, or
+// &fresh=1) reads again; a change made through the API (POST, PUT, PATCH, DELETE) forgets what it
+// can make stale (WRITES), everything for a change not listed there.
+// Data that changes by the second (traffic, Cloudflare activity) is shared only while it is being
+// read: every page that opens later asks again. Live state (runs, approvals, the worker, the vault,
+// health, investigations) is never kept.
 const EXPLORER = /^\/api\/zone-explorer(\/|\?|$)/;
-const SHARED = [EXPLORER, /^\/api\/traffic(\/|\?|$)/, /^\/api\/cloudflare-audit(\/history)?(\?|$)/, /^\/api\/credentials\/options(\?|$)/, /^\/api\/zones(\?|$)/];
+const TAGS = /^\/api\/zones\/tags(\?|$)/;
+const VIEWS = /^\/api\/me\/views(\?|$)/;
+const SHARED = [
+  EXPLORER, TAGS, VIEWS, /^\/api\/cloudflare-audit\/history(\?|$)/, /^\/api\/credentials\/options(\?|$)/, /^\/api\/zones(\?|$)/,
+  /^\/api\/investigate\/zones\?(.*&)?accounts=1(&|$)/, /^\/api\/tools\/api-console(\?|$)/, /^\/api\/tools\/api-console\/accounts(\?|$)/,
+];
+/** Read again by every page that asks (shared only while a read is under way). */
+const LIVE = [/^\/api\/traffic(\/|\?|$)/, /^\/api\/cloudflare-audit(\?|$)/];
+/** A kept answer older than this is read again. */
+const KEPT_MS = 10 * 60_000;
 /** Changes that make only some kept answers stale (or none): the zone explorer list carries tags and owners. */
 const WRITES: [string, RegExp[]][] = [
-  ['/api/me', []], ['/api/runs', []], ['/api/reports', []], ['/api/presets', []], ['/api/compare/templates', []],
-  ['/api/monitors', []], ['/api/search/index', []], ['/api/tools/api-console/saved', []], ['/api/tools/worker-logs', []],
-  ['/api/zones/meta', [EXPLORER]], ['/api/zones/tags', [EXPLORER]],
+  ['/api/me/views', [VIEWS]], ['/api/me', []], ['/api/runs', []], ['/api/reports', []], ['/api/presets', []], ['/api/compare/templates', []],
+  ['/api/monitors', []], ['/api/search/index', []], ['/api/tools/api-console/saved', []], ['/api/tools/api-console/query', []], ['/api/tools/worker-logs', []],
+  ['/api/zones/meta', [EXPLORER, TAGS]], ['/api/zones/tags', [EXPLORER, TAGS]],
 ];
 const under = (path: string, prefix: string) => path.startsWith(prefix) && /^([/?]|$)/.test(path.slice(prefix.length));
 /** Called after a change is sent (POST, PUT, PATCH, DELETE), with its path: the stores forget what it can make stale. */
@@ -30,11 +42,13 @@ export function staleAfter(path: string): 'none' | 'explorer' | 'all' {
 function forgetFor(path: string) {
   for (const fn of writeListeners) { try { fn(path); } catch { /* a store's own problem */ } }
   const w = WRITES.find(([p]) => under(path, p));
-  if (!w) { kept.clear(); return; }
-  for (const key of [...kept.keys()]) if (w[1].some((r) => r.test(key))) kept.delete(key);
+  if (!w) { forgetShared(); return; }
+  for (const key of [...kept.keys()]) if (w[1].some((r) => r.test(key))) { kept.delete(key); keptAt.delete(key); }
 }
 const MAX_KEPT = 80;
 const kept = new Map<string, Promise<{ status: number; body: unknown }>>();
+/** When each kept answer was asked for. */
+const keptAt = new Map<string, number>();
 /** The path without what does not change the answer: `fresh` (read again) and `job` (which read a poll follows). */
 function keyOf(path: string) {
   const [p, q = ''] = path.split('?');
@@ -46,7 +60,7 @@ function keyOf(path: string) {
   return rest ? `${p}?${rest}` : p;
 }
 /** Forget every kept answer (after a change, or when the user asks for everything again). */
-export function forgetShared() { kept.clear(); }
+export function forgetShared() { kept.clear(); keptAt.clear(); }
 
 /** A request cancelled through its `signal`: not an error to show. */
 export const isAbort = (e: unknown) => (e as Error | null)?.name === 'AbortError';
@@ -60,9 +74,11 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   const { fresh, ...opts } = init;
   const method = (opts.method ?? 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') { forgetFor(path); return request<T>(path, opts); }
-  if (!SHARED.some((r) => r.test(path))) return request<T>(path, opts);
+  const live = LIVE.some((r) => r.test(path));
+  if (!live && !SHARED.some((r) => r.test(path))) return request<T>(path, opts);
   const key = keyOf(path);
   const again = fresh || /[?&]fresh=1(&|$)/.test(path);
+  if (Date.now() - (keptAt.get(key) ?? 0) > KEPT_MS) { kept.delete(key); keptAt.delete(key); }
   const hit = kept.get(key);
   if (hit && !again) {
     // A shared read that ends as "still reading" or an error: this caller asks itself.
@@ -72,10 +88,13 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   }
   const p = send(path, opts);
   // Kept only once it is a complete answer (200): "still reading" (202) and errors are asked again.
+  // Live data is not kept once it has arrived.
   const mine = p.then((r) => { if (r.status !== 200) throw new Error('not kept'); return r; });
-  mine.catch(() => { if (kept.get(key) === mine) kept.delete(key); });
+  const forget = () => { if (kept.get(key) === mine) { kept.delete(key); keptAt.delete(key); } };
+  if (live) mine.then(forget, forget); else mine.catch(forget);
   kept.set(key, mine);
-  if (kept.size > MAX_KEPT) kept.delete(kept.keys().next().value!);
+  keptAt.set(key, Date.now());
+  if (kept.size > MAX_KEPT) { const k = kept.keys().next().value!; kept.delete(k); keptAt.delete(k); }
   return (await p).body as T;
 }
 

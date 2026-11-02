@@ -11,6 +11,7 @@ import { Alert, Badge, Button, Card, Field, Loading, Modal, PageHeader, SectionH
 import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
 import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useMe } from '@/components/me';
+import { useUiState } from '@/lib/stores/ui-state';
 import { useToast } from '@/components/toast';
 import { ZoneCombobox, type ZoneChoice } from '@/components/zone-combobox';
 import { coverageLabel } from '../monitoring/use-run';
@@ -264,9 +265,10 @@ export default function LogpushPage() {
   const toast = useToast();
   const act = can('cloudflare:act');
   const direct = can('restore:approve');
-  const [status, setStatus] = useState<LogpushStatus | ''>('');
-  const [scope, setScope] = useState<'' | 'account' | 'zone'>('');
-  const [q, setQ] = useState('');
+  // The filters stay as they were when you come back to the page.
+  const [status, setStatus] = useUiState<LogpushStatus | ''>('logpush.status', '');
+  const [scope, setScope] = useUiState<'' | 'account' | 'zone'>('logpush.scope', '');
+  const [q, setQ] = useUiState('logpush.q', '');
   const term = useSettled(q.trim());
   const [data, setData] = useState<LogpushPage | null>(null);
   const [error, setError] = useState('');

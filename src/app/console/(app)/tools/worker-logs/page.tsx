@@ -10,6 +10,7 @@ import {
 } from '@/lib/worker-tail-types';
 import { Alert, Badge, Button, Card, Checkbox, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import { useUiState } from '@/lib/stores/ui-state';
 
 interface Account { id: string; name: string }
 interface Scripts { scripts: { name: string; modified: string | null }[]; from: 'stored' | 'live'; at: string | null }
@@ -72,17 +73,22 @@ function EventRow({ e }: { e: TailEntry }) {
   );
 }
 
+/** Stable starting values for the kept filters (none chosen). */
+const NO_STATUS: TailStatus[] = [];
+const NO_METHODS: string[] = [];
+
 export default function WorkerLogsPage() {
   const toast = useToast();
   const [accounts, setAccounts] = useState<Account[] | null>(null);
-  const [accountId, setAccountId] = useState('');
+  // The account, Worker and filters stay as they were when you come back to the page.
+  const [accountId, setAccountId] = useUiState('wl.account', '');
   const [scripts, setScripts] = useState<Scripts | null>(null);
   const [scriptsBusy, setScriptsBusy] = useState(false);
-  const [script, setScript] = useState('');
-  const [status, setStatus] = useState<TailStatus[]>([]);
-  const [methods, setMethods] = useState<string[]>([]);
-  const [search, setSearch] = useState('');
-  const [sampling, setSampling] = useState(1);
+  const [script, setScript] = useUiState('wl.script', '');
+  const [status, setStatus] = useUiState<TailStatus[]>('wl.status', NO_STATUS);
+  const [methods, setMethods] = useUiState<string[]>('wl.methods', NO_METHODS);
+  const [search, setSearch] = useUiState('wl.search', '');
+  const [sampling, setSampling] = useUiState('wl.sampling', 1);
   const [session, setSession] = useState<TailSessionView | null>(null);
   const [events, setEvents] = useState<TailEntry[]>([]);
   const [find, setFind] = useState('');
@@ -98,9 +104,9 @@ export default function WorkerLogsPage() {
       if (r.current && running(r.current)) {
         setSession(r.current); setAccountId(r.current.accountId); setScript(r.current.script);
         setStatus(r.current.filters.status); setMethods(r.current.filters.methods); setSearch(r.current.filters.search); setSampling(r.current.filters.sampling);
-      } else setAccountId((a) => a || r.accounts[0]?.id || '');
+      } else setAccountId((a) => (r.accounts.some((x) => x.id === a) ? a : r.accounts[0]?.id || ''));
     }).catch((e) => setError((e as Error).message));
-  }, []);
+  }, [setAccountId, setScript, setStatus, setMethods, setSearch, setSampling]);
 
   const loadScripts = useCallback(async (fresh = false) => {
     if (!accountId) return;
@@ -110,7 +116,7 @@ export default function WorkerLogsPage() {
       setScripts(r);
       setScript((s) => (r.scripts.some((x) => x.name === s) ? s : r.scripts[0]?.name ?? ''));
     } catch (e) { toast((e as Error).message, 'bad'); setScripts({ scripts: [], from: 'stored', at: null }); } finally { setScriptsBusy(false); }
-  }, [accountId, toast]);
+  }, [accountId, toast, setScript]);
   useEffect(() => { setScripts(null); void loadScripts(false); }, [loadScripts]);
 
   const poll = useCallback(async () => {

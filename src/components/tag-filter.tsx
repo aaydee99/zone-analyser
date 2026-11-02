@@ -9,19 +9,15 @@ import { cx } from './ui';
 
 // A zone tag and owner filter any page can drop in (the zone explorer, monitoring findings, the tags
 // page), and the small tag chips lists show. The page passes the filter to its API (?tags=&owner=),
-// which resolves it in the database. The known tags load once per tab, when the filter is first used.
+// which resolves it in the database. The known tags are read when the filter is first used and shared
+// by every page of the tab (lib/client.ts: kept until a tag changes, or for ten minutes).
 
 export interface TagCount { tag: string; count: number }
 export interface OwnerCount { owner: string; count: number }
 
-let known: Promise<{ tags: TagCount[]; owners: OwnerCount[] }> | null = null;
-
 /** The tags and owners in use (shared by every filter on the page); `fresh` reads them again. */
 export function knownTags(fresh = false) {
-  if (fresh || !known) {
-    known = api<{ tags: TagCount[]; owners: OwnerCount[] }>('/api/zones/tags').catch((e) => { known = null; throw e; });
-  }
-  return known;
+  return api<{ tags: TagCount[]; owners: OwnerCount[] }>('/api/zones/tags', { fresh });
 }
 
 export function useKnownTags(enabled = true) {

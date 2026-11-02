@@ -6,6 +6,7 @@ import { Copy, FileClock, Lock, RefreshCw } from 'lucide-react';
 import { api, copyText, fmtDate } from '@/lib/client';
 import { ACTIVITY, AREA_LABEL, CHANGE_AREA, describeChange, reportText, type ChangeArea, type ChangeReport } from '@/lib/audit-changes';
 import { Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, SkeletonStats, Stat, cx } from '@/components/ui';
+import { useUiState } from '@/lib/stores/ui-state';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 import { compactNum } from '@/lib/num';
@@ -27,8 +28,8 @@ export default function ChangesPage() {
   const toast = useToast();
   const { can } = useMe();
   const allowed = can('audit:read');
-  const [days, setDays] = useState(7);
-  const [area, setArea] = useState<ChangeArea | ''>('');
+  const [days, setDays] = useUiState('changes.days', 7);
+  const [area, setArea] = useUiState<ChangeArea | ''>('changes.area', '');
   const [report, setReport] = useState<ChangeReport | null>(null);
   const [loading, setLoading] = useState(false);
 

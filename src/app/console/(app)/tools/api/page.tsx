@@ -9,6 +9,7 @@ import type { QueryResult, SavedQuery } from '@/lib/api-console';
 import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { ZoneCombobox, type ZoneChoice } from '@/components/zone-combobox';
+import { useUiState } from '@/lib/stores/ui-state';
 
 interface Named { id: string; name: string }
 interface ZoneOpt { id: string; name: string; accountId: string; accountName: string }
@@ -50,15 +51,20 @@ const JsonNode = memo(function JsonNode({ name, value, depth, open }: { name?: s
 export default function ApiConsolePage() {
   const toast = useToast();
   const [creds, setCreds] = useState<Named[] | null>(null);
-  const [credentialId, setCredentialId] = useState('');
+  // The credential, account, zone and path stay as they were when you come back to the console.
+  const [credentialId, setCredentialId] = useUiState('api.credential', '');
   const [loaded, setLoaded] = useState<{ for: string; list: Named[] } | null>(null);
   const accounts = loaded?.for === credentialId ? loaded.list : null;
-  const [accountId, setAccountId] = useState('');
-  // The zone: one field to search and choose (the first zone of the account until one is chosen).
-  const [zone, setZone] = useState<ZoneChoice | null>(null);
+  const [accountId, setAccountId] = useUiState('api.account', '');
+  // The zone: one field to search and choose (the first zone of the account until one is chosen),
+  // kept with the credential and account it belongs to.
+  const zoneFor = `${credentialId}:${accountId}`;
+  const [picked, setPicked] = useUiState<{ for: string; zone: ZoneChoice | null } | null>('api.zone', null);
+  const zone = picked?.for === zoneFor ? picked.zone : null;
+  const setZone = (z: ZoneChoice | null) => setPicked({ for: zoneFor, zone: z });
   const [zoneTotal, setZoneTotal] = useState<number | null>(null);
   const zoneId = zone?.id ?? '';
-  const [path, setPath] = useState('/zones/{zone_id}/dns_records?per_page=100');
+  const [path, setPath] = useUiState('api.path', '/zones/{zone_id}/dns_records?per_page=100');
   const [result, setResult] = useState<QueryResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -69,9 +75,9 @@ export default function ApiConsolePage() {
   const [treeKey, setTreeKey] = useState(0);
 
   useEffect(() => {
-    api<{ credentials: Named[] }>('/api/tools/api-console').then((r) => { setCreds(r.credentials); setCredentialId((c) => c || r.credentials[0]?.id || ''); }).catch((e) => setError((e as Error).message));
+    api<{ credentials: Named[] }>('/api/tools/api-console').then((r) => { setCreds(r.credentials); setCredentialId((c) => (r.credentials.some((x) => x.id === c) ? c : r.credentials[0]?.id || '')); }).catch((e) => setError((e as Error).message));
     api<{ saved: SavedQuery[] }>('/api/tools/api-console/saved').then((r) => setSaved(r.saved)).catch((e) => { setSaved([]); setSavedError((e as Error).message); });
-  }, []);
+  }, [setCredentialId]);
   useEffect(() => {
     if (!credentialId) return;
     let live = true;
@@ -79,7 +85,7 @@ export default function ApiConsolePage() {
       .then((r) => { if (live) { setLoaded({ for: credentialId, list: r.accounts }); setAccountId((a) => (r.accounts.some((x) => x.id === a) ? a : r.accounts[0]?.id ?? '')); } })
       .catch((e) => { if (live) { setLoaded({ for: credentialId, list: [] }); toast((e as Error).message, 'bad'); } });
     return () => { live = false; };
-  }, [credentialId, toast]);
+  }, [credentialId, toast, setAccountId]);
   const searchZones = useCallback(async (q: string) => {
     const r = await api<{ zones: ZoneOpt[]; total: number }>(`/api/tools/api-console/zones?credentialId=${encodeURIComponent(credentialId)}&accountId=${encodeURIComponent(accountId)}&q=${encodeURIComponent(q)}&limit=50`);
     return { zones: r.zones.map((z) => ({ id: z.id, name: z.name })), total: r.total };
@@ -88,10 +94,11 @@ export default function ApiConsolePage() {
   useEffect(() => {
     if (!credentialId) return;
     let live = true;
-    searchZones('').then((r) => { if (live) { setZoneTotal(r.total); setZone((z) => (z && r.zones.some((x) => x.id === z.id) ? z : r.zones[0] ?? null)); } })
-      .catch(() => { if (live) { setZoneTotal(0); setZone(null); } });
+    const key = `${credentialId}:${accountId}`;
+    searchZones('').then((r) => { if (live) { setZoneTotal(r.total); setPicked((p) => (p?.for === key && p.zone ? p : { for: key, zone: r.zones[0] ?? null })); } })
+      .catch(() => { if (live) { setZoneTotal(0); setPicked({ for: key, zone: null }); } });
     return () => { live = false; };
-  }, [credentialId, searchZones]);
+  }, [credentialId, accountId, searchZones, setPicked]);
 
   const preview = useMemo(() => {
     try { return { path: checkPath(fillPath(path, { accountId, zoneId })), error: '' }; } catch (e) { return { path: '', error: e instanceof PathError ? e.message : String(e) }; }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { FileClock, Lock, ScrollText } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
 import { Badge, Button, ButtonLink, Card, EmptyState, Loading, PageHeader, SkeletonTable, cx } from '@/components/ui';
+import { useUiState } from '@/lib/stores/ui-state';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 
@@ -34,7 +35,7 @@ export default function AuditPage() {
   const toast = useToast();
   const { can } = useMe();
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [filter, setFilter] = useState('');
+  const [filter, setFilter] = useUiState('audit.filter', '');
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);

@@ -6,11 +6,12 @@ import { cached, useDataCache } from '@/lib/stores/data-cache';
 import type { Coverage } from '@/lib/monitor-types';
 
 /**
- * Loads `path` once and keeps what it got: the page stays as it is until someone presses Refresh
- * (`reload`), while the worker keeps checking in the background. `version` goes up with each load,
- * so the tables and findings below reload with it. The answer is kept in the data store
- * (stores/data-cache.ts): going back to the page, or switching tabs and sections, shows it at once
- * (read again when older than five minutes); Refresh reads again and keeps the new answer.
+ * Loads `path` when the page (or a filter) opens it and keeps what it got: the page stays as it is
+ * until someone presses Refresh (`reload`), while the worker keeps checking in the background.
+ * `version` goes up with each load, so the tables and findings below reload with it. The answer is
+ * kept in the data store (stores/data-cache.ts): going back to the page, or switching tabs and
+ * sections, shows the last answer at once while it is read again (Refresh spins until the new one
+ * is in), so what is shown is never older than the visit.
  */
 export function useSnapshot<T>(path: string) {
   const [data, setData] = useState<T | null>(() => cached<T>(path) ?? null);
@@ -29,10 +30,7 @@ export function useSnapshot<T>(path: string) {
     const hit = cached<T>(path);
     if (hit !== undefined) { setData(hit); setLoading(false); }
   }
-  useEffect(() => {
-    if (cached(path) !== undefined) return;
-    void reload();
-  }, [path, reload]);
+  useEffect(() => { void reload(); }, [path, reload]);
   return { data, error, loading, reload, version };
 }
 
