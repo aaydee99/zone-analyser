@@ -936,14 +936,31 @@ Run `supabase/migrations/0018_zone_health.sql` (after 0010–0012). It adds `zon
 
 This keeps a clean result from being mistaken for "everything was checked".
 
-**Report layout.** The summary (counts by severity and verdict, "N of M checks read") sits above five tabs. Tabs are keyboard accessible (arrow keys, Home/End). The selected tab is kept in the URL (`?tab=findings|actions|effectiveness|managed|coverage`) so a section can be linked; the default is Findings.
+**Report layout.** The summary (counts by severity and verdict, "N of M checks read") sits above six tabs. Tabs are keyboard accessible (arrow keys, Home/End). The selected tab is kept in the URL (`?tab=posture|findings|actions|effectiveness|managed|coverage`) so a section can be linked; the default is Posture.
+0. **Posture**: the plain-language answer to "how does this zone's security look" (below).
 1. **Findings**: every configuration finding, worst first, with severity, verdict and area filters. This includes the managed-rule findings and exceptions (`managed.exceptions`), followed by the findings from traffic.
 2. **Recommended Actions**: one ranked list, critical and high first, then by the requests the change would have stopped. It holds the traffic recommendations that change something, and the fix of every confirmed high or critical finding. Each item links to its finding and to the rule's traffic.
 3. **Effectiveness**: the per-rule table (custom, managed, OWASP, rate limiting, bot, DDoS and IP Access rules; filterable by kind). Hits are broken down by action, with the challenge solve rate, top paths, countries and networks, and the trend against the previous window. The details panel of each rule that lets traffic through adds **Traffic it let through** and the rule's recommendation.
 4. **Managed Ruleset**: each managed ruleset in turn — Cloudflare Managed, OWASP, Free, Exposed Credentials, Sensitive Data, HTTP DDoS. For each, its deployment state, scope, ruleset action, rule and category overrides, OWASP paranoia level and score threshold, events by action and the top rules firing (log-only rules marked). Then leaked-credentials status, the exceptions in order (scope, what they skip, whether they sit after the deploy rules, and the traffic each skipped, linked to Effectiveness), the managed findings, and the managed rows of Effectiveness. These are the same records as in Findings, not copies.
 5. **Coverage**: the coverage ledger and what was read.
 
-**Downloads:** `REPORT.md` (sections in the page's order), `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table, the managed rulesets or the coverage ledger.
+**Posture.** Built only from the report, so it costs no Cloudflare call and also works on audits stored before it existed (`src/lib/zone-audit/posture.ts`). Its shape comes from the Cloudflare security skills reviewed for it: the installed `cloudflare-security-analyst` skill (attack categories, playbooks, plan matrix, "what to monitor"), the community `cloudflare-security` hardening skill (traffic-light scorecard and one-line verdict), and waf-detector's posture rules ("not measured" is never shown as 0%). Their active parts — probing the WAF with attack payloads, changing settings — are left out: the audit stays read-only.
+- **Grade and verdict:** A–F and a score out of 100, with a paragraph naming the strong and weak areas, the biggest risk, and what the rules did to the traffic.
+- **Scorecard:** ten areas (web application firewall, rules in practice, bots, DDoS and rate limiting, admin and login protection, encryption, origin and DNS, cache and header trust, browser-side and edge, API). Each finding costs its area points by severity (critical 40, high 25, medium 10, low 3), half when it needs validation. Ratings: Strong ≥ 90, Fair ≥ 70, Weak ≥ 40, else At risk; a confirmed critical makes the area At risk, a confirmed high at most Weak. An area with less than half of its checks read is **Not graded** and left out of the grade.
+- **Grade:** the weighted mean of the graded areas (WAF and rules in practice ×3; bots, DDoS, admin, encryption, origin ×2; the rest ×1): A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 55, else F. A confirmed critical caps it at D, a confirmed high at C. The grade and score are stored in the audit's summary, so **Latest audit of each zone** has a Grade column and an account audit counts zones per grade. Audits made before this show "—".
+- **Enforcement in the traffic:** security events and the trend, the share blocked or challenged, the share of managed and custom matches only logged, the challenge solve rate, bot or malicious requests let through, and enabled rules with no match. A value that could not be read says "Not measured".
+- **Threat coverage:** injection and exploits, HTTP floods, credential stuffing, bots, exposed admin areas, API abuse, cache poisoning, origin exposure, subdomain takeover, eavesdropping, email spoofing and browser-side injection. Each is Covered, Partly covered, Gap or Not read from the checks that bear on it, with what is in place, the gaps (linked to the findings) and the playbook steps.
+- **Next steps** by urgency (Immediate: confirmed critical and high; Short term: high to validate, confirmed medium, traffic recommendations; Hardening: the rest), **cost of closing the gaps** (no-cost fixes on any plan, and plan upgrades only for open gaps), **what to monitor** after the changes, and the **assumptions and limits**.
+
+**Checks from the skills** (`src/lib/zone-audit/rules-skills.ts`):
+- `access.admin_paths`: an admin path (`/wp-admin`, `/admin`, `/administrator`, `/phpmyadmin` …; not `admin-ajax.php`) answered 2xx at least 20 times with no Cloudflare Access application and no blocking or challenging custom rule in front. Medium, needs validation.
+- `avail.login_rate_limit`: a login path with at least 100 requests that no enforcing rate limiting rule covers (only when the zone has some). Medium.
+- `bots.login_turnstile`: a host with login traffic and no Turnstile widget in the account for it. Low.
+- `traffic.credential_stuffing`: at least 30% of 200+ requests to a login path answered 401/422. Medium; high from 5,000 failures with no rate limit.
+- `traffic.api_enumeration`: one API endpoint read for 200+ distinct IDs (numbers, UUIDs, long hex) in 1,000+ requests. Medium; low when a rate limit covers it.
+- `cache.poisoning_headers`: pages are made cacheable while X-Forwarded-Host, X-Original-URL, X-Rewrite-URL, X-Forwarded-Scheme or X-Host still reach the origin. Low, medium on zone-wide rules.
+
+**Downloads:** `REPORT.md` (sections in the page's order, the posture after the summary), `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table, the managed rulesets or the coverage ledger.
 
 **Rule areas.**
 
@@ -982,13 +999,15 @@ This keeps a clean result from being mistaken for "everything was checked".
 
 **Permissions.** Viewing and starting an audit both need `runs:read` (every role), because an audit only reads. Starts are limited to 10 per user per 10 minutes, one running audit per zone, and at most 3 running at once per worker. Each start is written to the audit log as `zone_audit.started`, and each download as `zone_audit.downloaded`.
 
-**Cost of one audit.** About 47 Cloudflare API GETs:
+**Cost of one audit.** About 50 Cloudflare API GETs:
 - the zone and 20 settings;
 - 9 ruleset phases;
 - DNS records, DNSSEC, certificate packs, Universal SSL and authenticated origin pulls;
 - bot management, Page Shield, page rules, Worker routes and managed transforms;
 - IP Access rules (zone and account, at most 2,000 each), Zone Lockdown and User Agent rules;
-- leaked credentials, and the API Shield settings and endpoint count.
+- leaked credentials, and the API Shield settings and endpoint count;
+- request header transform rules;
+- the account's Access applications and Turnstile widgets (at most 1,000 each), kept 5 minutes so the zones of one account audit share one read.
 
 The traffic window adds about 28 GraphQL analytics queries for 7 days with the usual 3-day query span; 30 days, or plans with a 1-day span, take up to about 110 (at most 12 window parts per dataset). These use the shared analytics budget. On top of that come up to 40 public DNS lookups (DoH) for CNAME targets. All calls go through `cf-read.ts` and `investigate-gql.ts`, with the token from the zone's stored credential. There is no run that audits every zone, on purpose: 6,532 zones would be about 290,000 calls. Every page that lists stored audits reads only the database.
 
@@ -1005,9 +1024,11 @@ The traffic window adds about 28 GraphQL analytics queries for 7 days with the u
 | Config Settings Read | configuration rules |
 | Cache Settings Read | cache rules |
 | Origin Read | origin rules |
-| Transform Rules Read | response header rules |
+| Transform Rules Read | response header rules, request header rules (cache poisoning headers) |
 | Managed headers Read | managed transforms |
 | Firewall Services Read | zone IP Access rules, Zone Lockdown, User Agent Blocking |
+| Access: Apps and Policies Read | admin pages behind Access (without it, the check still runs on WAF rules and says Access was not read) |
+| Turnstile Sites Read | Turnstile on hosts with login traffic |
 | Account Firewall Access Rules Read | account-level IP Access rules |
 | Bot Management Read | bot rules |
 | Page Shield Read | Page Shield |

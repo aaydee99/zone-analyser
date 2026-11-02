@@ -3,6 +3,7 @@
 // target-neutral and every number comes from the report.
 
 import { actionItems } from './actions';
+import { RATING_LABEL, THREAT_LABEL, postureOf } from './posture';
 import { GROUP_LABEL, COVERAGE_LABEL, KIND_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditReport } from './types';
 import { compactNum } from '../num';
 
@@ -38,7 +39,7 @@ export function auditCsv(r: AuditReport, part: CsvPart): string {
 
 const md = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
-/** REPORT.md, in the page's order: summary, findings, recommended actions, effectiveness, managed ruleset, coverage ledger, method. */
+/** REPORT.md, in the page's order: summary, posture, findings, recommended actions, effectiveness, managed ruleset, coverage ledger, method. */
 export function auditMarkdown(r: AuditReport, brand: string): string {
   const s = r.summary;
   const L: string[] = [];
@@ -50,6 +51,29 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   L.push('| Severity | Findings |', '| --- | --- |', ...SEVERITIES.map((v) => `| ${SEVERITY_LABEL[v]} | ${s.bySeverity[v]} |`), '');
   L.push(`${s.byVerdict.confirmed} confirmed, ${s.byVerdict.needs_validation} need validation. Coverage: ${compactNum(s.rules)} rules — ${s.coverage.passed} passed, ${s.coverage.finding} with findings, ${s.coverage.not_applicable} not applicable, ${s.coverage.not_read} not read.`, '');
   if (s.coverage.not_read) L.push(`**${s.coverage.not_read} rules could not be checked** (see the coverage ledger): a clean result does not cover them.`, '');
+
+  const p = postureOf(r);
+  const share = (x: number | null) => (x === null ? 'not measured' : `${Math.round(x * 100)}%`);
+  L.push('## Posture', '', `**Grade: ${p.grade ?? '—'} (${p.label}${p.score === null ? '' : `, ${p.score}/100`})**`, '', p.verdict, '');
+  L.push('### Scorecard', '', '| Area | Rating | Score | Checks read | Worst finding |', '| --- | --- | --- | --- | --- |',
+    ...p.areas.filter((a) => a.rating !== 'not_applicable').map((a) => `| ${a.label} | ${RATING_LABEL[a.rating]} | ${a.score ?? '—'} | ${a.read} of ${a.applicable} | ${a.top ? md(`${SEVERITY_LABEL[a.top.severity]}: ${a.top.title}`) : '—'} |`), '');
+  const en = p.enforcement;
+  L.push('### Enforcement in the traffic', '', `- Security events: ${en.events === null ? 'not read' : compactNum(en.events)}`, `- Blocked or challenged (of decided events): ${share(en.enforcedShare)}`,
+    `- Managed and custom rule matches only logged: ${share(en.logOnlyShare)}${en.logOnlyShare === 0 ? ' (no log-only evidence — not proof that every rule enforces)' : ''}`,
+    `- Challenge solve rate: ${share(en.solveRate)}`, `- Bot or malicious requests let through: ${en.badLetThrough === null ? 'not measured' : compactNum(en.badLetThrough)}`,
+    `- Enabled rules with no match in the window: ${en.silent === null ? 'not read' : `${en.silent} of ${en.configured}`}`, '');
+  L.push('### Threat coverage', '', '| Threat | Status | In place | Gaps |', '| --- | --- | --- | --- |',
+    ...p.threats.filter((t) => t.status !== 'not_applicable').map((t) => `| ${t.label} | ${THREAT_LABEL[t.status]} | ${md(t.controls.join('; ') || '—')} | ${md(t.gaps.map((x) => x.title).join('; ') || '—')} |`), '');
+  for (const t of p.threats.filter((t) => t.playbook.length)) L.push(`- **${t.label}:** ${t.playbook.join(' ')}`);
+  if (p.threats.some((t) => t.playbook.length)) L.push('');
+  const steps = (title: string, list: typeof p.steps.immediate) => { if (list.length) L.push(`### ${title}`, '', ...list.map((x, i) => `${i + 1}. **${x.title}**${x.severity ? ` (${x.severity})` : ''}${x.detail ? ` — ${x.detail}` : ''}`), ''); };
+  steps('Immediate', p.steps.immediate);
+  steps('Short term', p.steps.shortTerm);
+  steps('Hardening', p.steps.hardening);
+  if (p.steps.more) L.push(`${p.steps.more} more in the findings below.`, '');
+  if (p.noCost.length) L.push('### No-cost fixes (any plan)', '', ...p.noCost.map((x) => `- ${x.title}`), '');
+  if (p.upgrades.length) L.push('### Plan upgrades that would close a gap', '', ...p.upgrades.map((u) => `- **${u.feature}** (${u.plan}): ${u.why}`), '');
+  L.push('### What to monitor', '', ...p.monitor.map((x) => `- ${x}`), '', '### Assumptions and limits', '', ...p.limits.map((x) => `- ${x}`), '');
 
   L.push('## Findings', '');
   if (!r.findings.length) L.push('No findings in the rules that were read.', '');

@@ -18,7 +18,7 @@ import {
 import { whole } from '@/lib/num';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-export type AuditTab = 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';
+export type AuditTab = 'posture' | 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';
 /** Opens a finding (Findings tab) or an Effectiveness row by its fingerprint or rule key. */
 export const AuditNav = createContext<{ finding: (fingerprint: string) => void; effect: (key: string) => void }>({ finding: () => {}, effect: () => {} });
 export const findingId = (fp: string) => `f-${fp.replace(/[^A-Za-z0-9_-]/g, '_')}`;

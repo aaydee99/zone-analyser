@@ -39,7 +39,7 @@ async function launch(z: Zone, hours: number, by: string | null) {
   const timer = setTimeout(() => stop.abort(new Error('The audit took longer than 10 minutes and was stopped')), RUN_LIMIT_MS);
   timer.unref?.();
   const done = auditZone({ token: z.token, zoneId: z.zoneId, zoneName: z.zoneName, accountId: z.accountId, accountName: z.accountName, hours, signal: stop.signal })
-    .then(async (report) => { await finishAudit(row.id, { report }); return report.summary.worst; })
+    .then(async (report) => { await finishAudit(row.id, { report }); return report.summary; })
     .catch(async (err) => { await finishAudit(row.id, { error: stop.signal.aborted ? String((stop.signal.reason as Error)?.message ?? 'Stopped') : err instanceof Error ? err.message : String(err) }).catch(() => {}); throw err; })
     .finally(() => { clearTimeout(timer); running.delete(row.id); });
   return { row, done };
@@ -72,7 +72,7 @@ export async function startAccountAudit(accountId: string, hours: number, by: st
   const accountToken = await tokenForAccount(accountId).catch(() => '');
   const b: Batch = {
     id: randomUUID(), accountId, accountName: zones[0].accountName || accountId, hours, startedBy: by, startedAt: new Date().toISOString(), finishedAt: null,
-    state: 'running', total: zones.length, ready: 0, failed: 0, skipped: 0, worst: {}, problems: [],
+    state: 'running', total: zones.length, ready: 0, failed: 0, skipped: 0, worst: {}, grades: {}, problems: [],
     queue: zones.map((z) => ({ id: z.id, name: z.name })), active: new Set(), stop: false,
   };
   g.__accountAudit = b;
@@ -107,10 +107,12 @@ async function drive(b: Batch, accountToken: string) {
     try {
       const token = accountToken || (await tokenForZone(z.id)).token;
       const { done } = await launch({ zoneId: z.id, zoneName: z.name, accountId: b.accountId, accountName: b.accountName, token }, b.hours, b.startedBy);
-      const worst = await done;
+      const summary = await done;
       b.ready++;
-      const key = (worst ?? 'none') as Severity | 'none';
+      const key = (summary.worst ?? 'none') as Severity | 'none';
       b.worst[key] = (b.worst[key] ?? 0) + 1;
+      const grade = summary.grade ?? 'none';
+      b.grades![grade] = (b.grades![grade] ?? 0) + 1;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof HttpError && err.status === 409) problem(b, z, 'skipped', msg);

@@ -5,6 +5,7 @@ import { actionItems } from '@/lib/zone-audit/actions';
 import { CF_MANAGED, DDOS_L7, riskyLabel, runRules } from '@/lib/zone-audit/rules';
 import { isBroad, isBroadPattern, literalPaths, norm, onlyClientFields, sensitivePaths } from '@/lib/zone-audit/expr';
 import { auditCsv, auditMarkdown, findingsJson } from '@/lib/zone-audit/render';
+import { postureOf } from '@/lib/zone-audit/posture';
 import { MASK, SOURCES, redact, type EventData, type Got, type RequestData, type Snapshot, type SourceKey, type Severity, type Verdict } from '@/lib/zone-audit/types';
 
 // Every audit rule against a clean snapshot (all pass) and a failing one, with the verdict and
@@ -27,7 +28,7 @@ function snap(edit: (r: Record<string, unknown>) => void = () => {}, plan = 'bus
     'setting:security_level': { value: 'medium' }, 'setting:browser_check': { value: 'on' }, 'setting:development_mode': { value: 'off' }, 'setting:true_client_ip_header': { value: 'off' }, 'setting:cache_level': { value: 'aggressive' },
     'setting:0rtt': { value: 'off' }, 'setting:opportunistic_encryption': { value: 'on' }, 'setting:email_obfuscation': { value: 'on' }, 'setting:hotlink_protection': { value: 'on' },
     'setting:server_side_exclude': { value: 'on' }, 'setting:challenge_ttl': { value: 1800 }, 'setting:websockets': { value: 'off' }, 'setting:ip_geolocation': { value: 'on' }, 'setting:ssl_automatic_mode': { value: 'custom' },
-    'phase:http_response_firewall_managed': [], 'phase:http_config_settings': [],
+    'phase:http_response_firewall_managed': [], 'phase:http_config_settings': [], 'phase:http_request_late_transform': [], access_apps: [], turnstile_widgets: [],
     access_rules: [], account_access_rules: [], lockdowns: [], ua_rules: [], universal_ssl: { enabled: true }, leaked_credentials: { enabled: true },
     schema_validation: { validation_default_mitigation_action: 'none' }, api_operations: { total: 0 },
     'phase:http_request_firewall_custom': [],
@@ -572,7 +573,32 @@ test('recommended actions: traffic recommendations and fixes of confirmed high f
 test('REPORT.md follows the page order', () => {
   const md = auditMarkdown(report(snap()), 'Castellan');
   const at = (h: string) => md.indexOf(h);
-  const order = ['## Summary', '## Findings', '## Recommended actions', '## Effectiveness', '## Managed ruleset', '## Coverage ledger', '## Method'].map(at);
+  const order = ['## Summary', '## Posture', '## Findings', '## Recommended actions', '## Effectiveness', '## Managed ruleset', '## Coverage ledger', '## Method'].map(at);
   assert.ok(order.every((x, i) => x > 0 && (!i || x > order[i - 1])), JSON.stringify(order));
   assert.ok(auditCsv(report(snap()), 'managed').startsWith('ruleset,id,state'));
+});
+
+test('posture: the clean zone rates A; findings lower the area, and a confirmed high caps the grade at C', () => {
+  const clean = report(snap());
+  const p0 = postureOf(clean);
+  assert.equal(p0.grade, 'A');
+  assert.equal(clean.summary.grade, 'A', 'the grade is stored in the summary');
+  assert.ok(p0.areas.filter((a) => a.rating !== 'not_applicable').every((a) => a.rating === 'strong'), JSON.stringify(p0.areas.map((a) => [a.id, a.rating])));
+  assert.ok(p0.threats.filter((t) => t.status !== 'not_applicable').every((t) => t.status === 'covered'), JSON.stringify(p0.threats.map((t) => [t.id, t.status])));
+  assert.equal(p0.enforcement.enforcedShare, 1);
+  assert.equal(p0.enforcement.logOnlyShare, 0);
+  assert.match(p0.verdict, /^example\.test rates A \(Strong, 100\/100\)/);
+
+  const stuffing = { host: 'example.test', path: '/signin', status: 401, count: 6000 };
+  const r = report(snap((x) => { setting('ssl', 'flexible')(x); x.requests = rqData({ paths: [{ host: 'example.test', path: '/', status: 200, count: 5000 }, stuffing, { ...stuffing, status: 200, count: 1000 }] }); }));
+  const p = postureOf(r);
+  assert.ok(p.score !== null && p.score <= 79 && p.grade && 'CDF'.includes(p.grade), `${p.grade} ${p.score}`);
+  assert.equal(p.areas.find((a) => a.id === 'transport')!.rating, 'weak');
+  assert.ok(p.areas.find((a) => a.id === 'traffic')!.score! < 100);
+  const cs = p.threats.find((t) => t.id === 'credential_stuffing')!;
+  assert.ok(cs.status === 'partial' || cs.status === 'gap', cs.status);
+  assert.ok(cs.playbook.length > 0);
+  assert.ok(p.steps.immediate.some((s) => s.fingerprint === 'zone:z1:tls.ssl_mode'), 'the confirmed high is immediate');
+  assert.ok(p.monitor.some((m) => /401\/422/.test(m)));
+  assert.match(p.verdict, /The biggest risk/);
 });

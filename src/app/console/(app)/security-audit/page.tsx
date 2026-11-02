@@ -23,6 +23,14 @@ interface ListView { audits: AuditListItem[]; total: number; offset: number; lim
 interface HistoryView { audits: AuditListItem[]; generatedAt: string }
 type Sort = 'worst' | 'newest' | 'name';
 
+const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F', 'none'];
+/** The posture grade of an audit ("—": made before grades existed, or nothing could be graded). */
+function Grade({ g, score }: { g?: string | null; score?: number | null }) {
+  if (!g) return <span className="text-faint" title="Not graded">—</span>;
+  const tone = g === 'A' || g === 'B' ? 'text-ok border-ok/40' : g === 'C' ? 'text-warn border-warn/40' : 'text-bad border-bad/40';
+  return <span className={cx('inline-flex min-w-6 justify-center rounded-md border px-1.5 py-0.5 text-[12px] font-semibold tabular-nums', tone)} title={score === null || score === undefined ? `Grade ${g}` : `Grade ${g} · ${score}/100`}>{g}</span>;
+}
+
 const PAGE = 50;
 /** Account audits run two zones at a time, each about a minute: the estimate shown before starting. */
 const ZONES_PER_MINUTE = 2;
@@ -92,6 +100,7 @@ function AccountProgress({ view, onChange, onDone }: { view: AccountAuditView; o
             <span>Worst finding per zone:</span>
             {SEVERITIES.filter((v) => view.worst[v]).map((v) => <span key={v} className="inline-flex items-center gap-1"><SeverityBadge s={v} /><span className="tabular-nums text-ink-2">{compactNum(view.worst[v]!)}</span></span>)}
             {!!view.worst.none && <span className="tabular-nums">No findings: {compactNum(view.worst.none)}</span>}
+            {Object.keys(view.grades ?? {}).length > 0 && <span className="inline-flex flex-wrap items-center gap-2">Grades:{GRADE_ORDER.filter((g) => view.grades?.[g]).map((g) => <span key={g} className="inline-flex items-center gap-1"><Grade g={g === 'none' ? null : g} /><span className="tabular-nums text-ink-2">{compactNum(view.grades![g]!)}</span></span>)}</span>}
           </div>
         )}
         {view.problems.length > 0 && (
@@ -120,6 +129,7 @@ function AuditTable({ audits, showZone }: { audits: AuditListItem[]; showZone: b
             {showZone && <th scope="col" className="px-5 py-2.5 font-medium">Zone</th>}
             <th scope="col" className="px-5 py-2.5 font-medium">Started</th>
             <th scope="col" className="px-3 py-2.5 font-medium">State</th>
+            <th scope="col" className="px-3 py-2.5 font-medium">Grade</th>
             <th scope="col" className="px-3 py-2.5 font-medium">Findings</th>
             <th scope="col" className="px-5 py-2.5 font-medium">Not read</th>
           </tr>
@@ -134,6 +144,7 @@ function AuditTable({ audits, showZone }: { audits: AuditListItem[]; showZone: b
                 {a.startedBy && <div className="text-xs text-faint">{a.startedBy}</div>}
               </td>
               <td className="px-3 py-2.5 align-top"><AuditState status={a.status} /></td>
+              <td className="px-3 py-2.5 align-top"><Grade g={a.summary?.grade} score={a.summary?.score} /></td>
               <td className="px-3 py-2.5 align-top">{a.summary ? <SeverityCounts s={a.summary} /> : <span className="text-faint">—</span>}</td>
               <td className="px-5 py-2.5 align-top tabular-nums">{a.summary ? <span className={cx(a.summary.coverage.not_read ? 'text-warn' : 'text-muted')}>{a.summary.coverage.not_read} of {a.summary.rules} rules</span> : ''}</td>
             </tr>

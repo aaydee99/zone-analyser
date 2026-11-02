@@ -551,10 +551,10 @@ const AVAILABILITY: RuleDef[] = [
 
 // ── Cache poisoning and deception ───────────────────────────────────────────
 
-interface CachePolicy { where: string; source: string; text: string; overrides: boolean; armored: boolean; resource: string }
+export interface CachePolicy { where: string; source: string; text: string; overrides: boolean; armored: boolean; resource: string }
 
 /** Cache rules and page rules that make responses cacheable beyond static files. */
-function cachingPolicies(c: Ctx): CachePolicy[] {
+export function cachingPolicies(c: Ctx): CachePolicy[] {
   const out: CachePolicy[] = [];
   for (const r of optRules(c, 'http_request_cache_settings') ?? []) {
     if (!active(r) || r.action !== 'set_cache_settings' || ap(r).cache !== true) continue;

@@ -61,10 +61,10 @@ export interface CoverageEntry {
   permission?: string;
 }
 
-export type RuleGroup = 'transport' | 'origin' | 'email' | 'managed' | 'waf' | 'bypass' | 'bots' | 'availability' | 'cache' | 'host' | 'client' | 'api' | 'edge' | 'traffic';
+export type RuleGroup = 'transport' | 'origin' | 'email' | 'managed' | 'waf' | 'bypass' | 'bots' | 'access' | 'availability' | 'cache' | 'host' | 'client' | 'api' | 'edge' | 'traffic';
 export const GROUP_LABEL: Record<RuleGroup, string> = {
   transport: 'Transport and session', origin: 'Origin exposure and reachability', email: 'Email spoofing and certificate issuance',
-  managed: 'Managed rules', waf: 'WAF and application rules', bypass: 'Rules that switch security off', bots: 'Bots', api: 'API protection', availability: 'Availability', cache: 'Cache poisoning and deception', host: 'Host and forwarded-header trust',
+  managed: 'Managed rules', waf: 'WAF and application rules', bypass: 'Rules that switch security off', bots: 'Bots', access: 'Admin and login protection', api: 'API protection', availability: 'Availability', cache: 'Cache poisoning and deception', host: 'Host and forwarded-header trust',
   client: 'Client-side protections', edge: 'Edge runtime boundary', traffic: 'Rule effectiveness (traffic)',
 };
 
@@ -79,6 +79,9 @@ export interface AuditSummary {
   calls: number;
   lookups: number;
   error?: string;
+  /** The posture grade (A–F) and score (0–100) — posture.ts; absent in audits made before it, or when no area could be graded. */
+  grade?: string | null;
+  score?: number | null;
 }
 
 export interface AuditZone { id: string; name: string; accountId: string; accountName: string; plan: string; type: string; status: string }
@@ -190,6 +193,8 @@ export interface AccountAuditView {
   skipped: number;
   /** Audited zones by their worst finding ('none': nothing found). */
   worst: Partial<Record<Severity | 'none', number>>;
+  /** Audited zones by posture grade ('none': not graded). */
+  grades?: Partial<Record<string, number>>;
   problems: { zoneId: string; zoneName: string; kind: 'failed' | 'skipped'; reason: string }[];
 }
 
@@ -213,12 +218,14 @@ export type AuditSetting = (typeof AUDIT_SETTINGS)[number];
 export const AUDIT_PHASES = [
   'http_request_firewall_custom', 'http_request_firewall_managed', 'http_ratelimit', 'ddos_l7',
   'http_request_cache_settings', 'http_request_origin', 'http_response_headers_transform', 'http_response_firewall_managed', 'http_config_settings',
+  'http_request_late_transform',
 ] as const;
 export type AuditPhase = (typeof AUDIT_PHASES)[number];
 
 export type SourceKey = 'zone' | `setting:${AuditSetting}` | `phase:${AuditPhase}` | 'dns' | 'dnssec' | 'certificates' | 'aop' | 'bot' | 'page_shield'
   | 'page_rules' | 'worker_routes' | 'managed_headers' | 'cname_lookups' | 'events' | 'events_previous' | 'requests'
-  | 'access_rules' | 'account_access_rules' | 'lockdowns' | 'ua_rules' | 'universal_ssl' | 'leaked_credentials' | 'schema_validation' | 'api_operations';
+  | 'access_rules' | 'account_access_rules' | 'lockdowns' | 'ua_rules' | 'universal_ssl' | 'leaked_credentials' | 'schema_validation' | 'api_operations'
+  | 'access_apps' | 'turnstile_widgets';
 
 /** Each source: what it is, where it is read and the token permission that reads it (Cloudflare's names). */
 export const SOURCES: Record<SourceKey, { label: string; path: string; permission: string }> = {
@@ -233,6 +240,9 @@ export const SOURCES: Record<SourceKey, { label: string; path: string; permissio
   'phase:http_response_headers_transform': { label: 'Response header transform rules', path: 'GET /zones/{id}/rulesets/phases/http_response_headers_transform/entrypoint', permission: 'Transform Rules Read' },
   'phase:http_response_firewall_managed': { label: 'Managed rules on responses (sensitive data detection)', path: 'GET /zones/{id}/rulesets/phases/http_response_firewall_managed/entrypoint', permission: 'Zone WAF Read' },
   'phase:http_config_settings': { label: 'Configuration rules', path: 'GET /zones/{id}/rulesets/phases/http_config_settings/entrypoint', permission: 'Config Settings Read' },
+  'phase:http_request_late_transform': { label: 'Request header transform rules', path: 'GET /zones/{id}/rulesets/phases/http_request_late_transform/entrypoint', permission: 'Transform Rules Read' },
+  access_apps: { label: 'Cloudflare Access applications (account)', path: 'GET /accounts/{account}/access/apps', permission: 'Access: Apps and Policies Read' },
+  turnstile_widgets: { label: 'Turnstile widgets (account)', path: 'GET /accounts/{account}/challenges/widgets', permission: 'Turnstile Sites Read' },
   access_rules: { label: 'IP Access rules (zone)', path: 'GET /zones/{id}/firewall/access_rules/rules', permission: 'Firewall Services Read' },
   account_access_rules: { label: 'IP Access rules (account, apply to every zone)', path: 'GET /accounts/{account}/firewall/access_rules/rules', permission: 'Account Firewall Access Rules Read' },
   lockdowns: { label: 'Zone Lockdown rules (legacy)', path: 'GET /zones/{id}/firewall/lockdowns', permission: 'Firewall Services Read' },
@@ -272,6 +282,10 @@ export interface BotConfig {
 export interface AccessRule { id: string; mode?: string; paused?: boolean; notes?: string; configuration?: { target?: string; value?: string }; scope?: { type?: string } }
 /** A legacy Zone Lockdown or User Agent Blocking rule. */
 export interface LegacyRule { id: string; paused?: boolean; description?: string; mode?: string; urls?: string[] }
+/** A Cloudflare Access application: the hostnames (and paths) it puts a login in front of. */
+export interface AccessApp { id: string; name?: string; type?: string; domain?: string; self_hosted_domains?: string[]; destinations?: { type?: string; uri?: string }[] }
+/** A Turnstile widget: the hostnames it is allowed on. */
+export interface TurnstileWidget { sitekey: string; name?: string; domains?: string[]; mode?: string }
 /** RCODE per CNAME target (0 resolves, 3 NXDOMAIN, 2 SERVFAIL), and how many targets were not looked up (cap). */
 export interface CnameLookups { answers: Record<string, number>; skipped: number }
 

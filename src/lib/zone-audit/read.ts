@@ -3,6 +3,7 @@ import { ReadError, cfGet, cfList, cfReason, inParallel, mask, ok, refused, type
 import { Lookups, dohEnabled } from '../doh';
 import { inZone, takeoverService } from '../dns-hygiene';
 import { J, errorText, gql, isLimit, isPermission, offered, zoneLimits, type Limits } from '../investigate-gql';
+import { cached } from '../cache';
 import { buildReport } from './report';
 import {
   AUDIT_PHASES, AUDIT_SETTINGS,
@@ -20,6 +21,10 @@ const PARALLEL = 6;
 export const CNAME_LOOKUPS = 40;
 /** IP Access rules read per scope at most. */
 export const ACCESS_MAX = 2_000;
+/** Access applications and Turnstile widgets read per account at most. */
+export const ACCOUNT_LIST_MAX = 1_000;
+/** Account-level reads are shared by the zones of one account audit for this long (errors for 30 seconds). */
+const ACCOUNT_READ_TTL = 5 * 60_000;
 /** Parts of the traffic window per dataset (each part is one plan maxDuration, usually 1–3 days). */
 export const MAX_PARTS = 12;
 
@@ -93,7 +98,7 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
     ['ua_rules', `${base}/firewall/ua_rules`, { perPage: 100, max: 500 }],
     ...(accountId ? [['account_access_rules', `/accounts/${encodeURIComponent(accountId)}/firewall/access_rules/rules`, { perPage: 1_000, max: ACCESS_MAX }] as [SourceKey, string, { perPage: number; max: number }]] : []),
   ];
-  if (!accountId) reads.account_access_rules = { state: 'error', status: 0, reason: 'The zone\'s account is not known' };
+  if (!accountId) reads.account_access_rules = reads.access_apps = reads.turnstile_widgets = { state: 'error', status: 0, reason: 'The zone\'s account is not known' };
   await inParallel(lists, 4, async ([key, path, o]) => {
     try {
       // cfList counts its own pages; one call per page is close enough for the total (pages are rare here).
@@ -101,6 +106,24 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
       reads[key] = { state: 'ok', value: mask(await cfList(token, path, { ...o, signal })) };
     } catch (err) { signal?.throwIfAborted(); reads[key] = fromError(err); }
   });
+
+  // Account-level lists (Access applications, Turnstile widgets): the same for every zone of the
+  // account, so an account audit reads them once per few minutes instead of once per zone.
+  if (accountId) {
+    const acct = `/accounts/${encodeURIComponent(accountId)}`;
+    const shared: [SourceKey, string, { perPage: number; max: number }][] = [
+      ['access_apps', `${acct}/access/apps`, { perPage: 0, max: ACCOUNT_LIST_MAX }],
+      ['turnstile_widgets', `${acct}/challenges/widgets`, { perPage: 100, max: ACCOUNT_LIST_MAX }],
+    ];
+    await inParallel(shared, 2, async ([key, path, o]) => {
+      try {
+        reads[key] = await cached<Got<unknown>>(`zone-audit:account:${accountId}:${key}`, (g) => (g.state === 'error' ? 30_000 : ACCOUNT_READ_TTL), async () => {
+          calls++;
+          try { return { state: 'ok', value: mask(await cfList(token, path, { ...o, signal })) }; } catch (err) { signal?.throwIfAborted(); return fromError(err); }
+        });
+      } catch (err) { signal?.throwIfAborted(); reads[key] = fromError(err); }
+    });
+  }
 
   // Public DNS answers for CNAME targets outside the zone (takeover-prone first), at most CNAME_LOOKUPS.
   let lookups = 0;

@@ -11,15 +11,16 @@ import { useSnapshot } from '../../monitoring/use-run';
 import {
   AuditNav, AuditState, Coverage, EffectivenessTable, Findings, ManagedOverviewCard, Method, RecommendedActions, Summary, effectId, findingId, type AuditTab,
 } from '../audit-view';
+import { PostureView } from '../posture-view';
 
 interface View { audit: AuditView & { hours: number; error: string | null }; generatedAt: string }
 
 /** Asked again every 3 seconds only while the audit runs; once it is finished, only Refresh reads it. */
 const POLL_MS = 3_000;
 
-/** The report's sections, in order; the fifth holds the coverage ledger and what was read. */
+/** The report's sections, in order: the posture summary first; the last holds the coverage ledger and what was read. */
 const TABS: { id: AuditTab; label: string }[] = [
-  { id: 'findings', label: 'Findings' }, { id: 'actions', label: 'Recommended Actions' }, { id: 'effectiveness', label: 'Effectiveness' },
+  { id: 'posture', label: 'Posture' }, { id: 'findings', label: 'Findings' }, { id: 'actions', label: 'Recommended Actions' }, { id: 'effectiveness', label: 'Effectiveness' },
   { id: 'managed', label: 'Managed Ruleset' }, { id: 'coverage', label: 'Coverage' },
 ];
 const isTab = (v: string | null): v is AuditTab => TABS.some((t) => t.id === v);
@@ -38,8 +39,8 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
     return () => clearTimeout(t);
   }, [runningNow, reload, data]);
 
-  // The tab lives in the URL (?tab=…), so a section can be linked; Findings by default.
-  const [tab, setTabState] = useState<AuditTab>('findings');
+  // The tab lives in the URL (?tab=…), so a section can be linked; Posture by default.
+  const [tab, setTabState] = useState<AuditTab>('posture');
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
     if (isTab(t)) queueMicrotask(() => setTabState(t));
@@ -109,6 +110,7 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
             ))}
           </div>
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="space-y-6 rounded-[var(--radius-card)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+            {tab === 'posture' && <PostureView r={r} />}
             {tab === 'findings' && <>
               <Findings findings={configFindings} title="Configuration findings" description="Every configuration finding, worst first — managed rules and their exceptions included. Open one for its evidence, the fix and how to validate it." />
               <Findings findings={trafficFindings} title="Findings from traffic" description="What the security events of the window show. Each finding's rule is broken down in Effectiveness." />
