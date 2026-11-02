@@ -7,7 +7,9 @@ import { J, errorText, gql, isLimit, isPermission, tokenCache, zoneLimits, type 
 import { rankZones, zonesOf } from './investigate-scope';
 import { WAF_WINDOWS, type WafReport, type WafSuspect, type WafZoneResult } from './investigate-types';
 import { MANAGED_RULESETS } from './traffic-types';
-import { MIN_EVENTS, PASSIVE_ACTIONS, draftException, scoreRule, type RuleStats } from './waf-fp-score';
+import { MIN_EVENTS, PASSIVE_ACTIONS, actionsOf, currentActionOf, draftException, fixesOf, scoreRule, type RuleStats } from './waf-fp-score';
+import { readManaged } from './traffic-security';
+import { actionLabel, deployOfManaged, tuningOf } from './waf-labels';
 import type { ZoneListItem } from './zone-catalog';
 import { rulesetNames } from './zone-explorer';
 
@@ -17,7 +19,8 @@ import { rulesetNames } from './zone-explorer';
 // answered 2xx/3xx (httpRequestsAdaptiveGroups). waf-fp-score.ts turns that into a score with its
 // reasons and a draft exception, which the user copies into the dashboard: nothing is written.
 // A zone costs one query per part of the window (the plan's maxDuration, usually 3 days) and one
-// more per part for the paths, plus its limits (kept six hours); its result is kept 30 minutes.
+// more per part for the paths, plus its limits (kept six hours), and one read of its managed rules
+// entrypoint (how each managed ruleset is deployed); its result is kept 30 minutes.
 // An account is read a page of zones at a time (busiest first when their traffic is cached).
 
 const TTL = 30 * 60_000;
@@ -152,6 +155,8 @@ async function readZone(z: ZoneListItem, token: string, hours: number, progress:
   for (const r of rows('paths')) stoppedOn.set(`${r.dims.clientRequestHTTPHost}${r.dims.clientRequestPath}`, (stoppedOn.get(`${r.dims.clientRequestHTTPHost}${r.dims.clientRequestPath}`) ?? 0) + r.count);
 
   const names: Record<string, string> = { ...MANAGED_RULESETS, ...(await rulesetNames(z.id).catch(() => ({}))) };
+  // How the managed rulesets are deployed (read-only; nothing when the token cannot read them).
+  const deployed = first.some((x) => x.s.source === 'firewallManaged') ? (await readManaged(token, z.id, names).catch(() => ({ list: [] }))).list : [];
   const suspects = first.map(({ s }): WafSuspect => {
     const top = s.paths[0] ?? { host: '', path: '/', count: 0 };
     const st = statusOf.get(`${top.host}${top.path}`);
@@ -160,11 +165,19 @@ async function readZone(z: ZoneListItem, token: string, hours: number, progress:
     const sc = scoreRule(s, okShare);
     const rulesetName = names[s.rulesetId];
     const common = { ruleId: s.ruleId, rulesetId: s.rulesetId, source: s.source, description: s.description, ...(rulesetName ? { rulesetName } : {}), host: top.host, path: top.path, pathShare: sc.pathShare };
+    const dep = s.source === 'firewallManaged' ? deployed.find((d) => d.rulesetId === s.rulesetId && d.enabled) ?? deployed.find((d) => d.rulesetId === s.rulesetId) : undefined;
+    const own = dep?.ruleOverrides.find((x) => x.id === s.ruleId);
+    const ruleOverride = own ? [own.enabled === false ? 'off' : own.enabled ? 'on' : '', own.action ? `action ${actionLabel(own.action)}` : '', own.scoreThreshold !== undefined ? `threshold ${own.scoreThreshold}` : ''].filter(Boolean).join(' · ') : '';
+    const deploy = dep ? { ...tuningOf(deployOfManaged(dep), names), ...(ruleOverride ? { ruleOverride } : {}) } : undefined;
+    const draft = draftException(common, s.paths.map((p) => p.path));
+    const currentAction = currentActionOf(s.actions);
     return {
       zoneId: z.id, zoneName: z.name, ...common,
       mitigated: sc.mitigated, challenged: sc.challenged, solved: sc.solved, blocked: sc.blocked,
       ips: s.ips.length, asns: s.asns.length, residentialShare: sc.residentialShare, browserShare: sc.browserShare, okShare,
-      score: sc.score, signals: sc.signals, draft: draftException(common, s.paths.map((p) => p.path)),
+      score: sc.score, signals: sc.signals, draft,
+      actions: actionsOf(s.actions), currentAction, ...(deploy ? { deploy } : {}),
+      fixes: fixesOf({ ...common, currentAction, draft, deploy }),
     };
   }).sort((a, b) => b.score - a.score || b.mitigated - a.mitigated);
   const events = rows('rules').reduce((n, r) => n + r.count, 0);

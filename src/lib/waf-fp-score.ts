@@ -5,8 +5,10 @@
 // or takes points and says why, so the score can be checked by hand. It is a heuristic: it ranks
 // what to look at first; it does not prove a false positive.
 
-import type { WafSignal, WafSuspect } from './investigate-types';
+import type { WafFix, WafSignal, WafSuspect } from './investigate-types';
 import { compactNum } from './num';
+import { OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
+import { OWASP_DEFAULT_THRESHOLD, actionLabel, sourceLabel, thresholdLabel } from './waf-labels';
 
 /** "managed_challenge", "managedChallenge" and "managedchallenge" are the same action. */
 export const normAction = (a: string) => a.toLowerCase().replace(/[_\s-]/g, '');
@@ -150,4 +152,114 @@ export function draftException(s: Pick<WafSuspect, 'ruleId' | 'rulesetId' | 'sou
     phase: '', where: `No skip exists for this source (${s.source}): adjust the feature itself in the dashboard`,
     expression, action: 'none', actionParameters: {}, notes: src === 'l7ddos' ? ['HTTP DDoS rules are tuned with an override of the HTTP DDoS attack protection ruleset (sensitivity or action), not skipped.'] : notes,
   };
+}
+
+// ── What the rule does, and how to stop the false positive ──────────────────
+
+/** What the rule did to these requests, by action, most first. */
+export const actionsOf = (actions: Record<string, number>) =>
+  Object.entries(actions).filter(([, n]) => n > 0).map(([action, count]) => ({ action, count })).sort((a, b) => b.count - a.count);
+
+/** The rule's main action on these requests (challenges people solved are not an action of their own). */
+export function currentActionOf(actions: Record<string, number>): string {
+  const acting = actionsOf(actions).filter((x) => !isSolved(x.action) && !PASSIVE_ACTIONS.includes(normAction(x.action)));
+  return acting[0]?.action ?? actionsOf(actions)[0]?.action ?? '';
+}
+
+type FixInput = Pick<WafSuspect, 'ruleId' | 'rulesetId' | 'source' | 'description' | 'rulesetName' | 'host' | 'path' | 'currentAction' | 'draft' | 'deploy'>;
+
+/** Ways to stop the false positive, the narrowest first: what to change, where, and what else it affects. */
+export function fixesOf(s: FixInput): WafFix[] {
+  const src = s.source.toLowerCase();
+  const d = s.draft;
+  const where = `${s.host}${s.path}`;
+  const rule = s.description ? `“${s.description}”` : `rule ${s.ruleId}`;
+  const blocks = isBlock(s.currentAction);
+  const fixes: WafFix[] = [];
+  const exception = (title: string, why: string): WafFix => ({
+    title, best: true, why,
+    steps: [d.where, `Expression: ${d.expression}`, ...(d.action === 'skip' ? [`Action: Skip — ${JSON.stringify(d.actionParameters)}`] : [])],
+  });
+  const toChallenge = (steps: string[]): WafFix => ({
+    title: `Change the action from ${actionLabel(s.currentAction)} to Managed challenge`,
+    why: 'Real visitors pass a managed challenge without noticing; most attack tools do not. Applies everywhere the rule matches, not only this path.',
+    steps,
+  });
+
+  if (src === 'firewallmanaged' && s.rulesetId) {
+    const rs = s.rulesetName ?? 'the managed ruleset';
+    const configure = `Security › WAF › Managed rules › ${rs} › Configure`;
+    if (s.rulesetId === OWASP_RULESET) {
+      const o = s.deploy?.owasp;
+      fixes.push(exception(`Add an exception: skip ${s.ruleId === OWASP_ANOMALY_RULE ? 'OWASP scoring' : rule} on ${where}`, s.ruleId === OWASP_ANOMALY_RULE
+        ? '949110 is OWASP’s score rule: it acts once the OWASP rules that matched add up to the threshold. Skipping it turns OWASP blocking off on this path only. Narrower still: skip just the OWASP rules that scored these requests (open one of the events in Security › Events to see them).'
+        : 'Only requests the expression matches stop meeting this OWASP rule; everything else stays protected.'));
+      const threshold = o?.threshold ?? OWASP_DEFAULT_THRESHOLD;
+      if (threshold < 60) fixes.push({ title: `Lower OWASP’s sensitivity: anomaly score threshold ${thresholdLabel(threshold)} → ${thresholdLabel(60)}`,
+        why: 'More OWASP rules must match before it acts, so ordinary requests that trip one or two rules get through. Applies to the whole zone.',
+        steps: [configure, `Anomaly Score Threshold: ${thresholdLabel(60)}`, 'Save'] });
+      if (o && o.paranoia > 1) fixes.push({ title: `Lower the paranoia level: PL${o.paranoia} → PL${o.paranoia - 1}`,
+        why: 'Higher paranoia levels add rules that also match ordinary traffic. Applies to the whole zone.',
+        steps: [configure, `Paranoia Level: PL${o.paranoia - 1}`, 'Save'] });
+      const owaspAction = o?.action ?? 'block';
+      if (isBlock(owaspAction)) fixes.push({ title: `Change the OWASP action from ${actionLabel(owaspAction)} to Managed challenge`,
+        why: 'Visitors OWASP flags by mistake can still get in; most attack tools cannot. Applies to the whole zone.',
+        steps: [configure, 'OWASP Action: Managed Challenge', 'Save'] });
+      return fixes;
+    }
+    fixes.push(exception(`Add an exception: skip ${rule} on ${where}`, `Only requests the expression matches stop meeting this one rule; every other rule of ${rs} keeps checking them.`));
+    const browse = [`${configure} › Browse rules`, `Search for ${s.ruleId}${s.description ? ` (${s.description})` : ''}`];
+    if (blocks) fixes.push(toChallenge([...browse, 'Action: Managed Challenge (or Log while you check what it matches)', 'Save']));
+    fixes.push({ title: 'Turn this rule off', why: 'Last resort, only if the rule protects something your site does not run (for example a WordPress rule on a site that is not WordPress). Applies to the whole zone.',
+      steps: [...browse, 'Status: Disabled', 'Save'] });
+    return fixes;
+  }
+  if (src === 'firewallcustom') {
+    fixes.push(exception('Exclude this traffic in the rule’s own expression', 'A custom rule is yours: leave the legitimate requests out of it rather than adding a skip rule.'));
+    if (blocks) fixes.push(toChallenge([`Security › WAF › Custom rules › edit ${rule}`, 'Then take action: Managed Challenge', 'Save']));
+    return fixes;
+  }
+  if (src === 'ratelimit') {
+    const edit = `Security › WAF › Rate limiting rules › edit ${rule}`;
+    fixes.push(exception(`Leave ${where} out of the rule`, 'Requests to this path stop counting toward the limit; the rule keeps working everywhere else.'));
+    fixes.push({ title: 'Raise the rate', why: 'Look at how many requests the busiest real clients make first, then set the limit above that.', steps: [edit, 'When rate exceeds: a higher number of requests for the same period', 'Save'] });
+    fixes.push({ title: 'Count per visitor, not per IP', why: 'People behind one company or mobile network share an IP and are counted together.', steps: [edit, 'With the same characteristics: add a session cookie or header (Enterprise plans)', 'Save'] });
+    if (blocks) fixes.push(toChallenge([edit, 'Then take action: Managed Challenge', 'Save']));
+    return fixes;
+  }
+  if (src === 'botfight') {
+    fixes.push({ title: 'Turn Bot Fight Mode off, or move to Super Bot Fight Mode', best: true,
+      why: 'Bot Fight Mode cannot be skipped for a path. Super Bot Fight Mode (Pro plans and above) can, with an exception.', steps: ['Security › Bots', 'Bot Fight Mode: Off'] });
+    return fixes;
+  }
+  if (src === 'superbotfight' || src === 'botmanagement') {
+    fixes.push(exception(`Add an exception: skip bot protection on ${where}`, 'Only requests the expression matches skip Super Bot Fight Mode.'));
+    fixes.push({ title: 'Challenge “Definitely automated” traffic instead of blocking it', why: 'Real visitors misjudged as bots can still get in. Applies to the whole zone.',
+      steps: ['Security › Bots › Configure Super Bot Fight Mode', 'Definitely automated: Managed Challenge', 'Save'] });
+    return fixes;
+  }
+  if (src === 'l7ddos' || src === 'l7ddos-managed') {
+    fixes.push({ title: 'Lower this DDoS rule’s sensitivity', best: true,
+      why: 'HTTP DDoS rules are tuned, not skipped. A lower sensitivity needs more traffic before the rule acts.',
+      steps: ['Security › DDoS › HTTP DDoS attack protection › Deploy a DDoS override', `Override rule ${s.ruleId}${s.description ? ` (${s.description})` : ''}`, 'Sensitivity level: Low (or Action: Log while you check)', 'Save'] });
+    return fixes;
+  }
+  if (['ip', 'iprange', 'asn', 'country'].includes(src)) {
+    fixes.push({ title: 'Change the IP access rule', best: true, why: 'An IP access rule matches the client (IP, network or country), not the request: change or remove the rule itself.',
+      steps: ['Security › WAF › Tools › IP Access Rules', 'Find the rule that matches these clients', 'Delete it, or change its action to Managed Challenge'] });
+    return fixes;
+  }
+  if (src === 'securitylevel') {
+    fixes.push(exception(`Add an exception: skip Security Level on ${where}`, 'Only requests the expression matches skip the IP reputation check.'));
+    fixes.push({ title: 'Lower the Security Level', why: 'Fewer visitors with a poor IP reputation are challenged. Applies to the whole zone.', steps: ['Security › Settings', 'Security Level: Low (or Essentially off)', 'Save'] });
+    return fixes;
+  }
+  if (src === 'bic') {
+    fixes.push(exception(`Add an exception: skip Browser Integrity Check on ${where}`, 'Only requests the expression matches skip the check.'));
+    fixes.push({ title: 'Fix the client', why: 'Browser Integrity Check stops requests with missing or unusual headers — usually scripts and API clients, not browsers.', steps: ['Have the client send a normal User-Agent and Accept headers'] });
+    return fixes;
+  }
+  if (d.action === 'skip') fixes.push(exception(`Add an exception: skip ${sourceLabel(s.source)} on ${where}`, 'Only requests the expression matches skip this feature.'));
+  else fixes.push({ title: `Adjust ${sourceLabel(s.source)}`, best: true, why: d.where, steps: d.notes });
+  return fixes;
 }

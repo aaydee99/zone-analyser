@@ -5,6 +5,8 @@ import { isValidElement, useEffect, useMemo, useState, type ReactNode } from 're
 import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { ZoneGroupReport, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
+import { MANAGED_RULESETS } from '@/lib/traffic-types';
+import { deployOf, tuningLines, tuningOf } from '@/lib/waf-labels';
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
 import { Alert, Badge, Button, ButtonLink, Card, Loading, Skeleton, SkeletonStats, SkeletonText, Stat, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -99,6 +101,28 @@ function Scope({ s, zone }: { s: RuleScope; zone: string }) {
 }
 
 /** A section's rule pages (as the dashboard lists them): each phase's rules in order. */
+/** A rule that runs a ruleset: its name (with the rule's own description, if any), its settings, and what it changes. */
+function rulesetCells(r: Record<string, unknown>, names: Record<string, string>): { name: ReactNode; action: ReactNode; detail: ReactNode } | null {
+  const d = deployOf(r);
+  if (!d) return null;
+  const t = tuningOf(d, names);
+  const own = text(r.description);
+  return {
+    name: <span><span className="font-medium text-ink">{t.name}</span>{own && own !== t.name && <span className="block text-[11px] text-muted">{own}</span>}</span>,
+    action: (
+      <dl className="space-y-0.5 text-[12px]">
+        {tuningLines(t).map(([k, v]) => <div key={k}><dt className="inline text-muted">{k}: </dt><dd className="inline text-ink-2">{v}</dd></div>)}
+      </dl>
+    ),
+    detail: (
+      <span className="text-[12px]">
+        Runs {t.name}.
+        {t.overrides.length ? <ul className="mt-0.5 list-disc pl-4">{t.overrides.map((o) => <li key={o}>{o}</li>)}</ul> : <span className="block text-muted">No rule or category changed.</span>}
+      </span>
+    ),
+  };
+}
+
 function RulePages({ pages, names, find, zone }: { pages: ZoneRulePhase[]; names: Record<string, string>; find: string; zone: string }) {
   const q = find.trim().toLowerCase();
   const hit = (p: ZoneRulePhase, r: Record<string, unknown>) => !q || p.label.toLowerCase().includes(q) || JSON.stringify(r).toLowerCase().includes(q);
@@ -121,7 +145,10 @@ function RulePages({ pages, names, find, zone }: { pages: ZoneRulePhase[]; names
               {p.status === 'ok' ? (
                 <>
                   <Table head={['#', 'Name', 'Applies to', 'Match (expression)', 'Action', 'What it does', 'Enabled']}
-                    rows={rules.map((r) => [p.rules.indexOf(r) + 1, r.description || r.ref || r.id, <Scope key="s" s={ruleScope(r.expression)} zone={zone} />, r.expression, r.action, actionDetail(r, names), r.enabled !== false])} />
+                    rows={rules.map((r) => {
+                      const rs = rulesetCells(r, names);
+                      return [p.rules.indexOf(r) + 1, rs?.name ?? (r.description || r.ref || r.id), <Scope key="s" s={ruleScope(r.expression)} zone={zone} />, r.expression, rs?.action ?? r.action, rs?.detail ?? actionDetail(r, names), r.enabled !== false];
+                    })} />
                   <p className="mt-1.5 text-xs text-faint">Ruleset {p.rulesetId}{p.version ? ` · version ${p.version}` : ''}{p.lastUpdated ? ` · updated ${fmtDate(p.lastUpdated)}` : ''}</p>
                 </>
               ) : (
@@ -306,7 +333,8 @@ export function ZoneView({ zoneId, onPickTag, onMetaSaved, explorerLink = false 
   const loaded = useMemo(() => (summary?.sections ?? []).map((x) => parts[x.key]?.data).filter((x): x is ZoneGroupReport => !!x), [summary, parts]);
   const allSections = useMemo(() => loaded.flatMap((p) => p.sections), [loaded]);
   const allRules = useMemo(() => loaded.flatMap((p) => p.rules), [loaded]);
-  const names = useMemo(() => Object.assign({}, ...loaded.map((p) => p.rulesetNames)) as Record<string, string>, [loaded]);
+  // Cloudflare's managed rulesets are named even when the zone's ruleset list is not readable.
+  const names = useMemo(() => Object.assign({ ...MANAGED_RULESETS }, ...loaded.map((p) => p.rulesetNames)) as Record<string, string>, [loaded]);
   const sections = useMemo(() => {
     const s = find.trim().toLowerCase();
     return s ? allSections.filter((x) => x.label.toLowerCase().includes(s) || x.path.includes(s) || JSON.stringify(x.data ?? '').toLowerCase().includes(s)) : allSections;

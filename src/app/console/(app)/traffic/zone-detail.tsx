@@ -7,6 +7,7 @@ import { CACHED_STATUSES, MANAGED_RULESETS, MITIGATING_ACTIONS, OWASP_ANOMALY_RU
 import { Alert, Badge, Button, Card, Loading, Modal, SectionHeader, Skeleton, SkeletonChart, SkeletonTable, cx } from '@/components/ui';
 import { bytes, dayLabel, num, pct, whole } from './format';
 import { compactNum } from '@/lib/num';
+import { actionLabel, sourceLabel } from '@/lib/waf-labels';
 
 // One zone's (or account's) security events and requests (see src/lib/traffic-security.ts). Any card, bar, IP,
 // rule or ruleset opens the details window, narrowed to it; days open per hour, hours per minute.
@@ -16,26 +17,6 @@ export interface Target { month: string; account: string; zone?: string }
 
 // ── Labels ──────────────────────────────────────────────────────────────────
 
-const SOURCE: Record<string, string> = {
-  firewallManaged: 'Managed rules', firewallCustom: 'Custom rules', firewallRules: 'Firewall rules (legacy)', ratelimit: 'Rate limiting rules',
-  waf: 'WAF (legacy managed rules)', l7ddos: 'HTTP DDoS protection', bic: 'Browser integrity check', hot: 'Hotlink protection',
-  securitylevel: 'Security level', uablock: 'User agent blocking', zonelockdown: 'Zone lockdown', ip: 'IP access rules', iprange: 'IP access rules',
-  asn: 'IP access rules (ASN)', country: 'IP access rules (country)', botFight: 'Bot fight mode', botManagement: 'Bot management',
-  superBotFight: 'Super bot fight mode', validation: 'Request validation', apiShield: 'API Shield', apiShieldSchemaValidation: 'API Shield schema validation',
-  apiShieldTokenValidation: 'API Shield JWT validation', apiShieldSequenceMitigation: 'API Shield sequence mitigation', dlp: 'Data loss prevention',
-  sanitycheck: 'Sanity check', firewallrules: 'Firewall rules (legacy)', 'l7ddos-managed': 'HTTP DDoS protection', linkMaze: 'AI Labyrinth',
-};
-const sourceLabel = (s: string) => SOURCE[s] ?? (s || 'Unknown');
-
-const ACTION_LABEL: Record<string, string> = {
-  block: 'Block', drop: 'Drop', challenge: 'Interactive challenge', jschallenge: 'JS challenge', managed_challenge: 'Managed challenge',
-  challenge_solved: 'Challenge solved', challenge_failed: 'Challenge failed', challenge_bypassed: 'Challenge bypassed', jschallenge_solved: 'JS challenge solved',
-  jschallenge_failed: 'JS challenge failed', jschallenge_bypassed: 'JS challenge bypassed', managed_challenge_skipped: 'Managed challenge skipped',
-  managed_challenge_non_interactive_solved: 'Managed challenge solved', managed_challenge_interactive_solved: 'Managed challenge solved (interactive)',
-  managed_challenge_bypassed: 'Managed challenge bypassed', log: 'Log', allow: 'Allow', bypass: 'Bypass', skip: 'Skip', connection_close: 'Close connection',
-  rewrite: 'Rewrite', redirect: 'Redirect', unknown: 'Unknown',
-};
-const actionLabel = (a: string) => ACTION_LABEL[a] ?? (a || 'Unknown');
 function actionTone(a: string): 'bad' | 'warn' | 'info' | 'ok' | 'neutral' {
   if (/^(block|drop|connection_close)$/.test(a) || /failed/.test(a)) return 'bad';
   if (/challenge/.test(a) && !/solved|bypassed|skipped/.test(a)) return 'warn';

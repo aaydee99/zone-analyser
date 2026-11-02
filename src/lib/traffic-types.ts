@@ -130,6 +130,8 @@ export interface ManagedDeployment {
   expression: string;
   /** Action for all its rules, when overridden. */
   action?: string;
+  /** Every rule on (true) or off (false), when overridden (the dashboard's Ruleset status). */
+  rulesEnabled?: boolean;
   /** OWASP only: the highest paranoia level turned on (PL1 when not overridden). */
   paranoiaLevel?: number;
   /** OWASP only: the anomaly score threshold (60 low, 40 medium, 25 high) and the action when it is exceeded. */

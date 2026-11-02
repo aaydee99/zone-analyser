@@ -7,6 +7,7 @@ import type { DatasetDetail, DetailFilter, DetailRow, DetailZone, FirewallEvent,
 import { CACHED_STATUSES as CACHED, DETAIL_VIEWS, MANAGED_RULESETS, MITIGATING_ACTIONS as THREAT_ACTIONS, OWASP_ANOMALY_RULE, OWASP_RULESET, SECURITY_VIEWS } from './traffic-types';
 import { credentialForRun } from './vault';
 import { rulesetNames } from './zone-explorer';
+import { paranoiaOf } from './waf-labels';
 
 // Zone detail for traffic analytics: one zone's security events (which WAF / managed / custom /
 // rate-limiting rules matched, what they did, which IPs, paths, countries …) and its requests (top
@@ -376,7 +377,7 @@ interface ExecuteRule {
 }
 
 /** GET (read-only) the zone's managed-rules entrypoint: which managed rulesets run, where, and how they are tuned. */
-async function readManaged(token: string, zoneId: string, names: Record<string, string>): Promise<{ list: ManagedDeployment[]; note?: string }> {
+export async function readManaged(token: string, zoneId: string, names: Record<string, string>): Promise<{ list: ManagedDeployment[]; note?: string }> {
   let res: Response;
   try {
     res = await fetch(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}/rulesets/phases/http_request_firewall_managed/entrypoint`,
@@ -396,11 +397,11 @@ async function readManaged(token: string, zoneId: string, names: Record<string, 
     const rules = (o.rules ?? []).filter((x) => x.id).map((x) => ({ id: x.id!, ...(x.enabled !== undefined ? { enabled: x.enabled } : {}), ...(x.action ? { action: x.action } : {}), ...(x.score_threshold !== undefined ? { scoreThreshold: x.score_threshold } : {}) }));
     const d: ManagedDeployment = {
       rulesetId: id, name: names[id] ?? MANAGED_RULESETS[id] ?? id, ...(r.description ? { description: r.description } : {}),
-      enabled: r.enabled !== false, expression: r.expression ?? 'true', ...(o.action ? { action: o.action } : {}), categoryOverrides: categories, ruleOverrides: rules,
+      enabled: r.enabled !== false, expression: r.expression ?? 'true', ...(o.action ? { action: o.action } : {}), ...(typeof o.enabled === 'boolean' ? { rulesEnabled: o.enabled } : {}), categoryOverrides: categories, ruleOverrides: rules,
     };
     if (id === OWASP_RULESET) {
-      // The highest paranoia level whose category is turned on (PL1 is always on).
-      d.paranoiaLevel = [4, 3, 2].find((n) => categories.some((c) => c.category === `paranoia-level-${n}` && c.enabled === true)) ?? 1;
+      // Below the lowest paranoia-level category turned off, else the highest turned on, else PL1 (the default).
+      d.paranoiaLevel = paranoiaOf(categories).level;
       const anomaly = rules.find((x) => x.id === OWASP_ANOMALY_RULE);
       if (anomaly?.scoreThreshold !== undefined) d.scoreThreshold = anomaly.scoreThreshold;
       d.anomalyAction = anomaly?.action ?? o.action ?? 'block';

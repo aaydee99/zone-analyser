@@ -1,6 +1,7 @@
 // Zone explorer formatting shared by the page and the download endpoints (no Node imports):
 // what a rule's action does, the JSON download and the CSV rows.
 import { ZONE_GROUPS, type ZoneReport } from './zone-catalog';
+import { deployOf, tuningLines, tuningOf } from './waf-labels';
 
 export const text = (v: unknown): string => (v === null || v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
 export const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -71,10 +72,14 @@ export function actionDetail(r: Record<string, unknown>, names: Record<string, s
       if (p.origin) parts.push(`origin ${[p.origin.host, p.origin.port].filter(Boolean).join(':')}`);
       if (p.sni) parts.push(`SNI ${text(p.sni.value)}`);
       break;
-    case 'execute':
-      parts.push(`runs ${(p.id && names[p.id]) || p.id || 'a ruleset'}`);
-      if (p.overrides) parts.push(`overrides: ${text(p.overrides)}`);
+    case 'execute': {
+      // The ruleset by name, with its tuning as the dashboard shows it (Ruleset action and status; OWASP's threshold, paranoia level and action).
+      const d = deployOf(r);
+      if (!d) { parts.push('runs a ruleset'); break; }
+      const t = tuningOf(d, names);
+      parts.push(`runs ${t.name}`, ...tuningLines(t).map(([k, v]) => `${k}: ${v}`), ...t.overrides);
       break;
+    }
     case 'skip':
       if (p.ruleset) parts.push(`skips the rest of this ruleset`);
       if (p.phases) parts.push(`skips phases ${p.phases.join(', ')}`);

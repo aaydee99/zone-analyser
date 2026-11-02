@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Copy, ShieldQuestion } from 'lucide-react';
 import { copyText } from '@/lib/client';
 import { WAF_WINDOWS, type WafReport, type WafSuspect } from '@/lib/investigate-types';
+import { actionLabel, sourceLabel, tuningLines } from '@/lib/waf-labels';
 import { Alert, Badge, Button, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { Code, RefreshBar, Reading, ZonePicker, useAccounts, useJob, whole, type PickedZone } from '../shared';
@@ -28,13 +29,49 @@ function Suspect({ s }: { s: WafSuspect }) {
           </div>
           <p className="mt-1 text-[12.5px] text-muted">
             {s.zoneName} · <span className="font-mono">{s.host}{s.path}</span> ({pct(s.pathShare)} of its mitigations)
-            {s.rulesetName ? ` · ${s.rulesetName}` : ''}{s.ruleId ? <> · rule <span className="font-mono">{s.ruleId}</span></> : null}
+            {s.rulesetName ? ` · ${s.rulesetName}` : ''}
           </p>
         </div>
         <div className="grid grid-cols-3 gap-x-5 gap-y-1 text-right text-[12px] sm:grid-cols-6">
           {([['Mitigated', whole.format(s.mitigated)], ['Blocked', whole.format(s.blocked)], ['Challenged', whole.format(s.challenged)], ['Solved', whole.format(s.solved)], ['IPs', whole.format(s.ips)], ['Path OK', pct(s.okShare)]] as const).map(([k, v]) => (
             <div key={k}><div className="text-faint">{k}</div><div className="font-mono tabular-nums text-ink">{v}</div></div>
           ))}
+        </div>
+      </div>
+      <div className="grid gap-5 border-b border-line px-5 py-4 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">The rule</h3>
+          <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px]">
+            {([
+              ['Rule', s.description || 'Unnamed rule'],
+              ['Rule ID', s.ruleId ? <span className="font-mono text-[12px] break-all">{s.ruleId}</span> : '—'],
+              ['Ruleset', s.rulesetName ?? (s.rulesetId ? <span className="font-mono text-[12px] break-all">{s.rulesetId}</span> : '—')],
+              ['Kind', sourceLabel(s.source)],
+              ['Current action', <span key="a"><span className="font-medium text-ink">{actionLabel(s.currentAction)}</span>
+                <span className="block text-[12px] text-muted">on these requests: {s.actions.map((a) => `${actionLabel(a.action)} ${whole.format(a.count)}`).join(' · ')}</span></span>],
+              ...(s.deploy ? tuningLines(s.deploy).map(([k, v]) => [k, v] as [string, ReactNode]) : []),
+              ...(s.deploy?.ruleOverride ? [['This rule’s override', s.deploy.ruleOverride] as [string, ReactNode]] : []),
+              ['Mostly on', <span key="p" className="font-mono text-[12px] break-all">{s.host}{s.path}</span>],
+            ] as [string, ReactNode][]).map(([k, v]) => (
+              <div key={k} className="contents"><dt className="text-muted">{k}</dt><dd className="min-w-0 break-words text-ink-2">{v}</dd></div>
+            ))}
+          </dl>
+        </div>
+        <div>
+          <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">How to fix it</h3>
+          <p className="mb-2 text-[12px] text-muted">First check the matches are legitimate: Security › Events, filtered by rule ID {s.ruleId || '(this rule)'}{s.path ? ` and path ${s.path}` : ''}.</p>
+          <ol className="space-y-3 text-[13px]">
+            {s.fixes.map((f, i) => (
+              <li key={f.title} className="flex gap-2">
+                <span className="w-5 shrink-0 text-right font-mono text-faint tabular-nums">{i + 1}.</span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-ink">{f.title}</span>{f.best && <Badge tone="ok">narrowest — try first</Badge>}</div>
+                  <p className="text-[12px] text-muted">{f.why}</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5 text-[12px] break-words text-ink-2">{f.steps.map((t) => <li key={t}>{t}</li>)}</ul>
+                </div>
+              </li>
+            ))}
+          </ol>
         </div>
       </div>
       <div className="grid gap-5 px-5 py-4 lg:grid-cols-2">

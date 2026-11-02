@@ -2,6 +2,7 @@
 // shapes the API answers with. Shared by server and client — no Node imports.
 
 import type { CfChange } from './cf-audit-report';
+import type { DeployTuning } from './waf-labels';
 
 /** A read still running in the background (see bg-job.ts): ask again with `job` to get its result. */
 export interface InvestigatePending { pending: true; job: string; done: number; total: number; startedAt: string; note?: string }
@@ -79,7 +80,17 @@ export interface WafSuspect {
   score: number; signals: WafSignal[];
   /** The exception to paste into the dashboard (never sent by the console). */
   draft: { phase: string; where: string; expression: string; action: string; actionParameters: Record<string, unknown>; notes: string[] };
+  /** What the rule did to these requests, by action, most first. */
+  actions: { action: string; count: number }[];
+  /** Its main action on these requests. */
+  currentAction: string;
+  /** Managed rules: how the ruleset is deployed on the zone (Ruleset action and status; OWASP's threshold, paranoia level and action), and this rule's own override. */
+  deploy?: DeployTuning & { ruleOverride?: string };
+  /** Ways to stop the false positive, the narrowest first. */
+  fixes: WafFix[];
 }
+/** One way to stop a false positive: what to change, why, and the steps in the dashboard. */
+export interface WafFix { title: string; why: string; steps: string[]; /** The narrowest change: try it first. */ best?: boolean }
 export interface WafZoneResult { zoneId: string; zoneName: string; status: 'ok' | 'unavailable' | 'error' | 'no events'; message?: string; events: number; suspects: WafSuspect[]; since?: string; until?: string }
 export interface WafReport {
   scope: { kind: 'zone' | 'account'; id: string; name: string };

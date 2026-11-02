@@ -471,6 +471,20 @@ Not reverted: service tokens and identity providers (they carry secrets the audi
   - a rate limit's requests per period, what it counts by, and how long it blocks;
   - which managed ruleset an "execute" rule runs, by name.
 
+  A rule that runs a managed ruleset is listed by the ruleset's name (Cloudflare Managed Ruleset,
+  Cloudflare OWASP Core Ruleset, Cloudflare Exposed Credentials Check …), with its own description
+  under it, never by its rule ID. Its Action column shows the dashboard's settings instead of
+  "execute":
+  - **Managed rulesets:** Ruleset action (Default, or the one action every rule uses) and Ruleset
+    status (Default, Enabled or Disabled; Off when the deploy rule itself is off).
+  - **OWASP Core Ruleset:** OWASP action, anomaly score threshold (Low — 60 and higher, Medium — 40
+    and higher, High — 25 and higher) and paranoia level (PL1–PL4), each marked "(default)" when
+    not set, plus the Ruleset status.
+  "What it does" lists every other rule and category override. The CSV and JSON downloads carry the
+  same text. Readings follow Cloudflare's OWASP docs: PL1, a threshold of 40 and Block by default;
+  a paranoia level is set by turning off the paranoia-level categories above it; the threshold and
+  action are those of rule 949110 (or the ruleset action).
+
   Account-level phases (Bulk Redirects, Magic Transit, network-layer DDoS) aren't zone rule pages.
 - **Certificates:** the SSL / TLS card opens with one table of every certificate: edge certificate packs (each certificate in a pack), uploaded custom certificates, custom hostnames, Authenticated Origin Pulls certificates, mTLS client certificates and the custom origin trust store. Each row says whether it is **Cloudflare managed** (Universal SSL, Advanced certificates, Total TLS, Cloudflare-issued custom hostname and mTLS certificates) or **Custom** (uploaded certificates and keys, your own CA). It also shows the hosts, issuer, status, expiry date and days left, soonest expiry first; expired ones are red and those expiring within 30 days amber. A certificate listed twice (an uploaded certificate also appears as its certificate pack) is shown once. The table is built from the SSL / TLS endpoints already read, so it makes no extra Cloudflare call. It is also in the JSON and CSV downloads and at `GET /api/zone-explorer/{zoneId}/certificates`.
 - **Rules by hostname:** one card groups every rule (each rule page and Page Rules) by the hostnames it runs on:
@@ -801,7 +815,29 @@ creates it.
 - **Custom and rate limiting rules:** the expression to add to the rule's own expression
   (`and not (...)`).
 
-**Cost:** about 2–8 queries per zone. Each zone's result is kept 30 minutes.
+**The rule, in full:** each suspect shows the rule's name and ID, its ruleset, what kind of rule it
+is, the path it mostly hits, and its **current action**: what it did to these requests, with the
+count of each action (for example Managed challenge 400 · Managed challenge solved 300). For a
+managed rule it also shows how the ruleset is deployed on the zone (Ruleset action and status; for
+OWASP, its action, anomaly score threshold and paranoia level) and the rule's own override, if any.
+That takes one read of the zone's managed rules entrypoint.
+
+**How to fix it:** the ways to stop the false positive, narrowest first, each with why and the
+dashboard steps:
+- **Managed rule:** the exception for this rule on this path; change its action from Block to
+  Managed challenge; as a last resort, turn the rule off.
+- **OWASP:** the exception (for 949110, how to skip only the OWASP rules that scored); raise the
+  anomaly score threshold to Low; lower the paranoia level; change the OWASP action to Managed
+  challenge. The current settings are shown in each step.
+- **Custom rule:** exclude the traffic in its own expression; change Block to Managed challenge.
+- **Rate limiting rule:** leave the path out; raise the rate; count per session instead of per IP;
+  challenge instead of block.
+- **Bots, HTTP DDoS, IP access rules, Security Level, Browser Integrity Check:** the change for
+  that feature (for example a DDoS override with a lower sensitivity).
+Nothing is changed in Cloudflare: you make the change in the dashboard.
+
+**Cost:** about 2–8 queries per zone, plus one read of the managed rules when a managed rule is a
+suspect. Each zone's result is kept 30 minutes.
 
 ### Zone timeline — `/console/investigate/timeline?zone=ID`
 
