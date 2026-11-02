@@ -48,7 +48,7 @@ function Suspect({ s }: { s: WafSuspect }) {
               ['Ruleset', s.rulesetName ?? (s.rulesetId ? <span className="font-mono text-[12px] break-all">{s.rulesetId}</span> : '—')],
               ['Kind', sourceLabel(s.source)],
               ['Current action', <span key="a"><span className="font-medium text-ink">{actionLabel(s.currentAction)}</span>
-                <span className="block text-[12px] text-muted">on these requests: {s.actions.map((a) => `${actionLabel(a.action)} ${whole.format(a.count)}`).join(' · ')}</span></span>],
+                <span className="block text-[12px] text-muted">on these requests: {(s.actions ?? []).map((a) => `${actionLabel(a.action)} ${whole.format(a.count)}`).join(' · ')}</span></span>],
               ...(s.deploy ? tuningLines(s.deploy).map(([k, v]) => [k, v] as [string, ReactNode]) : []),
               ...(s.deploy?.ruleOverride ? [['This rule’s override', s.deploy.ruleOverride] as [string, ReactNode]] : []),
               ['Mostly on', <span key="p" className="font-mono text-[12px] break-all">{s.host}{s.path}</span>],
@@ -61,7 +61,7 @@ function Suspect({ s }: { s: WafSuspect }) {
           <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">How to fix it</h3>
           <p className="mb-2 text-[12px] text-muted">First check the matches are legitimate: Security › Events, filtered by rule ID {s.ruleId || '(this rule)'}{s.path ? ` and path ${s.path}` : ''}.</p>
           <ol className="space-y-3 text-[13px]">
-            {s.fixes.map((f, i) => (
+            {(s.fixes ?? []).map((f, i) => (
               <li key={f.title} className="flex gap-2">
                 <span className="w-5 shrink-0 text-right font-mono text-faint tabular-nums">{i + 1}.</span>
                 <div className="min-w-0">

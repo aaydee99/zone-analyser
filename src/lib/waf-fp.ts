@@ -201,11 +201,14 @@ export async function wafReport(o: { zoneId?: string; accountId?: string; hours?
   const token = tokenCache();
   const zones = await inParallel(page, PARALLEL_ZONES, async (z): Promise<WafZoneResult> => {
     try {
-      return await cached<WafZoneResult>(`investigate:waf:${z.id}:${hours}`, (v) => (v.status === 'error' ? 60_000 : TTL), async () => {
+      const read = (fresh?: boolean) => cached<WafZoneResult>(`investigate:waf:v2:${z.id}:${hours}`, (v) => (v.status === 'error' ? 60_000 : TTL), async () => {
         const t = await token(scope.list.credentialOf[z.id].id);
         if (!t) return { zoneId: z.id, zoneName: z.name, status: 'error', message: 'The stored credential could not be decrypted', events: 0, suspects: [] };
         return readZone(z, t, hours, progress);
-      }, o.fresh);
+      }, fresh);
+      const got = await read(o.fresh);
+      // A kept result without a suspect's details (what the rule did, how to fix it) is read again from Cloudflare.
+      return got.suspects.some((s) => !Array.isArray(s.actions) || !Array.isArray(s.fixes) || !s.draft) ? await read(true) : got;
     } catch (e) {
       progress.signal?.throwIfAborted();
       return { zoneId: z.id, zoneName: z.name, status: 'error', message: e instanceof Error ? e.message : String(e), events: 0, suspects: [] };
