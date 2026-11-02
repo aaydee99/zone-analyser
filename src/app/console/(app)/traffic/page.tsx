@@ -11,6 +11,8 @@ import { zoneList as loadZoneList } from '@/lib/zone-list-client';
 import { bytes, dayLabel, num, pct, whole } from './format';
 import { DetailHost, EventsChart, ZoneDetailView, useLoadedDetail, useOpenDetail, type Target } from './zone-detail';
 import { MITIGATING_ACTIONS } from '@/lib/traffic-types';
+import { CHART_COLORS, ChartTable, LineChart, type LineSeries } from '@/components/line-chart';
+import { TrafficPatterns } from './traffic-patterns';
 import { compactNum } from '@/lib/num';
 
 // ── Formatting ──────────────────────────────────────────────────────────────
@@ -87,95 +89,37 @@ function fillDays(daily: TrafficDay[], since: string, until: string): TrafficDay
   return out;
 }
 
-/** What each day's bar is made of: threats (stopped by Cloudflare), served from cache, and served by the origin. */
+/** What each day is made of: threats (stopped by Cloudflare), served from cache, and served by the origin. */
 const parts = (d: TrafficDay) => {
   const threats = Math.min(d.threats, d.requests);
   const cached = Math.min(d.cachedRequests, d.requests - threats);
   return { threats, cached, origin: Math.max(0, d.requests - cached - threats) };
 };
 
-/** Requests per day, one bar each: threats (red) on top of served from cache (blue) and served by the origin (grey). */
+/** Requests per day as lines: all requests, served from cache, served by the origin, and threats (dashed). */
 function DailyChart({ daily, since, until, target }: { daily: TrafficDay[]; since: string; until: string; target?: Target }) {
   const days = useMemo(() => fillDays(daily, since, until), [daily, since, until]);
   const open = useOpenDetail();
-  const max = Math.max(1, ...days.map((d) => d.requests));
-  const [hover, setHover] = useState<number | null>(null);
-  const h = hover !== null ? days[hover] : null;
+  const series = useMemo((): LineSeries[] => [
+    { key: 'requests', label: 'Requests', color: CHART_COLORS.blue, values: days.map((d) => d.requests) },
+    { key: 'origin', label: 'Served by origin', color: CHART_COLORS.orange, values: days.map((d) => parts(d).origin) },
+    { key: 'cached', label: 'From cache', color: CHART_COLORS.aqua, values: days.map((d) => parts(d).cached) },
+    { key: 'threats', label: 'Threats', color: CHART_COLORS.red, values: days.map((d) => parts(d).threats), dashed: true },
+  ], [days]);
   if (!days.length) return null;
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-        <span className="font-medium text-ink-2">Requests per day</span>{target && <span className="text-faint">click a bar for that day&apos;s detail</span>}
-        <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-bad" />Threats</span>
-        <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-signal" />From cache</span>
-        <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-faint" />From origin</span>
-      </div>
-      <div className="relative">
-        <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-line" />
-        <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-line/60" />
-        <span className="pointer-events-none absolute top-0 right-0 -translate-y-full pb-0.5 text-[10.5px] text-faint tabular-nums">{num(max)}</span>
-        <div className="flex h-40 items-end gap-[2px] border-b border-line-strong pt-1" onMouseLeave={() => setHover(null)}>
-          {days.map((d, i) => {
-            const p = parts(d);
-            return (
-              <button key={d.date} type="button" aria-label={`${dayLabel(d.date)}: ${whole.format(d.requests)} requests`}
-                onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
-                onClick={() => target && open({ t: target, filter: { day: d.date }, label: 'All traffic' })}
-                className={cx('flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none', hover === i && 'bg-raised/60', target && 'cursor-pointer')}>
-                <span className="flex w-full flex-col gap-[2px] overflow-hidden rounded-t-[4px]" style={{ height: `${(d.requests / max) * 100}%` }}>
-                  {p.threats > 0 && <span className="w-full bg-bad" style={{ flexGrow: p.threats }} />}
-                  {p.cached > 0 && <span className="w-full bg-signal" style={{ flexGrow: p.cached }} />}
-                  {p.origin > 0 && <span className="w-full bg-faint" style={{ flexGrow: p.origin }} />}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        {h && hover !== null && (
-          <div className="pointer-events-none absolute bottom-full z-20 mb-2 w-52 rounded-lg border border-line-strong bg-surface px-3 py-2 text-xs shadow-pop"
-            style={{ left: `${((hover + 0.5) / days.length) * 100}%`, transform: `translateX(${hover < days.length / 3 ? '-10%' : hover > (days.length * 2) / 3 ? '-90%' : '-50%'})` }}>
-            <div className="mb-1 font-medium text-ink">{dayLabel(h.date)}</div>
-            <Row k="Requests" v={num(h.requests)} />
-            {(() => { const p = parts(h); return (
-              <>
-                <Row k={<Key cls="bg-bad">Threats</Key>} v={`${num(p.threats)} (${pct(p.threats, h.requests)})`} />
-                <Row k={<Key cls="bg-signal">From cache</Key>} v={`${num(p.cached)} (${pct(p.cached, h.requests)})`} />
-                <Row k={<Key cls="bg-faint">From origin</Key>} v={`${num(p.origin)} (${pct(p.origin, h.requests)})`} />
-              </>
-            ); })()}
-            <Row k="Bandwidth" v={bytes(h.bytes)} />
-            <Row k="Visitors" v={num(h.uniques)} />
-          </div>
-        )}
-      </div>
-      <div className="mt-1 flex justify-between text-[10.5px] text-faint">
-        <span>{dayLabel(days[0].date)}</span>
-        {days.length > 2 && <span>{dayLabel(days[Math.floor(days.length / 2)].date)}</span>}
-        <span>{dayLabel(days[days.length - 1].date)}</span>
-      </div>
-      <details className="mt-2 text-xs">
-        <summary className="cursor-pointer text-muted hover:text-ink">Daily numbers</summary>
-        <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-line">
-          <table className="w-full text-left text-[12px] tabular-nums">
-            <thead className="sticky top-0 bg-raised text-muted"><tr>{['Day', 'Requests', 'From cache', 'Bandwidth', 'Threats', 'Page views', 'Visitors'].map((x) => <th key={x} className="px-3 py-1.5 font-medium">{x}</th>)}</tr></thead>
-            <tbody>
-              {days.map((d) => (
-                <tr key={d.date} className="border-t border-line/50">
-                  <td className="px-3 py-1">{dayLabel(d.date)}</td><td className="px-3 py-1" title={whole.format(d.requests)}>{num(d.requests)}</td><td className="px-3 py-1">{pct(d.cachedRequests, d.requests)}</td>
-                  <td className="px-3 py-1">{bytes(d.bytes)}</td><td className="px-3 py-1" title={whole.format(d.threats)}>{num(d.threats)}</td><td className="px-3 py-1" title={whole.format(d.pageViews)}>{num(d.pageViews)}</td><td className="px-3 py-1" title={whole.format(d.uniques)}>{num(d.uniques)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+      <div className="mb-1 text-xs font-medium text-ink-2">Requests per day</div>
+      <LineChart x={days.map((d) => d.date)} series={series} height={220} label={`Requests per day, ${dayLabel(days[0].date)} to ${dayLabel(days[days.length - 1].date)}`}
+        formatX={(d) => dayLabel(d)} formatTip={(d) => dayLabel(d)} formatY={(n) => num(n)}
+        onPick={target ? (i) => open({ t: target, filter: { day: days[i].date }, label: 'All traffic' }) : undefined} pickHint="Click a day for its detail" />
+      <ChartTable title="Daily numbers" head={['Day', 'Requests', 'From cache', 'Served by origin', 'Bandwidth', 'Threats', 'Page views', 'Visitors']}
+        rows={days.map((d) => [dayLabel(d.date), <span key="r" title={whole.format(d.requests)}>{num(d.requests)}</span>, pct(d.cachedRequests, d.requests), num(parts(d).origin), bytes(d.bytes),
+          <span key="t" title={whole.format(d.threats)}>{num(d.threats)}</span>, <span key="p" title={whole.format(d.pageViews)}>{num(d.pageViews)}</span>, <span key="u" title={whole.format(d.uniques)}>{num(d.uniques)}</span>])} />
     </div>
   );
 }
 
-const Row = ({ k, v }: { k: ReactNode; v: string }) => <div className="flex justify-between gap-3 text-ink-2"><span className="text-muted">{k}</span><span className="tabular-nums">{v}</span></div>;
-/** A tooltip label with the colour of its part of the bar. */
-const Key = ({ cls, children }: { cls: string; children: ReactNode }) => <span className="inline-flex items-center gap-1.5"><span className={cx("size-2 rounded-sm", cls)} />{children}</span>;
 
 const STATUS: { k: StatusClass; label: string; cls: string }[] = [
   { k: '2xx', label: '2xx success', cls: 'bg-ok' },
@@ -481,6 +425,8 @@ export default function TrafficPage() {
               <p className="mt-4 text-[11px] text-faint">Read {fmtDate(shown.generatedAt)}{shown.cachedIn ? ' (cached — Refresh reads again)' : ''}</p>
             </div>
           </Card>
+
+          <TrafficPatterns account={shown.scope.accountId} zone={shown.scope.zoneId} target={{ month: shown.month, account: shown.scope.accountId, zone: shown.scope.zoneId }} />
 
           <ZoneDetailView month={shown.month} account={shown.scope.accountId} zone={shown.scope.zoneId} />
 

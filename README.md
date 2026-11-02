@@ -716,6 +716,23 @@ To roll back, use `supabase/rollbacks/0016_zone_search.down.sql`. It deletes the
 
 If the migration is missing, the pages and API answer 503 and name the migration.
 
+## Traffic analytics: charts and unusual traffic
+
+**Requests per day** on **Cloudflare › Traffic analytics** is a line chart. It has four lines: all requests, served by the origin, from cache, and threats (dashed, so it doesn't rely on colour alone). A crosshair shows every line's value for the day, on hover or with the arrow keys. Clicking a day opens its detail, and **Daily numbers** has the table. The colours are the first slots of the reference chart palette, validated as a set against the console's dark surface (`src/components/line-chart.tsx`).
+
+**Unusual traffic** (below the month's totals, for the same account or zone) judges the last **30 days, 7 days, 24 hours and 6 hours** against the scope's own pattern. Times are US Eastern. Status codes play no part: every request counts.
+- **Data:** GraphQL `httpRequestsOverviewAdaptiveGroups` (`src/lib/traffic-pattern.ts`): 30 days hour by hour and the last 24 hours in 5-minute steps. An account is read at account level, so an account with thousands of zones costs the same 4–6 queries as one zone. How far back and how long one query may be come from the dataset's settings. Days the plan does not keep, and parts Cloudflare refuses, are left out and named; they are never counted as zero. The result is kept 10 minutes; **Refresh** reads again. Needs Account Analytics Read for an account, Zone Analytics Read for a zone.
+- **Pattern** (`src/lib/traffic-anomaly.ts`): for each hour of the day, weekdays and weekends apart, the median and median absolute deviation of that hour on the *other* days, so one past spike does not change what counts as usual. Peak hours carry at least 1.3× a typical hour, quiet hours at most 0.6×. The page states the busiest and quiet hours.
+- **Flagged** only when a point's robust score is at least 4 (5 for 5-minute points, judged as an hourly rate), it is at least 1.5× usual (drops: at most 0.5×), and the change is at least 50 requests an hour or 5% of a typical peak hour, whichever is larger. Small zones and normal busy hours are never flagged. The kinds:
+  - **Spike:** above the pattern.
+  - **Busy at a quiet hour:** a quiet hour reaching three-quarters of a usual peak hour.
+  - **Drop:** far below the pattern at a normal or peak hour.
+  - **Origin spike:** requests not served from cache, above their pattern.
+  - **More served by origin:** the origin share 20 points or more above its usual share for that hour.
+  Neighbouring flagged points are one event. Each event says when, how much, against what is usual, and why, and **See the traffic** opens that hour's detail.
+- **Origin load per window:** the share of requests that reached the origin against its usual share for those hours. It is **unusual** 15 points or more above usual (the cache is serving less than normal), and **high** at 80% or more of requests (the origin carries most of the load, even if that is usual).
+- **Charts per window:** requests, the dashed "usual for this time" line, and requests served by the origin, with markers on flagged points; bandwidth total and from the origin; and the numbers as a table.
+
 ## Investigate
 
 Four read-only tools under **Investigate** (`/console/investigate/...`), for every role (`runs:read`).
