@@ -92,17 +92,19 @@ export default function ApiConsolePage() {
   const credentialName = creds?.find((c) => c.id === credentialId)?.name ?? '';
   const searchZones = useCallback(async (q: string) => {
     const kept = credentialName ? await searchStoredZones(q, { credentialName, accountId, limit: 50 }).catch(() => null) : null;
-    if (kept && (kept.total || q.trim())) return { zones: kept.zones.map((z) => ({ id: z.id, name: z.name })), total: kept.total };
+    if (kept && (kept.total || q.trim())) return { zones: kept.zones.map((z) => ({ id: z.id, name: z.name })), total: kept.total, stored: true };
     const r = await api<{ zones: ZoneOpt[]; total: number }>(`/api/tools/api-console/zones?credentialId=${encodeURIComponent(credentialId)}&accountId=${encodeURIComponent(accountId)}&q=${encodeURIComponent(q)}&limit=50`);
-    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name })), total: r.total };
+    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name })), total: r.total, stored: false };
   }, [credentialId, credentialName, accountId]);
+  // Searched on every key when the store has the zones; when the server is asked, once typing pauses.
+  const [fromStore, setFromStore] = useState(false);
   // A new credential or account: its first zone, until another is chosen.
   useEffect(() => {
     if (!credentialId) return;
     let live = true;
     const key = `${credentialId}:${accountId}`;
-    searchZones('').then((r) => { if (live) { setZoneTotal(r.total); setPicked((p) => (p?.for === key && p.zone ? p : { for: key, zone: r.zones[0] ?? null })); } })
-      .catch(() => { if (live) { setZoneTotal(0); setPicked({ for: key, zone: null }); } });
+    searchZones('').then((r) => { if (live) { setZoneTotal(r.total); setFromStore(r.stored); setPicked((p) => (p?.for === key && p.zone ? p : { for: key, zone: r.zones[0] ?? null })); } })
+      .catch(() => { if (live) { setZoneTotal(0); setFromStore(false); setPicked({ for: key, zone: null }); } });
     return () => { live = false; };
   }, [credentialId, accountId, searchZones, setPicked]);
 
@@ -166,7 +168,7 @@ export default function ApiConsolePage() {
                   </select>
                 </Field>
                 <Field label="Zone" hint={zoneTotal !== null ? `Fills {zone_id} · ${compactNum(zoneTotal)} zone${zoneTotal === 1 ? '' : 's'}` : 'Fills {zone_id}'}>
-                  <ZoneCombobox key={`${credentialId}:${accountId}`} value={zone} onChange={setZone} search={searchZones} disabled={!credentialId || zoneTotal === 0}
+                  <ZoneCombobox key={`${credentialId}:${accountId}`} value={zone} onChange={setZone} search={searchZones} debounce={fromStore ? 0 : undefined} disabled={!credentialId || zoneTotal === 0}
                     placeholder={zoneTotal === 0 ? 'No zone' : 'Type to search zones…'} />
                 </Field>
               </div>

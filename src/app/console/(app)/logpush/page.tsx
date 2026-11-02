@@ -176,7 +176,7 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
                 </Field>
               ) : (
                 <Field label="Zone" hint="Type part of the name, then choose (50 shown at a time)">
-                  <ZoneCombobox value={zoneChoice} search={searchZones} disabled={!scopes} placeholder="Type to search zones, e.g. example.com"
+                  <ZoneCombobox value={zoneChoice} search={searchZones} debounce={0} disabled={!scopes} placeholder="Type to search zones, e.g. example.com"
                     onChange={(z) => { setZoneChoice(z); setScopeId(z?.id ?? ''); }} />
                 </Field>
               )}

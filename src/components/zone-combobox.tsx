@@ -4,19 +4,22 @@ import { useEffect, useId, useState } from 'react';
 import { ChevronDown, X } from 'lucide-react';
 import { cx } from './ui';
 
-// One field to find and choose a zone: type to search (asked once typing pauses), then pick from
-// the list with the mouse or the keyboard. Replaces a separate search box over a select.
+// One field to find and choose a zone: type to search, then pick from the list with the mouse or
+// the keyboard. Replaces a separate search box over a select. A search that asks the server waits
+// for typing to pause; one over zones already in the browser (the zone store) runs on every key.
 
 export interface ZoneChoice { id: string; name: string; sub?: string }
 
-/** How long typing must pause before the zones are searched. */
+/** How long typing must pause before the zones are searched (a search that asks the server). */
 const DEBOUNCE_MS = 200;
 
-export function ZoneCombobox({ value, onChange, search, label = 'Zone', placeholder = 'Type to search zones…', disabled, id: idIn, className }: {
+export function ZoneCombobox({ value, onChange, search, debounce = DEBOUNCE_MS, label = 'Zone', placeholder = 'Type to search zones…', disabled, id: idIn, className }: {
   value: ZoneChoice | null;
   onChange: (z: ZoneChoice | null) => void;
   /** The zones matching `q` (a page of them) and how many match in all. */
   search: (q: string) => Promise<{ zones: ZoneChoice[]; total: number }>;
+  /** Milliseconds typing must pause before `search` runs; 0 when it searches zones already in the browser (no request). */
+  debounce?: number;
   label?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -37,14 +40,16 @@ export function ZoneCombobox({ value, onChange, search, label = 'Zone', placehol
     let live = true;
     // While a zone is chosen and nothing is typed, the list shows every zone (not just that one).
     const term = typed === null ? '' : typed.trim();
-    const t = setTimeout(() => {
+    const run = () => {
       setBusy(true);
       search(term).then((r) => { if (live) { setHits(r.zones); setTotal(r.total); setActive(0); } })
         .catch(() => { if (live) { setHits([]); setTotal(0); } })
         .finally(() => { if (live) setBusy(false); });
-    }, DEBOUNCE_MS);
+    };
+    const t = debounce > 0 ? setTimeout(run, debounce) : undefined;
+    if (!t) run();
     return () => { live = false; clearTimeout(t); };
-  }, [typed, open, disabled, search]);
+  }, [typed, open, disabled, search, debounce]);
   const pick = (z: ZoneChoice) => { onChange(z); setTyped(null); setOpen(false); };
   return (
     <div className={cx('relative', className)}>

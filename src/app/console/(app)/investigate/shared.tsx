@@ -102,12 +102,10 @@ export function ZonePicker({ label, value, onChange, hint, accountId, disabled, 
     if (!open) return;
     const term = q.trim();
     let live = true;
-    // Searched when the user stops typing for a moment, not on every key.
-    const t = setTimeout(() => {
-      searchZones(term, { accountId, limit: 20 })
-        .then((r) => { if (live) { setHits(r.zones); setTotal(r.total); setActive(0); } }).catch(() => { if (live) setHits([]); });
-    }, 200);
-    return () => { live = false; clearTimeout(t); };
+    // Searched on every key: the zones are in the store, so no request is made.
+    searchZones(term, { accountId, limit: 20 })
+      .then((r) => { if (live) { setHits(r.zones); setTotal(r.total); setActive(0); } }).catch(() => { if (live) setHits([]); });
+    return () => { live = false; };
   }, [q, open, accountId]);
   const pick = (z: PickedZone) => { onChange(z); setTyped(null); setOpen(false); };
   return (

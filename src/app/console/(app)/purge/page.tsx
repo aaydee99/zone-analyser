@@ -117,7 +117,7 @@ export default function PurgePage() {
         <SectionHeader step="2" title="Zone" description={account ? `Active zones in ${account.name}.` : 'Choose the account first.'} />
         <div className="space-y-3 px-5 py-4">
           {!zones ? <Skeleton className="h-10 w-full max-w-md rounded-[9px]" /> : (
-            <ZoneCombobox key={accountId} className="max-w-md" value={zone ? { id: zone.id, name: zone.name } : null} disabled={!account} search={searchZones}
+            <ZoneCombobox key={accountId} className="max-w-md" value={zone ? { id: zone.id, name: zone.name } : null} disabled={!account} search={searchZones} debounce={0}
               placeholder={account ? `Search ${compactNum(inAccount.length)} zones by name…` : 'Choose an account first'}
               onChange={(z) => { setZoneId(z?.id ?? ''); setResult(null); }} />
           )}
