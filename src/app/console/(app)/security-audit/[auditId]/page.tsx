@@ -9,7 +9,7 @@ import { windowLabel, type AuditView } from '@/lib/zone-audit/types';
 import { Alert, Button, ButtonLink, Loading, PageHeader, SkeletonTable, cx } from '@/components/ui';
 import { useSnapshot } from '../../monitoring/use-run';
 import {
-  AuditNav, AuditState, Coverage, EffectivenessTable, Findings, ManagedOverviewCard, Method, RecommendedActions, Summary, effectId, findingId, type AuditTab,
+  AuditNav, AuditReportCtx, AuditState, Coverage, EffectivenessTable, Findings, ManagedOverviewCard, Method, Queries, RecommendedActions, Summary, effectId, findingId, type AuditTab,
 } from '../audit-view';
 import { PostureView } from '../posture-view';
 
@@ -95,7 +95,7 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
       {a && runningNow && <Alert tone="info" title="Reading the zone">The audit runs on the worker; this page looks again every few seconds until it is done.</Alert>}
       {a && a.status === 'failed' && <Alert tone="bad" title="The audit did not finish">{a.error ?? 'Unknown error'}</Alert>}
       {r && (
-        <AuditNav.Provider value={nav}>
+        <AuditNav.Provider value={nav}><AuditReportCtx.Provider value={r}>
           <p className="text-[13px] text-muted">Read-only: nothing was changed in Cloudflare. <strong className="font-medium text-ink-2">Confirmed</strong> means the zone&apos;s configuration (or the traffic numbers) proves the outcome; <strong className="font-medium text-ink-2">Needs validation</strong> means it depends on something they cannot show, and the finding says how to check.</p>
           <Summary r={r} />
           <div role="tablist" aria-label="Report sections" className="flex flex-wrap gap-1 border-b border-line">
@@ -132,9 +132,10 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
               <Coverage r={r} />
               <div className="flex flex-wrap gap-2"><ButtonLink size="sm" variant="ghost" href={dl('format=csv&part=coverage')} download icon={<Download className="size-3.5" />}>Coverage CSV</ButtonLink></div>
               <Method r={r} />
+              <Queries r={r} />
             </>}
           </div>
-        </AuditNav.Provider>
+        </AuditReportCtx.Provider></AuditNav.Provider>
       )}
     </div>
   );

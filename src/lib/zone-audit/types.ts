@@ -19,7 +19,25 @@ export interface Evidence {
   field: string;
   /** Shown as read; secret-looking values are masked (redact). */
   value: string;
+  /**
+   * How the value was checked against what Cloudflare returned (proof.ts, after the rules ran):
+   * matches — the value is in Cloudflare's answer as shown (raw holds the record it is in);
+   * computed — the rule worked it out from that answer (raw holds the answer it read);
+   * traffic — counted from analytics rows (the queries are in the report).
+   * Absent in audits made before proofs were recorded.
+   */
+  check?: 'matches' | 'computed' | 'traffic';
+  /** The source it was read from, when it is one of the audit's reads. */
+  key?: SourceKey;
+  /** Cloudflare's answer (or the record in it that holds the value), as JSON, cut to RAW_MAX characters. */
+  raw?: string;
 }
+
+/** One analytics query the audit sent (text as sent; it holds the zone ID and the time range, no secret). */
+export interface QueryRecord { dataset: string; since: string; until: string; text: string }
+
+/** One cross-check of the report's numbers and records (verify.ts). */
+export interface VerificationCheck { id: string; label: string; ok: boolean; detail: string }
 
 /** One finding (the skill's report-schema.json record without file and line). */
 export interface AuditFinding {
@@ -101,6 +119,10 @@ export interface AuditReport {
   effectiveness: Effectiveness | null;
   /** Everything about the managed rulesets: deployment, overrides, OWASP tuning, exceptions, and what they did in the window (null in reports made before it existed). */
   managed?: ManagedOverview | null;
+  /** Every analytics query sent, so each traffic number can be reproduced (absent in older audits). */
+  queries?: QueryRecord[];
+  /** Cross-checks made when the report was built, against the raw reads (absent in older audits). */
+  verification?: VerificationCheck[];
 }
 
 /** One managed ruleset's state in the zone's configuration, and its events in the window. */
@@ -431,6 +453,8 @@ export interface Snapshot {
   /** The traffic window (hours) read for `events`, and the one asked for. */
   hours?: number;
   askedHours?: number;
+  /** The analytics queries sent (read.ts). */
+  queries?: QueryRecord[];
 }
 
 // ── Helpers shared by the rules, the renderers and the pages ────────────────

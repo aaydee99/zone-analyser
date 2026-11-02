@@ -3,7 +3,9 @@
 // target-neutral and every number comes from the report.
 
 import { actionItems } from './actions';
-import { RATING_LABEL, THREAT_LABEL, postureOf } from './posture';
+import { PENALTY, RATING_LABEL, THREAT_LABEL, postureOf } from './posture';
+import { CHECK_LABEL, explain, reproduce } from './proof';
+import { verifyReport } from './verify';
 import { GROUP_LABEL, COVERAGE_LABEL, KIND_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditReport } from './types';
 import { compactNum } from '../num';
 
@@ -34,7 +36,7 @@ export function auditCsv(r: AuditReport, part: CsvPart): string {
       x.passthrough?.passed ?? '', x.passthrough?.bots ?? '', x.passthrough?.botBasis ?? '', x.passthrough?.malicious ?? '', x.passthrough?.maliciousBasis ?? '', x.passthrough?.verdict ?? '', x.passthrough?.recommendation.title ?? '']));
   return csv(['severity', 'verdict', 'rule', 'group', 'title', 'attack_class', 'skill_ref', 'description', 'root_cause', 'evidence', 'fix', 'validation', 'fingerprint'],
     r.findings.map((f) => [f.severity, f.verdict, f.ruleId, GROUP_LABEL[f.group], f.title, f.attackClass, f.skillRef, f.description, f.rootCause,
-      f.evidence.map((e) => `${e.source} ${e.field} = ${e.value}`).join(' | '), f.fix.join(' | '), f.validation ?? '', f.fingerprint]));
+      f.evidence.map((e) => `${e.source} ${e.field} = ${e.value}${e.check ? ` [${e.check}]` : ''}`).join(' | '), f.fix.join(' | '), f.validation ?? '', f.fingerprint]));
 }
 
 const md = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
@@ -55,13 +57,30 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   const p = postureOf(r);
   const share = (x: number | null) => (x === null ? 'not measured' : `${Math.round(x * 100)}%`);
   L.push('## Posture', '', `**Grade: ${p.grade ?? '—'} (${p.label}${p.score === null ? '' : `, ${p.score}/100`})**`, '', p.verdict, '');
+  if (p.gradeProof.rows.length) {
+    const sw = p.gradeProof.rows.reduce((a, x) => a + x.score * x.weight, 0), w = p.gradeProof.rows.reduce((a, x) => a + x.weight, 0);
+    L.push('**How the grade was worked out:** weighted mean of the graded areas = Σ (score × weight) ÷ Σ weight = '
+      + `${p.gradeProof.rows.map((x) => `${x.score}×${x.weight}`).join(' + ')} = ${sw} ÷ ${w} = ${p.gradeProof.mean}${p.gradeProof.cap ? `; ${p.gradeProof.cap}` : ''}. Grade floors: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 55, else F.`, '');
+  }
   L.push('### Scorecard', '', '| Area | Rating | Score | Checks read | Worst finding |', '| --- | --- | --- | --- | --- |',
     ...p.areas.filter((a) => a.rating !== 'not_applicable').map((a) => `| ${a.label} | ${RATING_LABEL[a.rating]} | ${a.score ?? '—'} | ${a.read} of ${a.applicable} | ${a.top ? md(`${SEVERITY_LABEL[a.top.severity]}: ${a.top.title}`) : '—'} |`), '');
+  L.push(`**How each area score was worked out:** 100 minus each finding's points (critical ${PENALTY.critical}, high ${PENALTY.high}, medium ${PENALTY.medium}, low ${PENALTY.low}; half when it needs validation), never below 0.`, '');
+  for (const a of p.areas.filter((x) => x.score !== null && x.penalties.length)) L.push(`- ${a.label}: 100 − (${a.penalties.map((x) => x.points).join(' + ')}) = ${a.score} — ${a.penalties.map((x) => md(`${x.title} (${x.severity}${x.verdict === 'needs_validation' ? ', needs validation' : ''}: −${x.points})`)).join('; ')}`);
+  L.push('');
   const en = p.enforcement;
   L.push('### Enforcement in the traffic', '', `- Security events: ${en.events === null ? 'not read' : compactNum(en.events)}`, `- Blocked or challenged (of decided events): ${share(en.enforcedShare)}`,
     `- Managed and custom rule matches only logged: ${share(en.logOnlyShare)}${en.logOnlyShare === 0 ? ' (no log-only evidence — not proof that every rule enforces)' : ''}`,
     `- Challenge solve rate: ${share(en.solveRate)}`, `- Bot or malicious requests let through: ${en.badLetThrough === null ? 'not measured' : compactNum(en.badLetThrough)}`,
     `- Enabled rules with no match in the window: ${en.silent === null ? 'not read' : `${en.silent} of ${en.configured}`}`, '');
+  if (en.proof) {
+    const c = (m: Record<string, number>) => Object.entries(m).map(([k, v]) => `${k} ${compactNum(v)}`).join(' + ') || 'none';
+    L.push('**How these were worked out** (from the security events, GraphQL firewallEventsAdaptiveGroups; queries in the appendix):', '',
+      `- Blocked or challenged = (${c(en.proof.enforcedByAction)}) ÷ ((${c(en.proof.enforcedByAction)}) + (${c(en.proof.passiveByAction)})) = ${share(en.enforcedShare)}`,
+      `- Only logged = ${compactNum(en.proof.wafLogged)} Log ÷ ${compactNum(en.proof.wafDecided)} decided managed and custom matches = ${share(en.logOnlyShare)}`,
+      `- Solve rate = ${compactNum(en.proof.solved)} solved ÷ ${compactNum(en.proof.challenged)} challenges${en.proof.challenged < 10 ? ' (fewer than 10: not measured)' : ` = ${share(en.solveRate)}`}`,
+      `- Let through: ${en.proof.badByRule.length ? en.proof.badByRule.map((x) => md(`${x.rule}: ${compactNum(x.bots)} bots + ${compactNum(x.malicious)} malicious`)).join('; ') : 'none'}`,
+      `- Rules with no match: ${en.proof.silentRules.length ? md(en.proof.silentRules.join(', ')) : 'none'}`, '');
+  }
   L.push('### Threat coverage', '', '| Threat | Status | In place | Gaps |', '| --- | --- | --- | --- |',
     ...p.threats.filter((t) => t.status !== 'not_applicable').map((t) => `| ${t.label} | ${THREAT_LABEL[t.status]} | ${md(t.controls.join('; ') || '—')} | ${md(t.gaps.map((x) => x.title).join('; ') || '—')} |`), '');
   for (const t of p.threats.filter((t) => t.playbook.length)) L.push(`- **${t.label}:** ${t.playbook.join(' ')}`);
@@ -81,9 +100,21 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
     L.push(`### ${i + 1}. ${f.title}`, '');
     L.push(`**${SEVERITY_LABEL[f.severity]} · ${VERDICT_LABEL[f.verdict]}** · ${GROUP_LABEL[f.group]} · rule \`${f.ruleId}\` · attack class: ${f.attackClass} (${f.skillRef})`, '');
     L.push(f.description, '', `*Root cause:* ${f.rootCause}`, '', `*Intended behaviour:* ${f.intendedBehavior}`, '');
-    L.push('Evidence:', '', ...f.evidence.map((e) => `- \`${e.source}\` — ${e.field}: ${tick(e.value)}`), '');
-    L.push('Fix (not applied):', '', ...f.fix.map((x, n) => `${n + 1}. ${x}`), '');
-    if (f.validation) L.push(`How to validate: ${f.validation}`, '');
+    L.push('**Proof:**', '');
+    for (const e of f.evidence) {
+      L.push(`- \`${e.source}\` — ${e.field}: ${tick(e.value)} — ${e.check ? CHECK_LABEL[e.check] : 'not checked (older audit)'}`);
+      const cmd = reproduce(e, r);
+      if (cmd) L.push(`  - Re-check: \`${cmd.replace(/`/g, "'")}\``);
+      if (e.raw) L.push(`  - ${e.check === 'matches' ? 'The record in Cloudflare\'s answer' : 'Cloudflare\'s answer the rule read'}:`, '', '    ```json', ...e.raw.split('\n').map((l) => `    ${l}`), '    ```');
+    }
+    L.push('');
+    const x = explain(f, r);
+    L.push(`**Priority:** ${x.priority}`, '');
+    L.push('**What to do** (not applied — make the change in the dashboard):', '', ...x.what.map((t, n) => `${n + 1}. ${t}`), '');
+    L.push('**Why:**', '', ...x.why.map((t) => `- ${t}`), '');
+    L.push('**How it will help:**', '', ...x.helps.map((t) => `- ${t}`), '');
+    if (x.risks.length) L.push('**Risks and how to roll it out:**', '', ...x.risks.map((t) => `- ${t}`), '');
+    L.push('**How to confirm it worked:**', '', ...x.confirm.map((t) => `- ${t}`), '');
     L.push(`Fingerprint: \`${f.fingerprint}\``, '');
   });
 
@@ -128,5 +159,12 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   for (const c of r.coverage) L.push(`| \`${c.ruleId}\` ${md(c.title)} | ${GROUP_LABEL[c.group]} | ${COVERAGE_LABEL[c.state]} | ${c.findings} | ${md([c.reason ?? '', c.permission ? `needs permission: ${c.permission}` : ''].filter(Boolean).join(' — '))} |`);
   L.push('', '## Method', '', `${s.calls} Cloudflare API calls (GET, plus GraphQL analytics queries) and ${s.lookups} public DNS lookups.`, '');
   L.push('| Source | Read |', '| --- | --- |', ...r.reads.map((x) => `| ${md(x.label)} | ${x.state === 'ok' ? 'yes' : `${x.state === 'absent' ? 'not on this zone' : 'no'}${x.reason ? ` — ${md(x.reason)}` : ''}`} |`), '');
+  const checks = r.verification ?? verifyReport(r);
+  L.push('## Verification', '', `Every count recomputed a second way${r.verification ? ' (traffic totals from the raw analytics rows) when the report was built' : ''}: ${checks.filter((c) => c.ok).length} of ${checks.length} hold.`, '',
+    '| Check | Result | Detail |', '| --- | --- | --- |', ...checks.map((c) => `| ${md(c.label)} | ${c.ok ? 'Holds' : '**Failed**'} | ${md(c.detail)} |`), '');
+  if (r.queries?.length) {
+    L.push('## Appendix: analytics queries', '', `${r.queries.length} GraphQL queries as sent to https://api.cloudflare.com/client/v4/graphql. Every traffic number above is a sum of their rows.`, '');
+    r.queries.forEach((q, n) => L.push(`${n + 1}. ${q.dataset}, ${q.since} → ${q.until}`, '', '   ```graphql', `   ${q.text}`, '   ```', ''));
+  }
   return L.join('\n');
 }

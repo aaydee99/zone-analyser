@@ -3,7 +3,6 @@
 import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Globe, RefreshCw, Search } from 'lucide-react';
-import { api } from '@/lib/client';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { Alert, Badge, Button, Card, EmptyState, Loading, PageHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
@@ -15,6 +14,7 @@ import { SavedViews } from '@/components/saved-views';
 import { ZoneView } from './zone-view';
 
 const NO_FILTER: ZoneMetaFilter = {};
+const NO_META: Record<string, ZoneMetaLite> = {};
 
 export default function ZoneExplorerPage() {
   const toast = useToast();
@@ -34,27 +34,22 @@ export default function ZoneExplorerPage() {
   const [q, setQ] = useUiState('zx.q', '');
   // Console tags and owners: the filter is resolved by the server (?tags=&owner=), the chips come with it.
   const [zf, setZf] = useUiState<ZoneMetaFilter>('zx.filter', NO_FILTER);
-  const [meta, setMeta] = useState<Record<string, ZoneMetaLite>>({});
-  const [matching, setMatching] = useState<Set<string> | null>(null);
-  const [metaError, setMetaError] = useState('');
-
-  const list = useCallback(async (fresh = false) => {
-    try { await loadList(fresh); } catch (e) { toast((e as Error).message, 'bad'); }
-  }, [loadList, toast]);
-  useEffect(() => { void list(); }, [list]);
-
-  /** Tags and owners of every zone, and the zones the tag filter matches (no zone list: the page has it). */
+  /** Tags and owners of every zone, and the zones the tag filter matches: from the zone store too. */
   const filterKey = filterToParams(zf).toString();
-  const [metaVersion, setMetaVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    const p = new URLSearchParams(filterKey);
-    p.set('meta', '1'); p.set('list', '0');
-    api<{ ids: string[] | null; meta?: Record<string, ZoneMetaLite>; metaError?: string }>(`/api/zone-explorer?${p}`)
-      .then((r) => { if (!live) return; setMeta(r.meta ?? {}); setMatching(r.ids ? new Set(r.ids) : null); setMetaError(r.metaError ?? ''); })
-      .catch((e) => { if (live) { setMatching(null); setMetaError((e as Error).message); } });
-    return () => { live = false; };
-  }, [filterKey, metaVersion]);
+  const meta = useZoneStore((s) => s.meta) ?? NO_META;
+  const match = useZoneStore((s) => s.matches[filterKey]);
+  const loadMeta = useZoneStore((s) => s.loadMeta);
+  const refreshAll = useZoneStore((s) => s.refreshAll);
+  const matching = useMemo(() => (match?.ids ? new Set(match.ids) : null), [match]);
+  const metaError = match?.error ?? '';
+
+  // Read once (the first time anything asks), then shown from the store — also after a reload —
+  // until Refresh reads the list, the tags and the open zone again.
+  useEffect(() => { void loadList().catch((e) => toast((e as Error).message, 'bad')); }, [loadList, toast]);
+  useEffect(() => { void loadMeta(filterKey); }, [filterKey, loadMeta]);
+  const refresh = useCallback(async () => {
+    try { await refreshAll(filterKey); } catch (e) { toast((e as Error).message, 'bad'); }
+  }, [refreshAll, filterKey, toast]);
 
   /** Opens a zone (from the store when it was read already). One at a time: the list waits while it loads. */
   const open = useCallback((id: string) => {
@@ -126,7 +121,8 @@ export default function ZoneExplorerPage() {
     <div className="rise">
       <PageHeader eyebrow="Cloudflare" title="Zone explorer"
         description="Everything the stored Cloudflare tokens can read about any zone: settings, DNS, SSL/TLS, security, rules, caching and more. Read-only — only GET requests are sent."
-        actions={<Button icon={<RefreshCw className={cx('size-4', listing && 'animate-spin')} />} onClick={() => list(true)} disabled={listing}>Refresh zones</Button>} />
+        actions={<Button icon={<RefreshCw className={cx('size-4', (listing || loading) && 'animate-spin')} />} onClick={() => void refresh()} disabled={listing || loading}
+          title="Read the zone list, the tags and owners, and the open zone again from Cloudflare">Refresh</Button>} />
 
       {problems.map((p) => <div key={p.credential} className="mb-4"><Alert tone="warn" title={p.credential}>{p.error}</Alert></div>)}
 
@@ -210,7 +206,7 @@ export default function ZoneExplorerPage() {
 
           <div className="min-w-0">
             {!selected && <Card><EmptyState icon={<Globe className="size-5" />} title="Choose a zone" description="Its full configuration is read from Cloudflare when you open it." /></Card>}
-            {selected && <ZoneView zoneId={selected} onPickTag={pickTag} onMetaSaved={() => setMetaVersion((n) => n + 1)} />}
+            {selected && <ZoneView zoneId={selected} onPickTag={pickTag} />}
           </div>
         </div>
       )}

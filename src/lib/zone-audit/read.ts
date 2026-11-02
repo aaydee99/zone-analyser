@@ -7,7 +7,7 @@ import { cached } from '../cache';
 import { buildReport } from './report';
 import {
   AUDIT_PHASES, AUDIT_SETTINGS,
-  type AuditReport, type CnameLookups, type DnsRec, type EventData, type Got, type RequestData, type Snapshot, type SourceKey, type ZoneInfo,
+  type AuditReport, type CnameLookups, type QueryRecord, type DnsRec, type EventData, type Got, type RequestData, type Snapshot, type SourceKey, type ZoneInfo,
 } from './types';
 
 // Reads one zone for the security audit: about 50 Cloudflare API GETs through cf-read (the per-token
@@ -25,6 +25,8 @@ export const ACCESS_MAX = 2_000;
 export const ACCOUNT_LIST_MAX = 1_000;
 /** Account-level reads are shared by the zones of one account audit for this long (errors for 30 seconds). */
 const ACCOUNT_READ_TTL = 5 * 60_000;
+/** Analytics queries kept in the report as proof (an audit sends at most about 110). */
+const QUERIES_KEPT = 200;
 /** Parts of the traffic window per dataset (each part is one plan maxDuration, usually 1–3 days). */
 export const MAX_PARTS = 12;
 
@@ -147,7 +149,7 @@ export async function readZone(token: string, zoneId: string, zoneName: string, 
 
   const t = await readTraffic(token, zoneId, hours, signal);
   Object.assign(reads, t.reads);
-  return { snapshot: { zoneId, zoneName, now: new Date().toISOString(), reads, hours: t.hours, askedHours: hours }, calls: calls + t.queries, lookups };
+  return { snapshot: { zoneId, zoneName, now: new Date().toISOString(), reads, hours: t.hours, askedHours: hours, queries: t.sent }, calls: calls + t.queries, lookups };
 }
 
 // ── Traffic (GraphQL) ───────────────────────────────────────────────────────
@@ -205,7 +207,7 @@ type G = { count?: number; dimensions?: Record<string, unknown> };
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
 /** Reads `specs` over the parts; rows of each alias merged by their dimensions. Throws a Got error on refusal or limit. */
-async function grouped(token: string, zoneId: string, dataset: string, specs: Spec[][], parts: { since: string; until: string }[], l: Limits, count: () => void, signal?: AbortSignal) {
+async function grouped(token: string, zoneId: string, dataset: string, specs: Spec[][], parts: { since: string; until: string }[], l: Limits, count: (q?: QueryRecord) => void, signal?: AbortSignal) {
   const merged = new Map<string, Map<string, { dims: Record<string, string>; count: number }>>(specs.flat().map((s) => [s.alias, new Map()]));
   const problems: string[] = [];
   for (const part of parts) {
@@ -213,7 +215,7 @@ async function grouped(token: string, zoneId: string, dataset: string, specs: Sp
       signal?.throwIfAborted();
       const text = `{ viewer { zones(filter: { zoneTag: ${J(zoneId)} }) { ${q.map((s) => `${s.alias}: ${dataset}(limit: ${Math.min(s.limit, l.maxPageSize)}, `
         + `filter: { datetime_geq: ${J(part.since)}, datetime_lt: ${J(part.until)} }, orderBy: [count_DESC]) { count dimensions { ${s.dims.join(' ')} } }`).join(' ')} } } }`;
-      count();
+      count({ dataset, since: part.since, until: part.until, text });
       const r = await gql<{ viewer?: { zones?: Record<string, G[]>[] } }>(token, text, {}, signal ? { done: 0, total: 0, signal } : undefined);
       if (r.errors.length) {
         if (isPermission(r.errors, r.status)) throw { state: 'error', status: 403, reason: `The token cannot read this zone's analytics (${errorText(r.errors)})` } satisfies Got<never>;
@@ -236,13 +238,15 @@ async function grouped(token: string, zoneId: string, dataset: string, specs: Sp
   return { rows: (alias: string) => [...(merged.get(alias)?.values() ?? [])], problems };
 }
 
-async function readTraffic(token: string, zoneId: string, hours: number, signal?: AbortSignal): Promise<{ reads: Snapshot['reads']; hours: number; queries: number }> {
+async function readTraffic(token: string, zoneId: string, hours: number, signal?: AbortSignal): Promise<{ reads: Snapshot['reads']; hours: number; queries: number; sent: QueryRecord[] }> {
   let queries = 0;
-  const count = () => { queries++; };
+  const sent: QueryRecord[] = [];
+  // Every query is kept (at most QUERIES_KEPT) so the report can show how each number was read.
+  const count = (q?: QueryRecord) => { queries++; if (q && sent.length < QUERIES_KEPT) sent.push(q); };
   const reads: Snapshot['reads'] = {};
   const fail = (g: Got<never>) => { reads.events = g; reads.events_previous = g; reads.requests = g; };
   let limits: Awaited<ReturnType<typeof zoneLimits>>;
-  try { queries++; limits = await zoneLimits(token, zoneId); } catch (err) { fail({ state: 'error', status: 0, reason: err instanceof Error ? err.message : String(err) }); return { reads, hours, queries }; }
+  try { queries++; limits = await zoneLimits(token, zoneId); } catch (err) { fail({ state: 'error', status: 0, reason: err instanceof Error ? err.message : String(err) }); return { reads, hours, queries, sent }; }
   const end = Date.now();
   const fw = limits.firewallEventsAdaptiveGroups;
   let used = hours;
@@ -308,7 +312,7 @@ async function readTraffic(token: string, zoneId: string, hours: number, signal?
       } satisfies RequestData };
     } catch (err) { signal?.throwIfAborted(); reads.requests = isGot(err) ? err : { state: 'error', status: 0, reason: String(err) }; }
   }
-  return { reads, hours: used, queries };
+  return { reads, hours: used, queries, sent };
 }
 const isGot = (x: unknown): x is Got<never> => !!x && typeof x === 'object' && 'state' in x;
 

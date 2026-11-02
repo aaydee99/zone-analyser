@@ -38,6 +38,9 @@ const nextConfig: NextConfig = {
     ...['/', '/privacy', '/terms', '/licenses'].map((source) => ({ source, missing: [{ type: 'header' as const, key: 'rsc' }], headers: [{ key: 'Cache-Control', value: SHORT }] })),
     ...['/opengraph-image', '/robots.txt', '/sitemap.xml'].map((source) => ({ source, headers: [{ key: 'Cache-Control', value: SHORT }] })),
     ...['/brand/:file*', '/icon.svg'].map((source) => ({ source, headers: [{ key: 'Cache-Control', value: 'public, max-age=86400' }] })),
+    // The build's JS, CSS and fonts: the content hash is in the file name, so a file never changes
+    // and a new build links new names. Cached for a year by browsers and the CDN.
+    { source: '/_next/static/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
     ];
   },
 };

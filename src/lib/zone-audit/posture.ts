@@ -50,6 +50,8 @@ export interface AreaScore {
   top: { title: string; severity: Severity; fingerprint: string } | null;
   /** Up to three passed checks, in the ledger's words. */
   good: string[];
+  /** The proof of the score: each finding of the area and the points it cost (score = 100 − their sum, at least 0). */
+  penalties: { title: string; severity: Severity; verdict: AuditFinding['verdict']; points: number; fingerprint: string }[];
 }
 
 export type ThreatStatus = 'covered' | 'partial' | 'gap' | 'unknown' | 'not_applicable';
@@ -86,6 +88,8 @@ export const THREATS: ThreatDef[] = [
 
 export interface Threat {
   id: string; label: string; status: ThreatStatus;
+  /** The proof of the status: each check that bears on the threat and its result. */
+  checks: { ruleId: string; title: string; state: CoverageEntry['state']; findings: number }[];
   controls: string[];
   gaps: { title: string; severity: Severity; fingerprint: string }[];
   playbook: string[];
@@ -109,10 +113,19 @@ export interface Enforcement {
   silent: number | null; configured: number | null;
   /** Events against the window before: +0.4 is 40% more (null: not read). */
   trend: number | null;
+  /** The inputs of each number above, from the rule effectiveness rows (themselves sums of the analytics rows). */
+  proof: {
+    enforcedByAction: Record<string, number>; passiveByAction: Record<string, number>;
+    wafLogged: number; wafDecided: number; challenged: number; solved: number; previous: number | null;
+    badByRule: { rule: string; bots: number; malicious: number }[];
+    silentRules: string[];
+  } | null;
 }
 
 export interface Posture {
   grade: string | null; label: string; score: number | null;
+  /** The proof of the score: each graded area's score and weight, the weighted mean, and the cap applied. */
+  gradeProof: { rows: { area: string; score: number; weight: number }[]; mean: number | null; cap: string | null };
   verdict: string;
   areas: AreaScore[];
   enforcement: Enforcement;
@@ -132,6 +145,9 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 /** Rules whose finding a no-cost control (on every plan) closes. */
 const NO_COST = new Set(['bots.login_turnstile', 'access.admin_paths', 'waf.bot_fight', 'managed.leaked_credentials', 'tls.origin_pulls', 'dns.dnssec', 'email.spf', 'email.dmarc', 'email.caa', 'tls.always_https', 'tls.hsts']);
 
+/** The points one finding costs its area. */
+export const penaltyOf = (f: Pick<AuditFinding, 'severity' | 'verdict'>) => PENALTY[f.severity] * (f.verdict === 'confirmed' ? 1 : 0.5);
+
 function areaScore(def: AreaDef, cov: CoverageEntry[], findings: AuditFinding[]): AreaScore {
   const mine = cov.filter((c) => def.groups.includes(c.group));
   const fs = findings.filter((f) => def.groups.includes(f.group));
@@ -139,10 +155,11 @@ function areaScore(def: AreaDef, cov: CoverageEntry[], findings: AuditFinding[])
   const applicable = read + mine.filter((c) => c.state === 'not_read').length;
   const base = { id: def.id, label: def.label, what: def.what, weight: def.weight, read, applicable, passed: mine.filter((c) => c.state === 'passed').length, findings: fs.length,
     top: fs.length ? { title: fs[0].title, severity: fs[0].severity, fingerprint: fs[0].fingerprint } : null,
-    good: mine.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!) };
+    good: mine.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!),
+    penalties: fs.map((f) => ({ title: f.title, severity: f.severity, verdict: f.verdict, points: penaltyOf(f), fingerprint: f.fingerprint })) };
   if (!applicable) return { ...base, rating: 'not_applicable', score: null };
   if (read * 2 < applicable) return { ...base, rating: 'unknown', score: null };
-  const score = Math.max(0, Math.round(100 - fs.reduce((a, f) => a + PENALTY[f.severity] * (f.verdict === 'confirmed' ? 1 : 0.5), 0)));
+  const score = Math.max(0, Math.round(100 - fs.reduce((a, f) => a + penaltyOf(f), 0)));
   const confirmedWorst = Math.max(-1, ...fs.filter((f) => f.verdict === 'confirmed').map((f) => SEVERITY_RANK[f.severity]));
   let rating: Rating = score >= 90 ? 'strong' : score >= 70 ? 'fair' : score >= 40 ? 'weak' : 'at_risk';
   if (confirmedWorst >= SEVERITY_RANK.critical) rating = 'at_risk';
@@ -152,19 +169,22 @@ function areaScore(def: AreaDef, cov: CoverageEntry[], findings: AuditFinding[])
 
 function enforcementOf(r: AuditReport): Enforcement {
   const e = r.effectiveness;
-  if (!e) return { events: null, enforcedShare: null, logOnlyShare: null, solveRate: null, badLetThrough: null, silent: null, configured: null, trend: null };
+  if (!e) return { events: null, enforcedShare: null, logOnlyShare: null, solveRate: null, badLetThrough: null, silent: null, configured: null, trend: null, proof: null };
   let enforced = 0, passive = 0, waf = 0, wafLog = 0, challenged = 0, solved = 0, prev = 0, prevKnown = false, bad = 0, analysed = false;
+  const enforcedByAction: Record<string, number> = {}, passiveByAction: Record<string, number> = {};
+  const badByRule: { rule: string; bots: number; malicious: number }[] = [];
   for (const x of e.rules) {
     for (const [a, n] of Object.entries(x.byAction)) {
       const k = act(a);
-      if (ENFORCE.has(k)) enforced += n; else if (PASSIVE.has(k)) passive += n;
+      if (ENFORCE.has(k)) { enforced += n; enforcedByAction[a] = (enforcedByAction[a] ?? 0) + n; } else if (PASSIVE.has(k)) { passive += n; passiveByAction[a] = (passiveByAction[a] ?? 0) + n; }
       if ((x.kind === 'managed' || x.kind === 'custom') && !x.exception) { if (k === 'log') wafLog += n; if (ENFORCE.has(k) || PASSIVE.has(k)) waf += n; }
     }
     challenged += x.challenged; solved += x.solved;
     if (x.previous !== null) { prev += x.previous; prevKnown = true; }
-    if (x.passthrough) { analysed = true; bad += x.passthrough.bots + x.passthrough.malicious; }
+    if (x.passthrough) { analysed = true; bad += x.passthrough.bots + x.passthrough.malicious; if (x.passthrough.bots + x.passthrough.malicious) badByRule.push({ rule: x.name, bots: x.passthrough.bots, malicious: x.passthrough.malicious }); }
   }
   const configured = e.rules.filter((x) => x.configured && x.enabled !== false && !x.exception);
+  const silentRules = configured.filter((x) => x.events === 0).map((x) => x.name);
   return {
     events: e.totalEvents,
     enforcedShare: enforced + passive ? enforced / (enforced + passive) : null,
@@ -173,6 +193,7 @@ function enforcementOf(r: AuditReport): Enforcement {
     badLetThrough: analysed ? bad : null,
     silent: configured.filter((x) => x.events === 0).length, configured: configured.length,
     trend: prevKnown && prev > 0 ? (e.totalEvents - prev) / prev : null,
+    proof: { enforcedByAction, passiveByAction, wafLogged: wafLog, wafDecided: waf, challenged, solved, previous: prevKnown ? prev : null, badByRule: badByRule.sort((a, b) => b.bots + b.malicious - a.bots - a.malicious), silentRules },
   };
 }
 
@@ -180,7 +201,7 @@ function threatOf(def: ThreatDef, cov: Map<string, CoverageEntry>, findings: Aud
   const entries = def.rules.map((id) => cov.get(id)).filter((c): c is CoverageEntry => !!c);
   const fs = findings.filter((f) => def.rules.includes(f.ruleId));
   const read = entries.filter((c) => c.state === 'passed' || c.state === 'finding');
-  const base = { id: def.id, label: def.label, controls: read.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!),
+  const base = { id: def.id, label: def.label, checks: entries.map((c) => ({ ruleId: c.ruleId, title: c.title, state: c.state, findings: c.findings })), controls: read.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!),
     gaps: fs.slice(0, 3).map((f) => ({ title: f.title, severity: f.severity, fingerprint: f.fingerprint })), playbook: def.playbook };
   if (!read.length) return { ...base, status: entries.some((c) => c.state === 'not_read') ? 'unknown' : 'not_applicable', playbook: [] };
   const gap = fs.some((f) => f.verdict === 'confirmed' && SEVERITY_RANK[f.severity] >= SEVERITY_RANK.high);
@@ -223,10 +244,12 @@ export function postureOf(r: AuditReport): Posture {
   const areas = AREAS.map((a) => areaScore(a, r.coverage, findings));
   const graded = areas.filter((a) => a.score !== null);
   const weight = graded.reduce((x, a) => x + a.weight, 0);
-  let score = weight ? Math.round(graded.reduce((x, a) => x + a.score! * a.weight, 0) / weight) : null;
+  const mean = weight ? Math.round(graded.reduce((x, a) => x + a.score! * a.weight, 0) / weight) : null;
+  let score = mean;
+  let cap: string | null = null;
   const confirmed = findings.filter((f) => f.verdict === 'confirmed');
-  if (score !== null && confirmed.some((f) => f.severity === 'critical')) score = Math.min(score, GRADES.find((g) => g.grade === 'D')!.min + 9);
-  else if (score !== null && confirmed.some((f) => f.severity === 'high')) score = Math.min(score, GRADES.find((g) => g.grade === 'C')!.min + 9);
+  if (score !== null && confirmed.some((f) => f.severity === 'critical')) { const c = GRADES.find((g) => g.grade === 'D')!.min + 9; if (score > c) cap = `A confirmed critical finding caps the score at ${c} (grade D).`; score = Math.min(score, c); }
+  else if (score !== null && confirmed.some((f) => f.severity === 'high')) { const c = GRADES.find((g) => g.grade === 'C')!.min + 9; if (score > c) cap = `A confirmed high finding caps the score at ${c} (grade C).`; score = Math.min(score, c); }
   const g = score === null ? null : GRADES.find((x) => score! >= x.min)!;
   const cov = new Map(r.coverage.map((c) => [c.ruleId, c]));
   const threats = THREATS.map((t) => threatOf(t, cov, findings));
@@ -275,6 +298,7 @@ export function postureOf(r: AuditReport): Posture {
 
   return {
     grade: g?.grade ?? null, label: g?.label ?? 'Not graded', score, verdict: parts.join(' '),
+    gradeProof: { rows: graded.map((a) => ({ area: a.label, score: a.score!, weight: a.weight })), mean, cap },
     areas, enforcement, threats,
     steps: { immediate: immediate.slice(0, CAP), shortTerm: short.slice(0, CAP), hardening: hard.slice(0, CAP), more },
     upgrades: upgradesOf(r.zone.plan, threats),

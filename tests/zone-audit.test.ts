@@ -6,6 +6,8 @@ import { CF_MANAGED, DDOS_L7, riskyLabel, runRules } from '@/lib/zone-audit/rule
 import { isBroad, isBroadPattern, literalPaths, norm, onlyClientFields, sensitivePaths } from '@/lib/zone-audit/expr';
 import { auditCsv, auditMarkdown, findingsJson } from '@/lib/zone-audit/render';
 import { postureOf } from '@/lib/zone-audit/posture';
+import { explain, reproduce } from '@/lib/zone-audit/proof';
+import { verifyReport } from '@/lib/zone-audit/verify';
 import { MASK, SOURCES, redact, type EventData, type Got, type RequestData, type Snapshot, type SourceKey, type Severity, type Verdict } from '@/lib/zone-audit/types';
 
 // Every audit rule against a clean snapshot (all pass) and a failing one, with the verdict and
@@ -601,4 +603,60 @@ test('posture: the clean zone rates A; findings lower the area, and a confirmed 
   assert.ok(p.steps.immediate.some((s) => s.fingerprint === 'zone:z1:tls.ssl_mode'), 'the confirmed high is immediate');
   assert.ok(p.monitor.some((m) => /401\/422/.test(m)));
   assert.match(p.verdict, /The biggest risk/);
+});
+
+test('proof: each evidence value is checked against the raw read, with a command to read it again', () => {
+  const r = report(snap((x) => { setting('ssl', 'flexible')(x); logRule(400, PY)(x); }));
+  const ssl = r.findings.find((f) => f.ruleId === 'tls.ssl_mode')!;
+  assert.equal(ssl.evidence[0].check, 'matches');
+  assert.equal(ssl.evidence[0].key, 'setting:ssl');
+  assert.match(ssl.evidence[0].raw!, /"flexible"/);
+  assert.equal(reproduce(ssl.evidence[0], r), 'curl -s "https://api.cloudflare.com/client/v4/zones/z1/settings/ssl" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"');
+  // Every evidence value of every finding has a check; traffic numbers are counted from analytics.
+  const all = r.findings.flatMap((f) => f.evidence);
+  assert.ok(all.every((e) => e.check), JSON.stringify(all.filter((e) => !e.check)));
+  assert.ok(all.some((e) => e.check === 'traffic'));
+  // A value the rule worked out (not in the answer as such) is never called a match.
+  const dmarc = report(snap((x) => { x.dns = (x.dns as { name: string }[]).filter((d) => !d.name.startsWith('_dmarc')); })).findings.find((f) => f.ruleId === 'email.dmarc')!;
+  assert.ok(dmarc.evidence.every((e) => e.check !== 'matches' || e.raw), JSON.stringify(dmarc.evidence));
+});
+
+test('verification: every cross-check holds on clean and failing reports', () => {
+  for (const s of [snap(), snap((x) => { setting('ssl', 'flexible')(x); logRule(400, PY)(x); setting('min_tls_version', '1.0')(x); })]) {
+    const r = report(s);
+    assert.ok(r.verification!.length >= 12, String(r.verification!.length));
+    assert.deepEqual(r.verification!.filter((c) => !c.ok).map((c) => `${c.id}: ${c.detail}`), []);
+    assert.deepEqual(verifyReport(r).filter((c) => !c.ok), [], 'also without the snapshot');
+  }
+  // A tampered number is caught.
+  const r = report(snap((x) => setting('ssl', 'flexible')(x)));
+  const bad = verifyReport({ ...r, summary: { ...r.summary, bySeverity: { ...r.summary.bySeverity, high: 9 } } });
+  assert.ok(bad.some((c) => c.id === 'summary.severity' && !c.ok));
+});
+
+test('explain: what to do, why, how it helps (with the score change), risks, how to confirm, priority', () => {
+  const r = report(snap((x) => setting('ssl', 'flexible')(x)));
+  const f = r.findings.find((x) => x.ruleId === 'tls.ssl_mode')!;
+  const e = explain(f, r);
+  assert.deepEqual(e.what, f.fix);
+  assert.ok(e.why[0] === f.description && e.why.some((w) => w.startsWith('Root cause:')));
+  assert.ok(e.helps.some((h) => /Encryption \(TLS\): score \d+ → 100/.test(h)), JSON.stringify(e.helps));
+  assert.ok(e.helps.some((h) => /^Overall: /.test(h)));
+  assert.match(e.risks[0], /Full \(strict\) fails/);
+  assert.ok(e.confirm.some((c) => c.includes('tls.ssl_mode')));
+  assert.match(e.priority, /^Fix now/);
+  assert.equal(e.effect!.points, 25);
+  // A traffic finding carries the requests the change acts on.
+  const t = report(snap(logRule(400, PY)));
+  const tf = t.findings.find((x) => x.ruleId === 'traffic.passthrough')!;
+  assert.ok(explain(tf, t).requests! > 0);
+});
+
+test('REPORT.md carries the proof, the full recommendation, the verification and the queries', () => {
+  const s = snap((x) => setting('ssl', 'flexible')(x));
+  s.queries = [{ dataset: 'firewallEventsAdaptiveGroups', since: '2026-10-25T00:00:00Z', until: NOW, text: '{ viewer { zones(filter: { zoneTag: "z1" }) { rules: firewallEventsAdaptiveGroups(limit: 10) { count } } } }' }];
+  const md = auditMarkdown(report(s), 'Castellan');
+  for (const h of ['**Proof:**', 'Matches Cloudflare’s answer', 'Re-check: `curl -s "https://api.cloudflare.com/client/v4/zones/z1/settings/ssl"', '"flexible"', '**Priority:** Fix now', '**What to do**', '**Why:**', '**How it will help:**', '**Risks and how to roll it out:**', '**How to confirm it worked:**',
+    'How the grade was worked out', 'How each area score was worked out', '## Verification', '## Appendix: analytics queries', 'zoneTag: "z1"']) assert.ok(md.includes(h), h);
+  assert.doesNotMatch(md, /\*\*Failed\*\*/);
 });

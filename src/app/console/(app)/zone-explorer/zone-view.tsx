@@ -3,7 +3,7 @@
 import { compactNum } from '@/lib/num';
 import { isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
-import { api, fmtDate } from '@/lib/client';
+import { fmtDate } from '@/lib/client';
 import type { ZoneGroupReport, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
 import { MANAGED_RULESETS } from '@/lib/traffic-types';
 import { deployOf, tuningLines, tuningOf } from '@/lib/waf-labels';
@@ -314,20 +314,13 @@ export function ZoneView({ zoneId, onPickTag, onMetaSaved, explorerLink = false 
   const error = entry?.error ?? '';
   const [find, setFind] = useState('');
   const [saving, setSaving] = useState('');
-  const [openMeta, setOpenMeta] = useState<ZoneMeta | null>(null);
-  // Shown from the store; read when it is not there yet (or too old).
+  const openMeta = useZoneStore((s) => s.zoneMeta[zoneId]) ?? null;
+  const loadZoneMeta = useZoneStore((s) => s.loadZoneMeta);
+  const setZoneMeta = useZoneStore((s) => s.setZoneMeta);
+  // Shown from the store; read only when it is not there yet (Read again reads it on purpose).
   useEffect(() => { if (zoneId) void openZone(zoneId); }, [zoneId, openZone]);
-
-  // The zone's full tags, owner, contact and notes.
-  useEffect(() => {
-    let live = true;
-    setOpenMeta(null);
-    if (!zoneId) return;
-    api<{ meta: Record<string, ZoneMeta> }>(`/api/zones/meta?ids=${encodeURIComponent(zoneId)}`)
-      .then((r) => { if (live) setOpenMeta(r.meta[zoneId] ?? { zoneId, zoneName: '', accountName: '', tags: [], owner: '', contact: '', notes: '' }); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [zoneId]);
+  // The zone's full tags, owner, contact and notes: from the store too.
+  useEffect(() => { if (zoneId) void loadZoneMeta(zoneId); }, [zoneId, loadZoneMeta]);
   const pickTag = (t: string) => onPickTag?.(t);
 
   const loaded = useMemo(() => (summary?.sections ?? []).map((x) => parts[x.key]?.data).filter((x): x is ZoneGroupReport => !!x), [summary, parts]);
@@ -384,7 +377,7 @@ export function ZoneView({ zoneId, onPickTag, onMetaSaved, explorerLink = false 
             </div>
             <div className="flex flex-wrap gap-2">
               <FavouriteStar zoneId={summary.zone.id} zoneName={zoneName} />
-              <Button size="sm" icon={<RefreshCw className={cx('size-3.5', loading && 'animate-spin')} />} onClick={() => void openZone(summary.zone.id, true)} disabled={loading}>Read again</Button>
+              <Button size="sm" icon={<RefreshCw className={cx('size-3.5', loading && 'animate-spin')} />} onClick={() => { void openZone(summary.zone.id, true); void loadZoneMeta(summary.zone.id, true); }} disabled={loading}>Read again</Button>
               {explorerLink && <ButtonLink size="sm" variant="ghost" href={`/console/zone-explorer?zone=${encodeURIComponent(summary.zone.id)}`} icon={<Globe className="size-3.5" />}>Open in Zone explorer</ButtonLink>}
               <Button size="sm" icon={<FileJson className="size-3.5" />} loading={saving === 'json'} disabled={loading} onClick={() => save('json', `${zoneName}-cloudflare.json`)}>JSON</Button>
               <Button size="sm" icon={<Download className="size-3.5" />} loading={saving === 'csv'} disabled={loading} title="All configuration: one row per value" onClick={() => save('csv', `${zoneName}-cloudflare.csv`)}>All as CSV</Button>
@@ -411,7 +404,7 @@ export function ZoneView({ zoneId, onPickTag, onMetaSaved, explorerLink = false 
             ))}
           </dl>
           <ZoneMetaPanel zoneId={summary.zone.id} zoneName={zoneName} meta={openMeta} onPickTag={pickTag}
-            onSaved={(m) => { setOpenMeta(m); onMetaSaved?.(m); }} />
+            onSaved={(m) => { setZoneMeta(m); onMetaSaved?.(m); }} />
         </Card>
 
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">

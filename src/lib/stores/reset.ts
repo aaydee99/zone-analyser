@@ -14,5 +14,7 @@ let owner = '';
 /** The signed-in person: what is kept belongs to them, so another person in this tab starts empty. */
 export function storesFor(userId: string) {
   if (owner && owner !== userId) resetStores();
+  // The zone store is also kept across reloads: it checks whom its saved copy belongs to.
+  if (owner !== userId) void useZoneStore.getState().claim(userId);
   owner = userId;
 }

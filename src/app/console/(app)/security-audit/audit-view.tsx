@@ -6,7 +6,7 @@ import { SeverityBadge } from '@/components/monitor-view';
 import { Alert, Badge, Card, SectionHeader, Stat, cx } from '@/components/ui';
 import {
   COVERAGE_LABEL, COVERAGE_STATES, GROUP_LABEL, KIND_LABEL, PASS_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel,
-  type ActionItem, type AuditFinding, type AuditReport, type AuditStatus, type AuditSummary, type CoverageState, type Effectiveness, type ManagedOverview, type PassThrough,
+  type ActionItem, type AuditFinding, type AuditReport, type Evidence, type AuditStatus, type AuditSummary, type CoverageState, type Effectiveness, type ManagedOverview, type PassThrough,
   type Recommendation, type RuleGroup, type RuleKind, type Severity, type Verdict,
 } from '@/lib/zone-audit/types';
 
@@ -16,6 +16,7 @@ import {
 // with that id opens itself and scrolls into view.
 
 import { whole } from '@/lib/num';
+import { CHECK_LABEL, explain, reproduce } from '@/lib/zone-audit/proof';
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 export type AuditTab = 'posture' | 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';
@@ -63,7 +64,60 @@ export function Summary({ r }: { r: AuditReport }) {
   );
 }
 
+/** The report the findings belong to (for the proof commands and the full recommendations). */
+export const AuditReportCtx = createContext<AuditReport | null>(null);
+
+const CHECK_TONE: Record<NonNullable<Evidence['check']>, 'ok' | 'info' | 'signal'> = { matches: 'ok', computed: 'info', traffic: 'signal' };
+
+/** Each evidence value, how it was checked, Cloudflare's answer it was found in, and the request that reads it again. */
+function Proof({ f }: { f: AuditFinding }) {
+  const report = useContext(AuditReportCtx);
+  return (
+    <div>
+      <h4 className="mb-1 text-xs font-medium text-muted">Proof</h4>
+      <ul className="space-y-2">
+        {f.evidence.map((e, i) => {
+          const cmd = report ? reproduce(e, report) : null;
+          return (
+            <li key={i} className="rounded-md border border-line px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {e.check ? <Badge tone={CHECK_TONE[e.check]}>{CHECK_LABEL[e.check]}</Badge> : <Badge tone="neutral">Not checked (older audit)</Badge>}
+                <span className="font-mono text-[11.5px] text-faint">{e.source}</span>
+              </div>
+              <p className="mt-1 break-words">{e.field}: <code className="font-mono text-xs text-ink">{e.value}</code></p>
+              {e.raw && <details className="mt-1"><summary className="cursor-pointer text-xs text-signal">{e.check === 'matches' ? 'The record in Cloudflare’s answer' : 'Cloudflare’s answer the rule read'}</summary>
+                <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-sunken/60 px-3 py-2 font-mono text-[11px] whitespace-pre-wrap break-all">{e.raw}</pre></details>}
+              {cmd && <p className="mt-1 text-xs text-muted">Re-check it yourself: <code className="font-mono text-[11px] break-all text-ink-2">{cmd}</code></p>}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** The finding as a full recommendation: what to do, why, how it helps, risks, how to confirm, priority. */
+function FullRec({ f, r }: { f: AuditFinding; r: AuditReport }) {
+  const x = useMemo(() => explain(f, r), [f, r]);
+  const list = (title: string, items: string[], ordered = false) => !items.length ? null : (
+    <div><h4 className="mb-1 text-xs font-medium text-muted">{title}</h4>
+      {ordered ? <ol className="list-decimal space-y-1 pl-5">{items.map((t, i) => <li key={i} className="break-words">{t}</li>)}</ol>
+        : <ul className="list-disc space-y-1 pl-5">{items.map((t, i) => <li key={i} className="break-words">{t}</li>)}</ul>}</div>
+  );
+  return (
+    <div className="space-y-3 rounded-md border border-line bg-raised/40 px-4 py-3">
+      <p className="text-[12.5px]"><span className="font-medium text-ink">Priority:</span> {x.priority}</p>
+      {list('What to do (not applied — make the change in the dashboard)', x.what, true)}
+      {list('Why', x.why)}
+      {list('How it will help', x.helps)}
+      {list('Risks and how to roll it out', x.risks)}
+      {list('How to confirm it worked', x.confirm)}
+    </div>
+  );
+}
+
 function FindingCard({ f }: { f: AuditFinding }) {
+  const report = useContext(AuditReportCtx);
   const id = findingId(f.fingerprint);
   const targeted = useTargeted(id);
   const [opened, setOpen] = useState(false);
@@ -86,14 +140,13 @@ function FindingCard({ f }: { f: AuditFinding }) {
             <dt className="text-muted">Intended behaviour</dt><dd>{f.intendedBehavior}</dd>
             <dt className="text-muted">Rule</dt><dd><code className="font-mono text-xs">{f.ruleId}</code> · from <span className="font-mono text-xs">{f.skillRef}</span></dd>
           </dl>
-          <div>
-            <h4 className="mb-1 text-xs font-medium text-muted">Evidence</h4>
-            <ul className="space-y-1">{f.evidence.map((e, i) => <li key={i} className="break-words"><span className="font-mono text-[11.5px] text-faint">{e.source}</span> · {e.field}: <code className="font-mono text-xs text-ink">{e.value}</code></li>)}</ul>
-          </div>
-          <div>
-            <h4 className="mb-1 text-xs font-medium text-muted">Fix (not applied — do it in the dashboard)</h4>
-            <ol className="list-decimal space-y-1 pl-5">{f.fix.map((x, i) => <li key={i} className="break-words">{x}</li>)}</ol>
-          </div>
+          <Proof f={f} />
+          {report ? <FullRec f={f} r={report} /> : (
+            <div>
+              <h4 className="mb-1 text-xs font-medium text-muted">Fix (not applied — do it in the dashboard)</h4>
+              <ol className="list-decimal space-y-1 pl-5">{f.fix.map((x, i) => <li key={i} className="break-words">{x}</li>)}</ol>
+            </div>
+          )}
           {f.validation && <Alert tone="info" title="How to validate">{f.validation}</Alert>}
           <p className="font-mono text-[11px] text-faint">{f.fingerprint}</p>
         </div>
@@ -429,6 +482,26 @@ export function Method({ r }: { r: AuditReport }) {
           </li>
         ))}
       </ul>
+    </Card>
+  );
+}
+
+/** Every analytics query the audit sent, as sent: each traffic number can be reproduced from these. */
+export function Queries({ r }: { r: AuditReport }) {
+  const q = r.queries ?? [];
+  return (
+    <Card>
+      <SectionHeader title="Analytics queries" description={q.length ? `${q.length} GraphQL queries, as sent to https://api.cloudflare.com/client/v4/graphql (with your token as a Bearer header). Every traffic number on this report is a sum of their rows.` : 'This audit was made before the queries were recorded: run it again to see them.'} />
+      {q.length > 0 && (
+        <ol className="divide-y divide-line/70">
+          {q.map((x, i) => (
+            <li key={i} className="px-5 py-2 text-xs">
+              <details><summary className="cursor-pointer text-ink-2">{i + 1}. {x.dataset} · {x.since.slice(0, 16).replace('T', ' ')} → {x.until.slice(0, 16).replace('T', ' ')} UTC</summary>
+                <pre className="mt-1 overflow-auto rounded-md bg-sunken/60 px-3 py-2 font-mono text-[11px] whitespace-pre-wrap break-all">{x.text}</pre></details>
+            </li>
+          ))}
+        </ol>
+      )}
     </Card>
   );
 }

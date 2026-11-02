@@ -1,14 +1,14 @@
 import 'server-only';
 import crypto from 'node:crypto';
 import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { AuthError, getMe, type Me } from './auth';
 import { VaultError } from './vault';
 import { NotConfiguredError } from './supabase';
 import { can, type Permission } from './rbac';
 import { isAllowedHost } from './hosts';
 import { audit } from './audit';
-import { hitLimit } from './rate-limit';
+import { hitLimit, rateStore } from './rate-limit';
 import { RelayError, relay, relayed, relayedMe } from './worker-link';
 
 export const SESSION_COOKIE = 'cfbc_session';
@@ -31,6 +31,29 @@ export async function rateLimit(key: string, max: number, windowMs = 60_000) {
   if (hit.allowed) return;
   const retry = Math.max(1, Math.ceil(hit.resetMs / 1000));
   throw new HttpError(429, `Too many requests — try again in ${retry}s`, { 'Retry-After': String(retry) });
+}
+
+/**
+ * The general per-user limits without making the request wait for the shared store: the hit is
+ * counted after the response (`after`), and a key the store says is over its limit is refused here
+ * until its window ends. With Redis or Supabase a user can get one request past the limit (or one
+ * more per instance) before the answer arrives — fine for 600 a minute, which bounds a signed-in
+ * user's load, not password guessing. On one server the store is memory: no round trip to save,
+ * so it is counted in line and stays exact. Sign-in and setup (publicRoute) and each route's own
+ * tighter limit still wait for the count.
+ */
+const overLimit = new Map<string, number>();
+async function rateLimitSoon(key: string, max: number, windowMs = 60_000) {
+  if (rateStore() === 'memory') return rateLimit(key, max, windowMs);
+  const until = overLimit.get(key);
+  if (until !== undefined) {
+    const left = until - Date.now();
+    if (left > 0) { const retry = Math.max(1, Math.ceil(left / 1000)); throw new HttpError(429, `Too many requests — try again in ${retry}s`, { 'Retry-After': String(retry) }); }
+    overLimit.delete(key);
+  }
+  const count = () => hitLimit(`rl:${key}`, windowMs, max).then((h) => { if (!h.allowed) overLimit.set(key, Date.now() + h.resetMs); }, () => {});
+  // after() keeps a serverless function alive until the count is stored; outside a request (tests), just run it.
+  try { after(count); } catch { void count(); }
 }
 
 /** Per signed-in user: all requests, and requests that change something. */
@@ -124,6 +147,32 @@ async function logRefusal(me: Me, err: unknown, req: Request) {
 
 const toResponse = (res: unknown) => (res instanceof Response ? res : NextResponse.json(res ?? { ok: true }));
 
+/**
+ * Server-Timing for signed-in API responses: how long the session check, the rate limits and the
+ * handler (or the worker relay) took, in milliseconds. Browsers show it in DevTools › Network ›
+ * Timing; set against the edge's time to first byte, the rest is the network between the edge and
+ * this server. Durations only — no names, IDs or data. For a streamed response it covers the time
+ * to the first byte of the handler, not the whole stream.
+ */
+class Timing {
+  private last = performance.now();
+  private parts: string[] = [];
+  mark(name: string, desc: string) {
+    const now = performance.now();
+    this.parts.push(`${name};desc="${desc}";dur=${(now - this.last).toFixed(1)}`);
+    this.last = now;
+  }
+  on(res: Response): Response {
+    const value = this.parts.join(', ');
+    try { res.headers.append('Server-Timing', value); return res; } catch {
+      // A relayed or fetched response has immutable headers: copy it.
+      const copy = new Response(res.body, res);
+      copy.headers.append('Server-Timing', value);
+      return copy;
+    }
+  }
+}
+
 type Handler<C> = (req: Request, ctx: C, me: Me) => Promise<Response | unknown>;
 
 /**
@@ -134,28 +183,29 @@ type Handler<C> = (req: Request, ctx: C, me: Me) => Promise<Response | unknown>;
 export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; limit?: { name: string; max: number; windowMs?: number } } = {}) {
   return async (req: Request, ctx: C) => {
     let who: Me | null = null;
+    const t = new Timing();
     try {
       checkRequest(req);
       // On a worker: a request the worker loop replays for the web side, already checked there.
       const fromWeb = await relayedMe(req);
       const peek = req.method === 'GET' && new URL(req.url).searchParams.get('peek') === '1';
       const me = fromWeb ?? await getMe(await sessionToken(), !peek);
+      t.mark('auth', 'session check');
       if (!me) throw new HttpError(401, 'Your session has ended — sign in again');
       who = me;
       if (!fromWeb) {
         const write = req.method !== 'GET' && req.method !== 'HEAD';
-        // Both counted at once (one round trip to the shared store, not two in a row).
-        const [all, w] = await Promise.allSettled([
-          rateLimit(`user:${me.id}`, LIMIT_ALL * SCALE),
-          write ? rateLimit(`user:${me.id}:write`, LIMIT_WRITE * SCALE) : Promise.resolve(),
-        ]);
+        const [all, w] = await Promise.allSettled([rateLimitSoon(`user:${me.id}`, LIMIT_ALL * SCALE), write ? rateLimitSoon(`user:${me.id}:write`, LIMIT_WRITE * SCALE) : undefined]);
         for (const r of [all, w]) if (r.status === 'rejected') throw r.reason;
       }
       if (opts.perm) requirePerm(me, opts.perm);
       if (opts.limit && !fromWeb) await rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
+      t.mark('limit', 'rate limits');
       // On Vercel (web role): the worker runs it, from its own server and IP.
-      if (!fromWeb && relayed(req)) return await relay(req, me);
-      return toResponse(await fn(req, ctx, me));
+      if (!fromWeb && relayed(req)) { const res = await relay(req, me); t.mark('relay', 'worker relay'); return t.on(res); }
+      const res = toResponse(await fn(req, ctx, me));
+      t.mark('app', 'handler');
+      return t.on(res);
     } catch (err) {
       if (who) await logRefusal(who, err, req);
       return errorResponse(err);
