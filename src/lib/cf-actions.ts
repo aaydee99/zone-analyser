@@ -45,7 +45,14 @@ export interface LogpushAction {
 }
 
 const PURGE_MODES = ['everything', 'files', 'tags', 'hosts', 'prefixes'] as const;
-const MAX_VALUES = 100;
+/** Values one purge may list; Cloudflare takes PURGE_BATCH per call, so they go PURGE_BATCH at a time. */
+const MAX_VALUES = 10_000;
+const PURGE_BATCH = 100;
+/** The rest after each batch, and after Cloudflare's "too many requests" (longer each time, up to PURGE_RETRIES). */
+const PURGE_REST_MS = Number(process.env.PURGE_REST_MS) || 1_000;
+const PURGE_LIMITED_MS = Number(process.env.PURGE_LIMITED_MS) || 10_000;
+const PURGE_RETRIES = 3;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const HOST = /^(?=.{1,253}$)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$/i;
 
@@ -69,7 +76,7 @@ export async function validateAction(raw: unknown): Promise<CfAction> {
     if (mode !== 'everything') {
       values = (Array.isArray(a.values) ? a.values : []).map((v) => String(v).trim()).filter(Boolean);
       if (!values.length) throw new HttpError(400, 'List at least one value to purge');
-      if (values.length > MAX_VALUES) throw new HttpError(400, `At most ${MAX_VALUES} values in one purge`);
+      if (values.length > MAX_VALUES) throw new HttpError(400, `At most ${MAX_VALUES.toLocaleString('en-US')} values in one purge`);
       for (const v of values) {
         if (v.length > 1024) throw new HttpError(400, 'A value is longer than 1,024 characters');
         if (mode === 'files' && !/^https?:\/\//i.test(v)) throw new HttpError(400, `Not a full URL: ${v}`);
@@ -234,11 +241,26 @@ export async function executeAction(a: CfAction): Promise<string> {
     const { zone } = await zoneOf(a.zoneId);
     // Checked again when it runs (an approved request may be applied later): the zone must still be in that account.
     if (a.accountId && zone.accountId !== a.accountId) throw new HttpError(409, `${zone.name} is no longer in account ${a.accountName || a.accountId}: nothing was purged`);
-    const body = a.mode === 'everything' ? { purge_everything: true } : { [a.mode]: a.values };
-    const r = await cfRuntime(cred, 'POST', `/zones/${a.zoneId}/purge_cache`, body);
-    if (credentialRefused(r)) throw new HttpError(409, `Cloudflare refused the credential you entered: it needs “Zone › Cache Purge › Purge” on ${zone.name}, or use a Global API Key of a member who may purge it (${cfReason(r)})`);
-    if (!ok(r)) throw new HttpError(502, `Cloudflare: ${cfReason(r)}`);
-    return describe(a).title.replace(/^Purge/, 'Purged');
+    // Everything: one call. Otherwise PURGE_BATCH values per call, resting PURGE_REST_MS after each
+    // batch; Cloudflare's "too many requests" (429) waits longer and sends the same batch again.
+    const batches = a.mode === 'everything' ? [null] : Array.from({ length: Math.ceil(a.values.length / PURGE_BATCH) }, (_, i) => a.values.slice(i * PURGE_BATCH, (i + 1) * PURGE_BATCH));
+    let done = 0;
+    for (let i = 0; i < batches.length; i++) {
+      const values = batches[i];
+      const body = values ? { [a.mode]: values } : { purge_everything: true };
+      let r = await cfRuntime(cred, 'POST', `/zones/${a.zoneId}/purge_cache`, body);
+      for (let t = 1; r.status === 429 && t <= PURGE_RETRIES; t++) {
+        await sleep(PURGE_LIMITED_MS * t);
+        r = await cfRuntime(cred, 'POST', `/zones/${a.zoneId}/purge_cache`, body);
+      }
+      const so = done ? ` (${done.toLocaleString('en-US')} of ${a.values.length.toLocaleString('en-US')} were purged before it)` : '';
+      if (credentialRefused(r)) throw new HttpError(409, `Cloudflare refused the credential you entered: it needs “Zone › Cache Purge › Purge” on ${zone.name}, or use a Global API Key of a member who may purge it (${cfReason(r)})${so}`);
+      if (!ok(r)) throw new HttpError(502, `Cloudflare${batches.length > 1 ? `, batch ${i + 1} of ${batches.length}` : ''}: ${cfReason(r)}${so}`);
+      done += values?.length ?? 0;
+      if (i < batches.length - 1) await sleep(PURGE_REST_MS);
+    }
+    const title = describe(a).title.replace(/^Purge/, 'Purged');
+    return batches.length > 1 ? `${title} (in ${batches.length} batches of up to ${PURGE_BATCH})` : title;
   }
   if (a.type === 'logpush') return executeLogpush(a);
   const token = await accountToken(a.accountId);

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BellPlus, CheckCheck, Undo2 } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
-import type { ZoneListItem } from '@/lib/zone-catalog';
+import { zoneList } from '@/lib/zone-list-client';
 import { Alert, Badge, Button, Card, Field, Modal, SectionHeader } from '@/components/ui';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
@@ -52,7 +52,7 @@ interface AccountOption { id: string; name: string }
 function useAccounts() {
   const [accounts, setAccounts] = useState<AccountOption[] | null>(null);
   useEffect(() => {
-    api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((r) => {
+    zoneList().then((r) => {
       const m = new Map<string, string>();
       for (const z of r.zones) if (z.accountId) m.set(z.accountId, z.accountName || z.accountId);
       setAccounts([...m].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)));

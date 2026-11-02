@@ -157,9 +157,10 @@ async function legacyRestores(): Promise<RestoreRecord[]> {
 }
 
 /** Every restore, newest first. `live`: ids of restore sessions that still exist. */
-export async function restoreHistory(live: Set<string>): Promise<RestoreHistory> {
-  const briefs = recordBriefs();
-  const all = [...briefs.map((b) => fromBrief(b, live.has(b.base.id))), ...(await legacyRestores()).map((r) => summarize(r, false))]
+/** `sees`: whether the asking person may see a restore by its people (record-access.ts); the counts follow it. */
+export async function restoreHistory(live: Set<string>, sees: (owners: (string | null | undefined)[]) => boolean = () => true): Promise<RestoreHistory> {
+  const briefs = recordBriefs().filter((b) => sees([b.base.createdBy, b.base.appliedBy]));
+  const all = [...briefs.map((b) => fromBrief(b, live.has(b.base.id))), ...(await legacyRestores()).filter((r) => sees([r.createdBy, r.appliedBy])).map((r) => summarize(r, false))]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const since = Date.now() - 30 * 86_400_000;
   const recent = briefs.filter((b) => Date.parse(b.base.createdAt) >= since);

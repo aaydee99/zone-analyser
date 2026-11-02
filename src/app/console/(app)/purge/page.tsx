@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Eraser } from 'lucide-react';
 import { api } from '@/lib/client';
+import { zoneList } from '@/lib/zone-list-client';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import { Alert, Button, Card, Field, Loading, Modal, PageHeader, SectionHeader, Segmented, Skeleton } from '@/components/ui';
 import { useMe } from '@/components/me';
@@ -11,6 +12,8 @@ import { useToast } from '@/components/toast';
 import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/components/change-note';
 import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import type { ChangeNote } from '@/lib/change-note';
+import { ZoneCombobox } from '@/components/zone-combobox';
+import { compactNum } from '@/lib/num';
 
 type Mode = 'files' | 'tags' | 'hosts' | 'prefixes' | 'everything';
 const MODES: { value: Mode; label: string }[] = [
@@ -23,9 +26,12 @@ const HINT: Record<Mode, string> = {
   tags: 'Cache-Tag values your origin sends, one per line',
   everything: '',
 };
-const MAX = 100;
-/** Above this many zones in an account, a name filter is shown over the zone list. */
-const FILTER_FROM = 50;
+/** Values in one purge; the server sends them to Cloudflare BATCH at a time, resting between batches. */
+const MAX = 10_000;
+const BATCH = 100;
+/** Zones listed at once in the zone field (type to narrow). */
+const SHOWN = 50;
+const MAX_BYTES = 1_900_000;
 
 export default function PurgePage() {
   const { can } = useMe();
@@ -33,7 +39,6 @@ export default function PurgePage() {
   const [zones, setZones] = useState<ZoneListItem[] | null>(null);
   const [accountId, setAccountId] = useState('');
   const [zoneId, setZoneId] = useState('');
-  const [find, setFind] = useState('');
   const [mode, setMode] = useState<Mode>('files');
   const [text, setText] = useState('');
   const [confirm, setConfirm] = useState(false);
@@ -47,7 +52,7 @@ export default function PurgePage() {
   const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
 
   useEffect(() => {
-    api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((r) => {
+    zoneList().then((r) => {
       const active = r.zones.filter((z) => z.status === 'active');
       setZones(active);
       // One account: nothing to choose.
@@ -63,11 +68,19 @@ export default function PurgePage() {
   }, [zones]);
   const account = accounts.find((a) => a.id === accountId);
   const inAccount = useMemo(() => (zones ?? []).filter((z) => z.accountId === accountId).sort((a, b) => a.name.localeCompare(b.name)), [zones, accountId]);
-  const listed = useMemo(() => { const q = find.trim().toLowerCase(); return q ? inAccount.filter((z) => z.name.toLowerCase().includes(q) || z.id === zoneId) : inAccount; }, [inAccount, find, zoneId]);
   const zone = inAccount.find((z) => z.id === zoneId);
-  const pickAccount = (id: string) => { setAccountId(id); setZoneId(''); setFind(''); setResult(null); };
+  // One field finds and chooses the zone: the account's zones (loaded already) matched by name as you type.
+  const searchZones = useCallback(async (q: string) => {
+    const t = q.toLowerCase();
+    const hits = t ? inAccount.filter((z) => z.name.toLowerCase().includes(t)) : inAccount;
+    return { zones: hits.slice(0, SHOWN).map((z) => ({ id: z.id, name: z.name })), total: hits.length };
+  }, [inAccount]);
+  const pickAccount = (id: string) => { setAccountId(id); setZoneId(''); setResult(null); };
   const values = useMemo(() => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean), [text]);
-  const ready = !!account && !!zone && (mode === 'everything' || (values.length > 0 && values.length <= MAX)) && (direct ? credentialReady(cred) : noteReady(note, requireReason));
+  const batches = Math.ceil(values.length / BATCH);
+  // One request carries at most 2 MB (about 10,000 typical URLs).
+  const tooBig = values.reduce((n, v) => n + v.length + 4, 0) > MAX_BYTES;
+  const ready = !!account && !!zone && (mode === 'everything' || (values.length > 0 && values.length <= MAX && !tooBig)) && (direct ? credentialReady(cred) : noteReady(note, requireReason));
 
   const submit = async () => {
     setBusy(true);
@@ -104,26 +117,20 @@ export default function PurgePage() {
         <SectionHeader step="2" title="Zone" description={account ? `Active zones in ${account.name}.` : 'Choose the account first.'} />
         <div className="space-y-3 px-5 py-4">
           {!zones ? <Skeleton className="h-10 w-full max-w-md rounded-[9px]" /> : (
-            <>
-              {inAccount.length > FILTER_FROM && (
-                <input className="input max-w-md" aria-label="Filter zones by name" placeholder={`Filter ${inAccount.length} zones by name`} value={find} onChange={(e) => setFind(e.target.value)} />
-              )}
-              <select className="input max-w-md" aria-label="Zone" value={zoneId} disabled={!account} onChange={(e) => { setZoneId(e.target.value); setResult(null); }}>
-                <option value="">{!account ? 'Choose an account first' : listed.length ? 'Choose a zone' : 'No zone matches'}</option>
-                {listed.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-              </select>
-            </>
+            <ZoneCombobox key={accountId} className="max-w-md" value={zone ? { id: zone.id, name: zone.name } : null} disabled={!account} search={searchZones}
+              placeholder={account ? `Search ${compactNum(inAccount.length)} zones by name…` : 'Choose an account first'}
+              onChange={(z) => { setZoneId(z?.id ?? ''); setResult(null); }} />
           )}
         </div>
       </Card>
       <Card>
-        <SectionHeader step="3" title="What to purge" description="Every plan can purge by URL, prefix, host or tag. Cloudflare limits how many purge requests a zone may send per second." />
+        <SectionHeader step="3" title="What to purge" description={`Every plan can purge by URL, prefix, host or tag. List as many as you need (up to ${compactNum(MAX)}): they are sent to Cloudflare ${BATCH} at a time, with a short rest after each ${BATCH}, so Cloudflare's purge rate limit is respected.`} />
         <div className="space-y-4 px-5 py-4">
           <Segmented value={mode} onChange={(m) => setMode(m)} options={MODES} />
           {mode === 'everything' ? (
             <Alert tone="warn" title="Purge everything">Every cached file of the zone is dropped. Your origin serves all of them again until they are cached anew — expect a burst of origin traffic.</Alert>
           ) : (
-            <Field label={`${MODES.find((m) => m.value === mode)!.label} (${values.length} of up to ${MAX})`} htmlFor="purge-values" hint={HINT[mode]} error={values.length > MAX ? `At most ${MAX} at a time` : undefined}>
+            <Field label={`${MODES.find((m) => m.value === mode)!.label} (${compactNum(values.length)}${batches > 1 ? ` · sent in ${batches} batches of ${BATCH}` : ''})`} htmlFor="purge-values" hint={HINT[mode]} error={values.length > MAX ? `At most ${compactNum(MAX)} in one purge` : tooBig ? 'The list is too long to send at once (about 2 MB): split it into two purges' : undefined}>
               <textarea id="purge-values" className="input min-h-[140px] font-mono !text-[12.5px]" value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} />
             </Field>
           )}

@@ -1,5 +1,7 @@
 import 'server-only';
-import { activeRunId } from './runner';
+import { activeRunId, getRun } from './runner';
+import { recordFilter, runOwners } from './record-access';
+import { listApprovals } from './approvals-store';
 import { activeRestore, type ActiveRestore } from './job-lock';
 import { pendingFor } from './approvals';
 import { isWebRole, latestWorker, relayJson, retireIfOutdated } from './worker-link';
@@ -34,12 +36,29 @@ export interface LiveState {
 }
 
 /**
+ * The running backup and restore as `me` may see them (record-access.ts): someone else's running
+ * backup is not named (null), and someone else's restore is shown without its zone, person or id —
+ * a job is running (so a new one waits), but whose and where stays theirs.
+ */
+async function visibleJobs(me: Me): Promise<Pick<LiveState, 'activeRunId' | 'activeRestore'>> {
+  const runId = activeRunId();
+  const restore = activeRestore();
+  if (!runId && !restore) return { activeRunId: null, activeRestore: null };
+  const sees = await recordFilter(me);
+  const run = runId ? await getRun(runId).catch(() => null) : null;
+  return {
+    activeRunId: runId && run && sees(runOwners(run, listApprovals())) ? runId : null,
+    activeRestore: restore && !sees([restore.by]) ? { ...restore, id: '', zone: '', by: '' } : restore,
+  };
+}
+
+/**
  * The running job and the approvals waiting for `me`. On Vercel these live on the worker, so it
  * is asked (briefly: the page must not hang when the worker is offline).
  */
 /** `wake`: start the worker when none is online (false for the background status poll). */
 export async function liveState(me: Me, wake = true): Promise<LiveState> {
-  if (!isWebRole()) return { activeRunId: activeRunId(), activeRestore: activeRestore(), pendingApprovals: pendingFor(me) };
+  if (!isWebRole()) return { ...(await visibleJobs(me)), pendingApprovals: pendingFor(me) };
   const w = await latestWorker().catch(() => null);
   const s = w?.online ? await relayJson<LiveState>(me, '/api/auth/me?peek=1', 4_000) : null;
   const updating = w?.online ? await retireIfOutdated(w).catch(() => false) : false;

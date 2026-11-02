@@ -3,6 +3,7 @@ import { getRun, readRunLog, storedRun, storedRunLog, subscribe } from '@/lib/ru
 import { sessionStillValid } from '@/lib/auth';
 import { isWebRole } from '@/lib/worker-link';
 import type { Me } from '@/lib/auth';
+import { mustSeeRun } from '@/lib/record-access';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -13,7 +14,9 @@ const SSE_HEADERS = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-
 export const GET = route<Ctx>(async (req, { params }, me) => {
   const id = (await params).id;
   if (isWebRole()) return followStored(req, id, me);
-  if (!(await getRun(id))) throw new HttpError(404, 'Run not found');
+  const run = await getRun(id);
+  if (!run) throw new HttpError(404, 'Run not found');
+  await mustSeeRun(me, run);
   const backlog = await readRunLog(id);
   const enc = new TextEncoder();
   let cleanup = () => {};
@@ -50,6 +53,7 @@ const WEB_STREAM_MS = 240_000;
 async function followStored(req: Request, id: string, me: Me) {
   const first = await storedRun(id);
   if (!first) throw new HttpError(404, 'Run not found');
+  await mustSeeRun(me, first);
   const enc = new TextEncoder();
   let stop = false;
   const stream = new ReadableStream({

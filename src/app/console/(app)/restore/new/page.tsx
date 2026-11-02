@@ -127,7 +127,8 @@ export default function RestorePage() {
     reattached.current = true;
     let saved: string | null = null;
     try { saved = sessionStorage.getItem('restore.session'); } catch { /* storage blocked */ }
-    const id = activeRestore?.id ?? saved;
+    // Someone else's restore comes without its id (it is theirs): only this person's own is reopened.
+    const id = activeRestore?.id || saved;
     if (id) api<RestoreView>(`/api/restore/${id}`).then((v) => {
       // The pickers show the session's own account set, zone and bucket again.
       setR(v); setCfId(v.account.credentialId); setZoneId(v.zone.id); setKind(v.source.kind); setBucket(v.source.bucket);
@@ -139,7 +140,7 @@ export default function RestorePage() {
 
   // Only one job runs at a time: a backup, or another restore, blocks every step here.
   const otherJob = activeRunId ? { text: 'A backup is running', href: `/console/runs/${activeRunId}`, link: 'View the backup' }
-    : activeRestore && activeRestore.id !== r?.id ? { text: `A restore of ${activeRestore.zone} is running (${activeRestore.job}, by ${activeRestore.by})`, href: '/console/restore/new', link: '' }
+    : activeRestore && activeRestore.id !== r?.id ? { text: activeRestore.zone ? `A restore of ${activeRestore.zone} is running (${activeRestore.job}, by ${activeRestore.by})` : `Another person’s restore is running (${activeRestore.job})`, href: '/console/restore/new', link: '' }
     : null;
   const lockedOut = !!otherJob;
 

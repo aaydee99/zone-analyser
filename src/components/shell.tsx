@@ -174,6 +174,14 @@ export function Shell({ initial, children }: { initial: MeState; children: React
 
   // Rendered without the live state (it was slow): ask for it now.
   useEffect(() => { if (initial.stale) void refresh(false); }, [initial.stale, refresh]);
+  // The zone list is what most pages start from: read it into the zone store as soon as the worker
+  // runs (at once when this server runs the jobs itself), so the Zone explorer, the zone panel and the
+  // zone pickers open with it. Once per tab and 10 minutes (the store keeps it); a failure is retried
+  // by the next page that asks.
+  const workerUp = !me.worker || me.worker.online;
+  useEffect(() => {
+    if (workerUp && me.permissions.includes('runs:read')) void useZoneStore.getState().loadList().catch(() => {});
+  }, [workerUp, me.permissions]);
   useEffect(() => { setMobileOpen(false); }, [pathname]);
   const mobileMenu = useRef<HTMLElement>(null);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
@@ -248,7 +256,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
           <span className="live-dot size-2 rounded-full bg-live" />
           <span className="flex-1">
             <span className="block font-medium text-ink">Restore running</span>
-            <span className="text-xs text-muted">{me.activeRestore.zone} · {me.activeRestore.job}</span>
+            <span className="text-xs text-muted">{me.activeRestore.zone ? `${me.activeRestore.zone} · ${me.activeRestore.job}` : `Another person’s · ${me.activeRestore.job}`}</span>
           </span>
           <Activity className="size-4 text-live" aria-hidden />
         </Link>

@@ -660,7 +660,7 @@ function BackupBuilder() {
                 </Link>
               ) : activeRestore ? (
                 <Link href="/console/restore/new" className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-signal/30 bg-signal/10 text-sm font-medium text-signal">
-                  <span className="live-dot size-2 rounded-full bg-live" /> A restore of {activeRestore.zone} is running — view it
+                  <span className="live-dot size-2 rounded-full bg-live" /> {activeRestore.zone ? <>A restore of {activeRestore.zone} is running — view it</> : 'Another person’s restore is running — wait for it'}
                 </Link>
               ) : (
                 <Button variant="primary" size="lg" className="w-full" disabled={problems.length > 0} loading={starting} icon={<Play className="size-4" />} onClick={start}>

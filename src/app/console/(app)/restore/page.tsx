@@ -143,9 +143,10 @@ export default function RestoreOverview() {
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-6">
-          {(activeRestore || latest) && (() => {
-            const live = !!activeRestore;
-            const id = activeRestore?.id ?? latest!.id;
+          {((activeRestore?.id) || latest) && (() => {
+            // Someone else's running restore comes without its id: their record is not shown here.
+            const live = !!activeRestore?.id;
+            const id = activeRestore?.id || latest!.id;
             return (
               <Card className="overflow-hidden">
                 <div className="grid-bg flex flex-wrap items-center justify-between gap-4 px-6 py-5">

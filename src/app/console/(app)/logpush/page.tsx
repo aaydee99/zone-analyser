@@ -12,6 +12,7 @@ import { ChangeNoteFields, noteBody, noteReady, useRequireReason } from '@/compo
 import { EMPTY_CREDENTIAL, RuntimeCredentialFields, credentialBody, credentialReady, type RuntimeCredentialInput } from '@/components/runtime-credential';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
+import { ZoneCombobox, type ZoneChoice } from '@/components/zone-combobox';
 import { coverageLabel } from '../monitoring/use-run';
 
 const PAGE = 50;
@@ -85,14 +86,14 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
   const [form, setForm] = useState<Form>(formOf(null));
   const [scope, setScope] = useState<'account' | 'zone'>(row?.scopeKind ?? 'account');
   const [scopeId, setScopeId] = useState(row?.scopeId ?? '');
-  const [zoneQ, setZoneQ] = useState('');
+  // A zone scope: one field to search and choose the zone.
+  const [zoneChoice, setZoneChoice] = useState<ZoneChoice | null>(null);
   const [scopes, setScopes] = useState<Scopes | null>(null);
   const [note, setNote] = useState<ChangeNote>({});
   const [busy, setBusy] = useState(false);
   const [owner, setOwner] = useState<{ busy: boolean; text: string }>({ busy: false, text: '' });
   const [result, setResult] = useState<Result | null>(null);
   const [cred, setCred] = useState<RuntimeCredentialInput>(EMPTY_CREDENTIAL);
-  const q = useSettled(zoneQ.trim());
   // The credential lives only in this dialog: cleared when it closes.
   const close = () => { setCred(EMPTY_CREDENTIAL); onClose(); };
 
@@ -106,13 +107,23 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
   useEffect(() => {
     if (row) return;
     let live = true;
-    api<Scopes>(`/api/logpush/scopes?q=${encodeURIComponent(q)}`).then((r) => {
+    api<Scopes>('/api/logpush/scopes?q=').then((r) => {
       if (!live) return;
       setScopes(r);
-      setScopeId((id) => (scope === 'account' ? (r.accounts.some((a) => a.id === id) ? id : r.accounts[0]?.id ?? '') : (r.zones.some((z) => z.id === id) ? id : r.zones[0]?.id ?? '')));
+      if (scope === 'account') setScopeId((id) => (r.accounts.some((a) => a.id === id) ? id : r.accounts[0]?.id ?? ''));
+      else {
+        // The first zone, until another is chosen.
+        const first = r.zones[0];
+        setZoneChoice((z) => z ?? (first ? { id: first.id, name: first.name, sub: first.accountName } : null));
+        setScopeId((id) => id || first?.id || '');
+      }
     }).catch((e) => { if (live) setLoadErr((e as Error).message); });
     return () => { live = false; };
-  }, [row, q, scope]);
+  }, [row, scope]);
+  const searchZones = useCallback(async (term: string) => {
+    const r = await api<Scopes>(`/api/logpush/scopes?q=${encodeURIComponent(term)}`);
+    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name, sub: z.accountName })), total: r.zones.length };
+  }, []);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const ownership = async () => {
@@ -149,7 +160,7 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
           {!editing && (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="For">
-                <select className="input" value={scope} onChange={(e) => { setScope(e.target.value as 'account' | 'zone'); setScopeId(''); }}>
+                <select className="input" value={scope} onChange={(e) => { setScope(e.target.value as 'account' | 'zone'); setScopeId(''); setZoneChoice(null); }}>
                   <option value="account">An account</option>
                   <option value="zone">A zone</option>
                 </select>
@@ -161,13 +172,9 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
                   </select>
                 </Field>
               ) : (
-                <Field label="Zone" hint="Search by name (50 shown)">
-                  <div className="space-y-2">
-                    <input className="input" aria-label="Search zones" value={zoneQ} onChange={(e) => setZoneQ(e.target.value)} placeholder="example.com" />
-                    <select className="input" aria-label="Zone" value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                      {scopes?.zones.map((z) => <option key={z.id} value={z.id}>{z.name}{z.accountName ? ` — ${z.accountName}` : ''}</option>)}
-                    </select>
-                  </div>
+                <Field label="Zone" hint="Type part of the name, then choose (50 shown at a time)">
+                  <ZoneCombobox value={zoneChoice} search={searchZones} disabled={!scopes} placeholder="Type to search zones, e.g. example.com"
+                    onChange={(z) => { setZoneChoice(z); setScopeId(z?.id ?? ''); }} />
                 </Field>
               )}
               <Field label="Dataset">

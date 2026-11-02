@@ -8,6 +8,7 @@ import { COMMON_PATHS, MAX_RESPONSE_BYTES, PathError, checkPath, fillPath } from
 import type { QueryResult, SavedQuery } from '@/lib/api-console';
 import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
 import { useToast } from '@/components/toast';
+import { ZoneCombobox, type ZoneChoice } from '@/components/zone-combobox';
 
 interface Named { id: string; name: string }
 interface ZoneOpt { id: string; name: string; accountId: string; accountName: string }
@@ -53,9 +54,10 @@ export default function ApiConsolePage() {
   const [loaded, setLoaded] = useState<{ for: string; list: Named[] } | null>(null);
   const accounts = loaded?.for === credentialId ? loaded.list : null;
   const [accountId, setAccountId] = useState('');
-  const [zoneQ, setZoneQ] = useState('');
-  const [zones, setZones] = useState<{ zones: ZoneOpt[]; total: number } | null>(null);
-  const [zoneId, setZoneId] = useState('');
+  // The zone: one field to search and choose (the first zone of the account until one is chosen).
+  const [zone, setZone] = useState<ZoneChoice | null>(null);
+  const [zoneTotal, setZoneTotal] = useState<number | null>(null);
+  const zoneId = zone?.id ?? '';
   const [path, setPath] = useState('/zones/{zone_id}/dns_records?per_page=100');
   const [result, setResult] = useState<QueryResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -78,16 +80,18 @@ export default function ApiConsolePage() {
       .catch((e) => { if (live) { setLoaded({ for: credentialId, list: [] }); toast((e as Error).message, 'bad'); } });
     return () => { live = false; };
   }, [credentialId, toast]);
+  const searchZones = useCallback(async (q: string) => {
+    const r = await api<{ zones: ZoneOpt[]; total: number }>(`/api/tools/api-console/zones?credentialId=${encodeURIComponent(credentialId)}&accountId=${encodeURIComponent(accountId)}&q=${encodeURIComponent(q)}&limit=50`);
+    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name })), total: r.total };
+  }, [credentialId, accountId]);
+  // A new credential or account: its first zone, until another is chosen.
   useEffect(() => {
     if (!credentialId) return;
     let live = true;
-    const t = setTimeout(() => {
-      api<{ zones: ZoneOpt[]; total: number }>(`/api/tools/api-console/zones?credentialId=${encodeURIComponent(credentialId)}&accountId=${encodeURIComponent(accountId)}&q=${encodeURIComponent(zoneQ.trim())}&limit=50`)
-        .then((r) => { if (live) { setZones(r); setZoneId((z) => (r.zones.some((x) => x.id === z) ? z : r.zones[0]?.id ?? '')); } })
-        .catch(() => { if (live) setZones({ zones: [], total: 0 }); });
-    }, 250);
-    return () => { live = false; clearTimeout(t); };
-  }, [credentialId, accountId, zoneQ]);
+    searchZones('').then((r) => { if (live) { setZoneTotal(r.total); setZone((z) => (z && r.zones.some((x) => x.id === z.id) ? z : r.zones[0] ?? null)); } })
+      .catch(() => { if (live) { setZoneTotal(0); setZone(null); } });
+    return () => { live = false; };
+  }, [credentialId, searchZones]);
 
   const preview = useMemo(() => {
     try { return { path: checkPath(fillPath(path, { accountId, zoneId })), error: '' }; } catch (e) { return { path: '', error: e instanceof PathError ? e.message : String(e) }; }
@@ -148,14 +152,9 @@ export default function ApiConsolePage() {
                     {accounts?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </Field>
-                <Field label="Zone" hint={zones ? `Fills {zone_id} · ${compactNum(zones.total)} zone${zones.total === 1 ? '' : 's'}${zones.total > zones.zones.length ? ' (search to narrow)' : ''}` : 'Fills {zone_id}'}>
-                  <div className="space-y-2">
-                    <input className="input" aria-label="Search zones" placeholder="Search zones" value={zoneQ} onChange={(e) => setZoneQ(e.target.value)} />
-                    <select className="input" aria-label="Zone" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-                      {!zones?.zones.length && <option value="">No zone</option>}
-                      {zones?.zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-                    </select>
-                  </div>
+                <Field label="Zone" hint={zoneTotal !== null ? `Fills {zone_id} · ${compactNum(zoneTotal)} zone${zoneTotal === 1 ? '' : 's'}` : 'Fills {zone_id}'}>
+                  <ZoneCombobox key={`${credentialId}:${accountId}`} value={zone} onChange={setZone} search={searchZones} disabled={!credentialId || zoneTotal === 0}
+                    placeholder={zoneTotal === 0 ? 'No zone' : 'Type to search zones…'} />
                 </Field>
               </div>
               <Field label="GET path" htmlFor="api-path" error={path.trim() ? preview.error || undefined : undefined}

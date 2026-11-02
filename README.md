@@ -203,7 +203,8 @@ The first super admin: on Vercel the setup token is printed in the function log 
 
 | | Viewer | Operator | Admin | Super admin |
 |---|:-:|:-:|:-:|:-:|
-| Run history, live logs, backup files, download .zip | ✓ | ✓ | ✓ | ✓ |
+| Run history, live logs, backup files, download .zip: **whose runs** (see *Whose records each person sees* below) | own | own | own + operators' and viewers' | all |
+| **Restore history** and restore sessions: whose restores | | | own + operators' and viewers' | all |
 | **Zone explorer**: full read-only zone configuration, downloads | ✓ | ✓ | ✓ | ✓ |
 | **Request a backup** (an admin approves it), use presets | ✓ | ✓ | starts directly | starts directly |
 | Cancel backups | | ✓ | ✓ | ✓ |
@@ -255,6 +256,21 @@ Credentials are **account sets**: one vault entry holds a Cloudflare account (AP
 - **Test** checks the token and lists those accounts and the zones it can see.
 - **Zone pickers** (backup, restore) list the zones of all of them, each labelled with its account.
 - **A backup** runs `backup.js` once per account, one after the other, in one run with one log. Each account gets its own backup folder, named after the account. With chosen zones, only the accounts those zones are in are backed up. The run fails if any account fails, and the log ends with which ones.
+### Whose records each person sees
+
+Backup runs and restores are records of who did them (`src/lib/record-access.ts`):
+
+| Role | Sees the runs and restores of |
+|---|---|
+| Viewer, operator | themselves only |
+| Admin | themselves, and every operator and viewer (not other admins or super admins) |
+| Super admin | everyone, also records that belong to no current user (scheduled runs, a deleted user, restores from before restore records existed) |
+
+- **A run is someone's** when they started it, or, for a run started from an approved request, when they asked for it or approved it: both see it.
+- **Admins** see operators' and viewers' records by the person's **current** role (someone promoted to admin drops out of other admins' view).
+- **Everywhere:** Run history, the Overview, a run's page, its files, .zip download and live log, cancel and delete, Restore history, a restore's page and an open restore session. A record someone may not see is not listed and answers **404**, as if it did not exist.
+- **Running jobs:** the sidebar's "Backup running" shows only a run you may see; someone else's restore shows as "Another person's restore" without its zone or person. Only one job runs at a time, so starting another is still refused while it runs.
+
 - **Cloudflare activity** and **Revert** read the audit log of every account.
 - **A restore** uses the account the zone belongs to.
 
@@ -299,7 +315,7 @@ The run record and the audit log show which bucket was used, and "run again" reu
 Restore has its own section in the sidebar, set out like Backups:
 
 - **Restore › Overview** (`/restore`): a dashboard: when a restore was last applied, the success rate, how many restores were verified against the backup, the last 30 days, the restore running now (or the latest one), restores per day for 30 days by outcome, recent restores, recent backups and a set-up checklist.
-- **Restore › Restore history** (`/restore/history`): every restore with its outcome (applied · verified, applied · not verified, apply failed, plan failed, open, not applied, interrupted), filterable like Run history. Each one opens a page with its steps, the plan it applied (addresses and actions), the backup it used and its full log. A record is kept per restore in `data/restore-history/<id>.json` and updated at every step; it holds no token, key or attribute values. Restores from before these records are listed from the audit log. API: `GET /api/restore/history`, `GET /api/restore/history/{id}`.
+- **Restore › Restore history** (`/restore/history`): every restore you may see (below) with its outcome (applied · verified, applied · not verified, apply failed, plan failed, open, not applied, interrupted), filterable like Run history. Each one opens a page with its steps, the plan it applied (addresses and actions), the backup it used and its full log. A record is kept per restore in `data/restore-history/<id>.json` and updated at every step; it holds no token, key or attribute values. Restores from before these records are listed from the audit log. API: `GET /api/restore/history`, `GET /api/restore/history/{id}`.
 - **Cancelling a restore:** while a restore compares, plans or applies, **Cancel** (New restore) stops terraform and the Cloudflare provider with their whole process tree, and no further step starts (`POST /api/restore/{id}/cancel`, recorded as `restore.cancelled`). A cancelled compare or plan goes back to where it was — nothing was changed, compare or plan again. A cancelled apply is not undone: changes Terraform had already sent to Cloudflare stay, the restore shows **Apply cancelled**, and planning again shows what is left. Cancelled after Terraform finished applying (during the check), it counts as applied but not verified.
 - **Restore › New restore** (`/restore/new`) puts one zone back the way its latest backup has it: only what the audit log says changed, or — with **Compare everything** — the whole zone, exactly as backed up. It's for admins and super admins (the `restore:run` permission).
 
@@ -1224,7 +1240,8 @@ that is a hosting decision.
 
 ## Cache purge and rollbacks
 
-- **Cloudflare › Cache purge:** choose the **account** first, then a zone of that account (the same zone name can exist in two accounts; a name filter appears above 50 zones). Then purge by URL, prefix, host name or cache tag (up to 100 at a time), or everything (type the zone name to confirm). The server refuses a zone that is not in the chosen account, and checks it again when an approved purge runs. **Stored tokens never purge:** the purge runs only with a credential typed in at that moment — an **API token with Zone › Cache Purge › Purge**, or a **Global API Key** with its email — held in memory for that one request, never stored, logged or audited. A super admin enters it on the purge page; for an admin's request, the approving super admin enters it on **Approvals** (without one, or if Cloudflare refuses it, the request stays waiting).
+- **Cloudflare › Cache purge:** choose the **account** first, then a zone of that account in one field: type part of its name and choose it from the list (the same zone name can exist in two accounts). Then purge by URL, prefix, host name or cache tag, or everything (type the zone name to confirm). The server refuses a zone that is not in the chosen account, and checks it again when an approved purge runs. **Stored tokens never purge:** the purge runs only with a credential typed in at that moment — an **API token with Zone › Cache Purge › Purge**, or a **Global API Key** with its email — held in memory for that one request, never stored, logged or audited. A super admin enters it on the purge page; for an admin's request, the approving super admin enters it on **Approvals** (without one, or if Cloudflare refuses it, the request stays waiting).
+- **As many as you need:** one purge can list up to 10,000 URLs, prefixes, hosts or tags (up to 2 MB). Cloudflare takes 100 per call, so the server sends them **100 at a time** and rests after each batch (`PURGE_REST_MS`, 1 second); if Cloudflare answers "too many requests" it waits longer (`PURGE_LIMITED_MS`, 10 seconds, then 20, then 30) and sends the same batch again. The page shows how many batches it will take. If a batch fails, the message says how many were purged before it.
 - **Monitoring › Developer platform › Roll back:** deploy an earlier version of a Worker to all traffic, or make an earlier production deployment of a Pages project live again. The token needs **Workers Scripts Edit** or **Cloudflare Pages Edit**. Bindings and secrets of a Worker are not rolled back.
 - Admins ask; a super admin approves on **Approvals** (a "Cloudflare change") and it runs at once. A super admin's own purge or rollback runs immediately. Every one is in the audit log.
 
@@ -1267,6 +1284,8 @@ What a browser tab has read is kept in [Zustand](https://github.com/pmndrs/zusta
 
 - **Zone panel:** **Zone panel** in the sidebar (under the zone search) opens the Zone explorer as a side panel on any page; the small panel button (“Quick view in the zone panel”) beside a zone in the starred and recent zones, Zone tags and the Security audit list opens it on that zone. It shows exactly what the Zone explorer page shows, from the same store: a zone read on the page opens at once in the panel and the other way round.
 - **Refreshing puts data in the store:** **Refresh zones**, **Read again** and a section's ↻ (on the page or in the panel), and a page's **Refresh**, read again and replace what the store keeps, so every view of it shows the new data.
+- **Read at once:** as soon as the console opens and the worker is running, the zone list is read into the zone store, so the Zone explorer, the zone panel and the pages with a zone choice (Cache purge, DNS & Workers, Traffic analytics, Cloudflare activity, monitoring) open with it instead of asking again.
+- **One field to choose a zone:** Cache purge, the API console and Logpush find and choose a zone in one field: type part of the name (searched once typing pauses), then pick it with the mouse or the arrow keys and Enter.
 - **When it is read again:** the zone list and zones after 10 minutes, page answers after 5, when they are next shown. A change made through the console (a tag, a revert, a purge, any POST/PUT/PATCH/DELETE) marks what it can affect as stale; what is on screen stays until it is read again.
 - **Per person:** signing out clears every store, and so does another person signing in in the same tab.
 

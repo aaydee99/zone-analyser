@@ -2,6 +2,7 @@ import { HttpError, route } from '@/lib/http';
 import { getRun } from '@/lib/runner';
 import { zipBackup } from '@/lib/backup-files';
 import { audit } from '@/lib/audit';
+import { mustSeeRun } from '@/lib/record-access';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -9,6 +10,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export const GET = route<Ctx>(async (_req, { params }, me) => {
   const run = await getRun((await params).id);
   if (!run) throw new HttpError(404, 'Run not found');
+  await mustSeeRun(me, run);
   if (run.status === 'running') throw new HttpError(409, 'Wait for the run to finish');
   const { name, data } = zipBackup(run);
   await audit(me, 'run.downloaded', run.id);

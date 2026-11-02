@@ -73,11 +73,13 @@ function checkRequest(req: Request) {
 /** Largest JSON body any route accepts. */
 const MAX_BODY = 1024 * 1024;
 
-export async function readBody<T>(req: Request): Promise<T> {
-  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY) throw new HttpError(413, 'Request is too large');
+/** `max`: a larger limit for one route (a long cache-purge list); at most what the worker relay carries (2 MB). */
+export async function readBody<T>(req: Request, max = MAX_BODY): Promise<T> {
+  const MAX = Math.min(max, 2 * 1024 * 1024);
+  if (Number(req.headers.get('content-length') ?? 0) > MAX) throw new HttpError(413, 'Request is too large');
   if (!/^application\/json\b/i.test(req.headers.get('content-type') ?? 'application/json')) throw new HttpError(415, 'Request body must be JSON');
   const text = await req.text();
-  if (text.length > MAX_BODY) throw new HttpError(413, 'Request is too large');
+  if (text.length > MAX) throw new HttpError(413, 'Request is too large');
   try {
     return JSON.parse(text) as T;
   } catch {

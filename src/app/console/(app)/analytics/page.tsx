@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
+import { zoneList } from '@/lib/zone-list-client';
 import type { ZoneListItem } from '@/lib/zone-catalog';
 import type { Bar, DnsReport, Top, WorkersReport } from '@/lib/cf-insights';
 import { Alert, Button, Card, Loading, PageHeader, SectionHeader, SkeletonChart, SkeletonStats, Stat, cx } from '@/components/ui';
@@ -83,7 +84,7 @@ export default function AnalyticsPage() {
   const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
-    api<{ zones: ZoneListItem[] }>('/api/zone-explorer').then((r) => {
+    zoneList().then((r) => {
       setZones(r.zones);
       setZoneId((z) => z || r.zones[0]?.id || '');
       setAccountId((a) => a || r.zones.find((z) => z.accountId)?.accountId || '');
