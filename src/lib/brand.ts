@@ -11,6 +11,8 @@ export const BRAND = {
   description: 'Find out whether your WAF, managed rules and rate limits stop what they should, measured on your own traffic, for any zone in any of your accounts, read-only. Then monitor, investigate, undo and back up the configuration behind them.',
   /** Where "Contact sales" goes. */
   salesEmail,
+  /** The public website (link previews and canonical URLs when CONSOLE_PUBLIC_URL is not set). */
+  site: 'https://castellan.com',
 } as const;
 
 /** A mailto: link to sales. */

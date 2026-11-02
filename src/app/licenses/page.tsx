@@ -1,15 +1,21 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BRAND } from '@/lib/brand';
+import { preview } from '@/lib/preview';
 import { LEGAL_DRAFT } from '@/lib/legal';
 import { LegalPage, Section } from '@/components/landing/site-chrome';
 // Written by `npm run notices` (scripts/gen-notices.mjs) together with public/THIRD_PARTY_NOTICES.txt.
 import summary from './packages.json';
 
+const title = `Open-source notices — ${BRAND.name}`;
+const description = `The open-source software and fonts included in ${BRAND.name}, and their licences.`;
+
 export const metadata: Metadata = {
-  title: `Open-source notices — ${BRAND.name}`,
-  description: `The open-source software and fonts included in ${BRAND.name}, and their licences.`,
+  title,
+  description,
   robots: { index: !LEGAL_DRAFT, follow: true },
+  alternates: { canonical: '/licenses' },
+  ...preview({ title, description, url: '/licenses' }),
 };
 
 const NOTICES = '/THIRD_PARTY_NOTICES.txt';

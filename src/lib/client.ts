@@ -19,7 +19,16 @@ const WRITES: [string, RegExp[]][] = [
   ['/api/zones/meta', [EXPLORER]], ['/api/zones/tags', [EXPLORER]],
 ];
 const under = (path: string, prefix: string) => path.startsWith(prefix) && /^([/?]|$)/.test(path.slice(prefix.length));
+/** Called after a change is sent (POST, PUT, PATCH, DELETE), with its path: the stores forget what it can make stale. */
+const writeListeners = new Set<(path: string) => void>();
+export function onWrite(fn: (path: string) => void) { writeListeners.add(fn); return () => { writeListeners.delete(fn); }; }
+/** Which kept answers a change makes stale: none, the zone explorer's, or all of them. */
+export function staleAfter(path: string): 'none' | 'explorer' | 'all' {
+  const w = WRITES.find(([p]) => under(path, p));
+  return !w ? 'all' : w[1].includes(EXPLORER) ? 'explorer' : 'none';
+}
 function forgetFor(path: string) {
+  for (const fn of writeListeners) { try { fn(path); } catch { /* a store's own problem */ } }
   const w = WRITES.find(([p]) => under(path, p));
   if (!w) { kept.clear(); return; }
   for (const key of [...kept.keys()]) if (w[1].some((r) => r.test(key))) kept.delete(key);

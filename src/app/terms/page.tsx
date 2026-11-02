@@ -1,16 +1,22 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BRAND } from '@/lib/brand';
+import { preview } from '@/lib/preview';
 import { LEGAL, LEGAL_DRAFT } from '@/lib/legal';
 import { Fill, LegalPage, Section } from '@/components/landing/site-chrome';
 
 // EXAMPLE software licence / terms of use outline for a lawyer to complete. Company facts and the
 // clauses only a lawyer can write come from src/lib/legal.ts. Static.
 
+const title = `Terms — ${BRAND.name}`;
+const description = `Example licence and terms of use for the ${BRAND.name} software.`;
+
 export const metadata: Metadata = {
-  title: `Terms — ${BRAND.name}`,
-  description: `Example licence and terms of use for the ${BRAND.name} software.`,
+  title,
+  description,
   robots: { index: !LEGAL_DRAFT, follow: true },
+  alternates: { canonical: '/terms' },
+  ...preview({ title, description, url: '/terms' }),
 };
 
 export default function Terms() {

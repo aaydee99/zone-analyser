@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { ZonePeek } from '@/components/zone-drawer';
 import { Download, Merge, RefreshCw, Search, Tags, Trash2, Upload } from 'lucide-react';
 import { api, relTime } from '@/lib/client';
 import { filterToParams, isFilterEmpty, parseTags, type ZoneMetaFilter, type ZoneMetaLite } from '@/lib/zone-meta-types';
@@ -180,7 +181,7 @@ function BulkTagger({ filter, setFilter, editable, version, onChanged }: { filte
                 {rows.map((z) => (
                   <tr key={z.id} className={cx('border-b border-line/60 last:border-0 hover:bg-raised/40', picked.has(z.id) && 'bg-signal/[0.04]')}>
                     {editable && <td className="px-4 py-2"><input type="checkbox" aria-label={`Pick ${z.name}`} checked={picked.has(z.id)} onChange={(e) => { const n = new Set(picked); if (e.target.checked) n.add(z.id); else n.delete(z.id); setPicked(n); }} /></td>}
-                    <td className="px-4 py-2"><Link href={`/console/zone-explorer?zone=${encodeURIComponent(z.id)}`} className="text-ink hover:text-signal">{z.name}</Link>{z.status !== 'active' && <Badge tone="warn" className="ml-2">{z.status}</Badge>}</td>
+                    <td className="px-4 py-2"><Link href={`/console/zone-explorer?zone=${encodeURIComponent(z.id)}`} className="text-ink hover:text-signal">{z.name}</Link><ZonePeek zoneId={z.id} zoneName={z.name} className="ml-1 align-middle" />{z.status !== 'active' && <Badge tone="warn" className="ml-2">{z.status}</Badge>}</td>
                     <td className="px-4 py-2 text-ink-2">{z.accountName}</td>
                     <td className="px-4 py-2">{meta[z.id] ? <TagChips tags={meta[z.id].tags} owner={meta[z.id].owner} max={8} onPick={(t) => setFilter({ ...filter, tags: [...new Set([...(filter.tags ?? []), t])].sort() })} /> : <span className="text-faint">—</span>}</td>
                   </tr>

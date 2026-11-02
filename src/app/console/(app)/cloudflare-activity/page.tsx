@@ -4,6 +4,8 @@ import { compactNum } from '@/lib/num';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Cloud, Copy, Download, History as HistoryIcon, Lock, RefreshCw, Search, ShieldCheck, Undo2 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
+import { useUiState } from '@/lib/stores/ui-state';
+import { cached, useDataCache } from '@/lib/stores/data-cache';
 import { api, copyText, fmtDate } from '@/lib/client';
 import { zoneList } from '@/lib/zone-list-client';
 import type { CredentialOption } from '@/lib/kinds';
@@ -227,11 +229,14 @@ export default function CloudflareActivityPage() {
   // A Cloudflare One change decides who reaches internal applications: super admins revert it.
   const canRevertOne = can('cloudflare:revert_one');
   const params = useSearchParams();
-  const [section, setSectionState] = useState<Section>(params.get('section') === 'one' ? 'one' : 'all');
+  // The section, account, period, view, category and filter are kept while you visit other pages
+  // (ui-state store); the report itself in the data store, so coming back shows it at once.
+  const [keptSection, setKeptSection] = useUiState<Section>('cfa.section', 'all');
+  const [section, setSectionState] = useState<Section>(params.get('section') === 'one' ? 'one' : keptSection);
   const [reverting, setReverting] = useState<CfChange | null>(null);
   const [creds, setCreds] = useState<CredentialOption[] | null>(null);
   // One Cloudflare account ('' = all of them), not a stored credential: a token can reach several accounts.
-  const [accountId, setAccountId] = useState('');
+  const [accountId, setAccountId] = useUiState('cfa.account', '');
   const [knownAccounts, setKnownAccounts] = useState<Record<string, string>>({});
   const learnAccounts = useCallback((list: { id: string; name: string }[]) => setKnownAccounts((m) => {
     const next = { ...m };
@@ -239,21 +244,21 @@ export default function CloudflareActivityPage() {
     for (const a of list) if (a.id && (!(a.id in next) || (!next[a.id] && a.name))) { next[a.id] = a.name; changed = true; }
     return changed ? next : m;
   }), []);
-  const [range, setRange] = useState<CfRange>('week');
+  const [range, setRange] = useUiState<CfRange>('cfa.range', 'week');
   const today = isoDay(new Date());
   const [custom, setCustom] = useState({ since: isoDay(new Date(Date.now() - 14 * 86_400_000)), before: today });
-  const [applied, setApplied] = useState(custom);
-  const [report, setReport] = useState<CfAuditReport | null>(null);
+  const [applied, setApplied] = useUiState('cfa.applied', custom);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<View>('category');
-  const [category, setCategory] = useState<CategoryKey | ''>('');
-  const [query, setQuery] = useState('');
+  const [view, setView] = useUiState<View>('cfa.view', 'category');
+  const [category, setCategory] = useUiState<CategoryKey | ''>('cfa.category', '');
+  const [query, setQuery] = useUiState('cfa.query', '');
   const [shown, setShown] = useState(TIMELINE_PAGE);
   const [history, setHistory] = useState<Record<string, CfHistoryResult>>({});
   const [looking, setLooking] = useState('');
   const setSection = (next: Section) => {
     setSectionState(next);
+    setKeptSection(next);
     setShown(TIMELINE_PAGE);
     const u = new URL(window.location.href);
     if (next === 'one') u.searchParams.set('section', 'one'); else u.searchParams.delete('section');
@@ -274,6 +279,9 @@ export default function CloudflareActivityPage() {
   const accountOptions = useMemo(() => Object.entries(knownAccounts).map(([id, name]) => ({ id, name: name || id })).sort((a, b) => a.name.localeCompare(b.name)), [knownAccounts]);
 
   const query0 = useMemo(() => new URLSearchParams({ credentialId: 'all', range, ...(accountId ? { accountId } : {}), ...(range === 'custom' ? applied : {}) }), [accountId, range, applied]);
+  const reportKey = `cfa:${query0}`;
+  const [report, setReport] = useState<CfAuditReport | null>(() => cached<CfAuditReport>(reportKey) ?? null);
+  const putCache = useDataCache((st) => st.put);
   const load = useCallback(async (fresh = false) => {
     setLoading(true);
     setError('');
@@ -282,13 +290,14 @@ export default function CloudflareActivityPage() {
       // Every account the report read (also ones without zones) joins the menu.
       learnAccounts(rep.accounts.filter((a) => a.accountId).map((a) => ({ id: a.accountId, name: a.accountName })));
       setReport(rep);
+      putCache(reportKey, rep);
       setHistory({});
       setShown(TIMELINE_PAGE);
     } catch (e) {
       setReport(null);
       setError((e as Error).message);
     } finally { setLoading(false); }
-  }, [query0, learnAccounts]);
+  }, [query0, learnAccounts, putCache, reportKey]);
   useEffect(() => { if (allowed && creds?.length) load(); }, [load, allowed, creds]);
 
   const lookup = useCallback(async (c: CfChange) => {

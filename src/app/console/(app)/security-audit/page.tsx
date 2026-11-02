@@ -11,6 +11,8 @@ import { Alert, Badge, Button, Card, EmptyState, Loading, Modal, PageHeader, Sec
 import { SeverityBadge } from '@/components/monitor-view';
 import { useMe } from '@/components/me';
 import { usePoll } from '@/components/use-poll';
+import { useUiState } from '@/lib/stores/ui-state';
+import { ZonePeek } from '@/components/zone-drawer';
 import { useToast } from '@/components/toast';
 import { useSnapshot } from '../monitoring/use-run';
 import { ZonePicker, useAccounts, type PickedZone } from '../investigate/shared';
@@ -124,7 +126,7 @@ function AuditTable({ audits, showZone }: { audits: AuditListItem[]; showZone: b
         <tbody className="divide-y divide-line/70">
           {audits.map((a) => (
             <tr key={a.id}>
-              {showZone && <td className="px-5 py-2.5 align-top"><Link href={`/console/security-audit/${a.id}`} className="font-medium text-ink hover:text-signal">{a.zoneName || a.zoneId}</Link></td>}
+              {showZone && <td className="px-5 py-2.5 align-top"><Link href={`/console/security-audit/${a.id}`} className="font-medium text-ink hover:text-signal">{a.zoneName || a.zoneId}</Link><ZonePeek zoneId={a.zoneId} zoneName={a.zoneName || a.zoneId} className="ml-1 align-middle" /></td>}
               <td className="px-5 py-2.5 align-top">
                 {showZone ? <span title={fmtDate(a.startedAt)}>{relTime(a.startedAt)}</span>
                   : <Link href={`/console/security-audit/${a.id}`} className="text-ink hover:text-signal" title={fmtDate(a.startedAt)}>{fmtDate(a.startedAt)}</Link>}
@@ -145,7 +147,8 @@ export default function SecurityAuditPage() {
   const router = useRouter();
   const toast = useToast();
   const accounts = useAccounts();
-  const [picked, setAccountId] = useState('');
+  // The account, sort and filter are kept while you visit other pages (ui-state store).
+  const [picked, setAccountId] = useUiState('audit.account', '');
   // One account: nothing to choose.
   const accountId = picked || (accounts?.length === 1 ? accounts[0].id : '');
   const [zone, setZone] = useState<PickedZone | null>(null);
@@ -154,10 +157,10 @@ export default function SecurityAuditPage() {
   const [hours, setHours] = useState<string>(String(DEFAULT_WINDOW));
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
-  const [sort, setSort] = useState<Sort>('worst');
+  const [sort, setSort] = useUiState<Sort>('audit.sort', 'worst');
   const [offset, setOffset] = useState(0);
-  const [typed, setTyped] = useState('');
-  const [q, setQ] = useState('');
+  const [typed, setTyped] = useUiState('audit.typed', '');
+  const [q, setQ] = useUiState('audit.q', '');
   const list = useSnapshot<ListView>(`/api/security-audit?sort=${sort}&offset=${offset}&limit=${PAGE}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
   const account = accounts?.find((a) => a.id === accountId);
   // The account first, then (optionally) one of its zones: the same zone name can exist in two accounts.
@@ -172,7 +175,7 @@ export default function SecurityAuditPage() {
     let live = true;
     api<{ zones: PickedZone[] }>(`/api/investigate/zones?limit=5&q=${encodeURIComponent(id)}`).then((r) => { const z = r.zones.find((x) => x.id === id); if (live && z) { setAccountId(z.accountId); setZone(z); } }).catch(() => {});
     return () => { live = false; };
-  }, []);
+  }, [setAccountId]);
   // The account audit running now (or the last one), so a reload or another person sees its progress.
   useEffect(() => {
     let live = true;

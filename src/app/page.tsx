@@ -5,6 +5,7 @@ import {
   HardDrive, History, KeyRound, ListFilter, Mail, MessageSquare, Minus, Plus, ScrollText, Search, Server, ShieldAlert, ShieldCheck, Star, Tags, Terminal, Undo2, Users, Webhook, Workflow,
 } from 'lucide-react';
 import { BRAND, salesHref } from '@/lib/brand';
+import { preview } from '@/lib/preview';
 import { TF_ACCOUNT_TYPES, TF_ZONE_TYPES } from '@/lib/landing-numbers';
 import { CHECKS } from '@/lib/monitor-types';
 import { RULE_PHASES, SETTING_IDS, ZONE_ENDPOINTS, ZONE_GROUPS } from '@/lib/zone-catalog';
@@ -29,8 +30,8 @@ export const metadata: Metadata = {
   title: `${BRAND.name} — ${BRAND.tagline}`,
   description: BRAND.description,
   robots: { index: true, follow: true },
-  openGraph: { type: 'website', siteName: BRAND.name, title: `${BRAND.name} — ${BRAND.tagline}`, description: BRAND.description },
-  twitter: { card: 'summary_large_image', title: `${BRAND.name} — ${BRAND.tagline}`, description: BRAND.description },
+  alternates: { canonical: '/' },
+  ...preview({ title: `${BRAND.name} — ${BRAND.tagline}`, description: BRAND.description, url: '/' }),
 };
 
 // ── Product facts shown as numbers. Each one comes from the code, nothing is estimated. ──────────

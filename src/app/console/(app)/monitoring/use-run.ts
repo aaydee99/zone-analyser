@@ -2,23 +2,37 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/client';
+import { cached, useDataCache } from '@/lib/stores/data-cache';
 import type { Coverage } from '@/lib/monitor-types';
 
 /**
  * Loads `path` once and keeps what it got: the page stays as it is until someone presses Refresh
  * (`reload`), while the worker keeps checking in the background. `version` goes up with each load,
- * so the tables and findings below reload with it.
+ * so the tables and findings below reload with it. The answer is kept in the data store
+ * (stores/data-cache.ts): going back to the page, or switching tabs and sections, shows it at once
+ * (read again when older than five minutes); Refresh reads again and keeps the new answer.
  */
 export function useSnapshot<T>(path: string) {
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | null>(() => cached<T>(path) ?? null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => cached<T>(path) === undefined);
   const [version, setVersion] = useState(0);
+  const put = useDataCache((s) => s.put);
   const reload = useCallback(async () => {
     setLoading(true);
-    try { setData(await api<T>(path)); setError(''); setVersion((v) => v + 1); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
-  }, [path]);
-  useEffect(() => { void reload(); }, [reload]);
+    try { const d = await api<T>(path); setData(d); put(path, d); setError(''); setVersion((v) => v + 1); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+  }, [path, put]);
+  const [shownFor, setShownFor] = useState(path);
+  // Another path (a filter or page changed): its kept answer at once, if there is one.
+  if (shownFor !== path) {
+    setShownFor(path);
+    const hit = cached<T>(path);
+    if (hit !== undefined) { setData(hit); setLoading(false); }
+  }
+  useEffect(() => {
+    if (cached(path) !== undefined) return;
+    void reload();
+  }, [path, reload]);
   return { data, error, loading, reload, version };
 }
 

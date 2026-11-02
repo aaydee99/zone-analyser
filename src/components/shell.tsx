@@ -7,7 +7,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BrandMark } from './brand-mark';
 import { Eraser, FileOutput, ShieldAlert, FileText, Fingerprint, GitCompare, HeartPulse, ListFilter, MessageSquare, Radar, Search, Tags, Terminal, ScanSearch } from 'lucide-react';
 import { ZoneSearchBox } from './zone-search-box';
-import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X, Lock } from 'lucide-react';
+import { ZoneDrawer } from './zone-drawer';
+import { useZoneStore } from '@/lib/stores/zone-store';
+import { Activity, BarChart3, Cloud, DatabaseBackup, ShieldCheck, Globe, FileClock, History, KeyRound, LayoutGrid, LogOut, Menu, RotateCcw, ScrollText, Settings2, UserCog, Users, X, Lock, PanelRightOpen } from 'lucide-react';
 import { api } from '@/lib/client';
 import { ROLE_META, type Permission } from '@/lib/rbac';
 import { cx } from './ui';
@@ -15,6 +17,7 @@ import { MeProvider, type MeState } from './me';
 import { WorkerStarting } from './worker-starting';
 import { useFocusTrap } from './use-focus-trap';
 import { usePoll } from './use-poll';
+import { resetStores, storesFor } from '@/lib/stores/reset';
 
 /** perm hides the item without it; locked shows it to everyone, with a lock for those who cannot use it. */
 interface NavItem { href: string; label: string; icon: typeof LayoutGrid; perm?: Permission; locked?: Permission }
@@ -176,8 +179,11 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   const closeMobile = useCallback(() => setMobileOpen(false), []);
   useFocusTrap(mobileMenu, mobileOpen, closeMobile);
 
+  // What the stores keep belongs to the signed-in person.
+  storesFor(me.user.id);
   const signOut = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    resetStores();
     router.replace('/console/login');
   };
 
@@ -191,7 +197,13 @@ export function Shell({ initial, children }: { initial: MeState; children: React
   const sidebar = (
     <div className="flex h-full flex-col">
       <div className="px-5 pt-5 pb-4"><Logo /></div>
-      <div className="px-3 pb-4"><ZoneSearchBox /></div>
+      <div className="space-y-2 px-3 pb-4">
+        <ZoneSearchBox />
+        <button type="button" onClick={() => useZoneStore.getState().openDrawer()}
+          className="flex w-full items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-left text-[12.5px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink">
+          <PanelRightOpen className="size-3.5 text-faint" aria-hidden /> Zone panel <span className="ml-auto text-[11px] text-faint">any zone, any page</span>
+        </button>
+      </div>
       <nav className="flex-1 space-y-5 overflow-y-auto px-3">
         {nav.map(({ section, items }) => (
           <div key={section}>
@@ -311,6 +323,7 @@ export function Shell({ initial, children }: { initial: MeState; children: React
           </main>
         </div>
       </div>
+      <ZoneDrawer />
     </MeProvider>
   );
 }

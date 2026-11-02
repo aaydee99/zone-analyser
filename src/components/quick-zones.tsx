@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Clock, RefreshCw, Star } from 'lucide-react';
 import { api, relTime } from '@/lib/client';
 import { Card, Skeleton, cx } from './ui';
+import { ZonePeek } from './zone-drawer';
 
 // The signed-in user's starred zones and the zones they opened last (their own only), with links
 // to each zone in the zone explorer. Read once when shown; ↻ reads again (no polling).
@@ -18,11 +19,12 @@ function ZoneLinks({ list, empty }: { list: QuickZone[]; empty: string }) {
   return (
     <ul>
       {list.map((z) => (
-        <li key={z.zoneId}>
-          <Link href={zoneHref(z.zoneId)} className="flex items-center gap-2 px-4 py-1.5 text-[13px] hover:bg-raised/60">
+        <li key={z.zoneId} className="flex items-center pr-2 hover:bg-raised/60">
+          <Link href={zoneHref(z.zoneId)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-4 text-[13px]">
             <span className="min-w-0 flex-1 truncate text-ink">{z.zoneName || z.zoneId}</span>
             {z.accountName && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-faint">{z.accountName}</span>}
           </Link>
+          <ZonePeek zoneId={z.zoneId} zoneName={z.zoneName || z.zoneId} />
         </li>
       ))}
     </ul>

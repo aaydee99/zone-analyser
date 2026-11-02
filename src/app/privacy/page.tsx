@@ -1,16 +1,22 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BRAND } from '@/lib/brand';
+import { preview } from '@/lib/preview';
 import { LEGAL, LEGAL_DRAFT } from '@/lib/legal';
 import { Fill, LegalPage, Section } from '@/components/landing/site-chrome';
 
 // EXAMPLE privacy notice, drafted from what the code does (AUDIT.md B1) for a lawyer to review.
 // Company facts come from src/lib/legal.ts. Static: no cookies, no request-time data.
 
+const title = `Privacy — ${BRAND.name}`;
+const description = `How the ${BRAND.name} website handles personal data, and what the self-hosted ${BRAND.name} software processes.`;
+
 export const metadata: Metadata = {
-  title: `Privacy — ${BRAND.name}`,
-  description: `How the ${BRAND.name} website handles personal data, and what the self-hosted ${BRAND.name} software processes.`,
+  title,
+  description,
   robots: { index: !LEGAL_DRAFT, follow: true },
+  alternates: { canonical: '/privacy' },
+  ...preview({ title, description, url: '/privacy' }),
 };
 
 export default function Privacy() {

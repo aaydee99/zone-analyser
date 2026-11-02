@@ -45,7 +45,7 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 | `CONSOLE_ORIGIN_SECRET` | unset (off) | Shared secret a Cloudflare Transform Rule sends; requests without it get 403. `new,old` while rotating. See CLOUDFLARE.md. |
 | `CONSOLE_ORIGIN_HEADER` | `x-console-origin-auth` | Header that carries `CONSOLE_ORIGIN_SECRET`. |
 | `CONSOLE_CLIENT_IP_HEADER` | last `X-Forwarded-For` hop | Header with the visitor's real address, for rate limits (`cf-connecting-ip` behind Cloudflare). |
-| `CONSOLE_PUBLIC_URL` | unset | The console's public address: links in monitoring notifications, the Cloudflare alerts webhook, robots.txt and the sitemap (without it, the request's host), and absolute link-preview image URLs (read at build time). |
+| `CONSOLE_PUBLIC_URL` | unset | The console's public address: links in monitoring notifications, the Cloudflare alerts webhook, robots.txt and the sitemap (without it, the request's host), and the absolute URLs in link previews (Open Graph and X/Twitter tags on every page; read at build time, `https://castellan.com` when unset). |
 | `CONSOLE_DATA_DIR` | `./data` (a temporary folder on Vercel) | Where managed tools, the plugin cache, run folders and file records live. |
 | `CONSOLE_STATE_MIRROR` | on (workers only) | `0` stops a worker copying file records (approvals, restore history) to Supabase `state_files`. |
 | `CONSOLE_RELAY_TIMEOUT_MS` | `280000` | How long an API call on the web side waits for the worker. Behind Cloudflare keep it under 100 s (`90000`). |
@@ -1254,6 +1254,21 @@ Every read-only Cloudflare view is its own endpoint, and its cached copy is kept
 - **Fresh data:** **Read again** (or a card's ↻) in the zone explorer and **Refresh** in Cloudflare activity skip the cache (`?fresh=1`). Reverting a Cloudflare change drops that zone's cached endpoints and the cached activity; applying a restore drops the zone's. Concurrent requests for the same data share one read.
 - **Not cached:** pages with per-person, live or secret data — vault, credentials, users, sessions, runs and their logs, the console audit log, settings — and anything that changes something (revert, backup, restore). A shared cache would hand one person's view to another. Tabs and filters that work on data already on the page (Cloudflare activity's categories and views, the zone explorer's find box) make no request.
 - **Names:** keys start with `REDIS_PREFIX` (default `backup-console:`). `REDIS_*` variables are removed from the environment before `backup.js` and Terraform start.
+
+### In the browser (Zustand stores)
+
+What a browser tab has read is kept in [Zustand](https://github.com/pmndrs/zustand) stores (`src/lib/stores/`), so moving between pages, tabs and sections shows it at once instead of a skeleton and a new request. They live in that tab's memory only: nothing is written to browser storage.
+
+| Store | What it keeps |
+|---|---|
+| `zone-store.ts` | The Zone explorer's zone list and each opened zone (summary and every section; the 12 most recently opened), the zone the page has open, and the **zone panel** |
+| `data-cache.ts` | The answers of pages that load once and wait for Refresh (monitoring, zone health, reports, lists, security audits, onboarding, templates …) and the Cloudflare activity report, by request path |
+| `ui-state.ts` | View settings: Cloudflare activity's section, account, period, view, category and filter; the Zone explorer's find box and tag filter; the Security audit list's account, sort and filter |
+
+- **Zone panel:** **Zone panel** in the sidebar (under the zone search) opens the Zone explorer as a side panel on any page; the small panel button (“Quick view in the zone panel”) beside a zone in the starred and recent zones, Zone tags and the Security audit list opens it on that zone. It shows exactly what the Zone explorer page shows, from the same store: a zone read on the page opens at once in the panel and the other way round.
+- **Refreshing puts data in the store:** **Refresh zones**, **Read again** and a section's ↻ (on the page or in the panel), and a page's **Refresh**, read again and replace what the store keeps, so every view of it shows the new data.
+- **When it is read again:** the zone list and zones after 10 minutes, page answers after 5, when they are next shown. A change made through the console (a tag, a revert, a purge, any POST/PUT/PATCH/DELETE) marks what it can affect as stale; what is on screen stays until it is read again.
+- **Per person:** signing out clears every store, and so does another person signing in in the same tab.
 
 ## Security
 
