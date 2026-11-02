@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Fingerprint, Search } from 'lucide-react';
-import { api, fmtDate } from '@/lib/client';
+import { fmtDate } from '@/lib/client';
+import { zoneById } from '@/lib/zone-search-client';
 import { RAY_WINDOWS, type Cell, type RayResult } from '@/lib/investigate-types';
 import { Alert, Badge, Button, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
 import { RefreshBar, Reading, ZonePicker, useAccounts, useJob, whole, type PickedZone } from '../shared';
@@ -157,8 +158,7 @@ export function RayView({ initialRay, initialZone, initialHours, initialAt }: { 
   // Opened from a link with a zone: look it up once the zone is known.
   useEffect(() => {
     if (!initialZone) return;
-    api<{ zones: PickedZone[] }>(`/api/investigate/zones?limit=1&q=${encodeURIComponent(initialZone)}`).then((r) => {
-      const z = r.zones.find((x) => x.id === initialZone);
+    zoneById(initialZone).then((z) => {
       if (!z) return;
       setZone(z);
       if (initialRay) setPath(`/api/investigate/ray?${new URLSearchParams({ ray: initialRay, zone: z.id, hours: String(linkHours), ...(linkAt ? { at: linkAt } : {}) })}`);

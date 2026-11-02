@@ -3,7 +3,7 @@ import { compactNum } from './num';
 import type { Progress } from './bg-job';
 import { cached } from './cache';
 import { cachedActivity } from './cf-audit-cache';
-import { changeTitle } from './cf-audit-report';
+import { actorLabel, changeTitle, contextLabel } from './cf-audit-report';
 import { pagesDeployments, workerVersions } from './cf-actions';
 import { cfList } from './cf-read';
 import { HttpError } from './http';
@@ -106,8 +106,10 @@ async function readChanges(z: ZoneListItem, since: string, until: string, hours:
   const mine = report.changes.filter((c) => c.zoneId === z.id && within(c.time, since, until));
   const events = mine.map((c): TimelineEvent => ({
     at: c.time, kind: 'config', tone: c.result === 'failure' ? 'warn' : 'info', title: changeTitle(c),
-    detail: [c.feature, c.actorEmail || (c.actorTokenName ? `token “${c.actorTokenName}”` : c.actorType)].filter(Boolean).join(' · '),
+    detail: [c.feature, `by ${actorLabel(c)}${c.actorContext ? ` via ${contextLabel(c.actorContext)}` : ''}`].filter(Boolean).join(' · '),
     href: `/console/cloudflare-activity?accountId=${z.accountId}`,
+    // What changed, field by field, with the old values (from the change before it, or looked up on the page).
+    change: c,
   }));
   return { events, source: { key: 'config', label: 'Configuration changes (audit log)', status: acct?.error ? 'error' : 'ok', count: events.length, ...(acct?.error ? { message: acct.error } : {}) } };
 }

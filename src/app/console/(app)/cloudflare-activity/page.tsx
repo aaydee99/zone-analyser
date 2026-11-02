@@ -18,6 +18,7 @@ import type { CfRevertPlan } from '@/lib/cf-revert';
 import { useToast } from '@/components/toast';
 import { useMe } from '@/components/me';
 import { Readers } from './readers';
+import { FieldTable } from '@/components/change-fields';
 
 type View = 'category' | 'zone' | 'timeline';
 const VIEWS: { value: View; label: string }[] = [
@@ -29,7 +30,6 @@ const VIEWS: { value: View; label: string }[] = [
 type Section = 'all' | 'one';
 const isOne = (c: CfChange) => c.category === 'zerotrust';
 const TIMELINE_PAGE = 200;
-const FIELD_ROWS = 6;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 const dayLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
@@ -84,42 +84,6 @@ function Group({ title, sub, tally, children, defaultOpen, level = 0 }: { title:
       </summary>
       <div className="pb-2">{children}</div>
     </details>
-  );
-}
-
-function FieldTable({ c, history }: { c: CfChange; history?: CfHistoryResult }) {
-  const [all, setAll] = useState(false);
-  const rows = history?.changes.length ? history.changes : c.changes;
-  if (!rows.length) return null;
-  const showOld = rows.some((f) => f.old !== undefined) || c.actionType === 'update';
-  const showNew = rows.some((f) => f.new !== undefined);
-  const visible = all ? rows : rows.slice(0, FIELD_ROWS);
-  return (
-    <div className="mt-2 overflow-x-auto rounded-lg border border-line">
-      <table className="w-full min-w-[420px] text-left text-[12px]">
-        <thead className="bg-raised/50 text-muted">
-          <tr>
-            <th className="w-[28%] min-w-[150px] px-3 py-1.5 font-medium">Field</th>
-            {showOld && <th className="px-3 py-1.5 font-medium">Old value</th>}
-            {showNew && <th className="px-3 py-1.5 font-medium">New value</th>}
-          </tr>
-        </thead>
-        <tbody className="font-mono">
-          {visible.map((f, i) => (
-            <tr key={`${f.path}-${i}`} className="border-t border-line/50 align-top">
-              <td className="px-3 py-1.5 break-all text-ink-2">{f.path}</td>
-              {showOld && <td className={cx('px-3 py-1.5 break-all', f.old !== undefined ? 'text-bad/90' : 'text-faint')}>{f.old ?? (c.oldSource === 'lookup' && !history ? 'not in this period' : '—')}</td>}
-              {showNew && <td className={cx('px-3 py-1.5 break-all', f.new !== undefined ? 'text-ok' : 'text-faint')}>{f.new ?? (c.actionType === 'delete' ? 'deleted' : '—')}</td>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length > FIELD_ROWS && (
-        <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-line/50 px-3 py-1.5 text-left text-xs text-muted hover:text-ink">
-          {all ? 'Show fewer fields' : `Show all ${rows.length} fields`}
-        </button>
-      )}
-    </div>
   );
 }
 

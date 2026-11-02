@@ -5,11 +5,12 @@ import { RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
 import type { InvestigatePending } from '@/lib/investigate-types';
 import { Button, Loading, SkeletonTable, cx } from '@/components/ui';
+import { searchZones, zoneAccounts } from '@/lib/zone-search-client';
 
 // Pieces the investigation pages share: a read that runs in the background (asked once; while the
 // server answers "still reading", it asks again every 3 seconds until the result is there — then
-// nothing more until Refresh), its progress, and the zone / account pickers (searched on the server,
-// so the browser never holds all 6,000+ zones).
+// nothing more until Refresh), its progress, and the zone / account pickers (searched in the zone
+// store, which holds the Zone explorer's list: no request per search).
 
 /** Reads `path` once (null: nothing yet). `reload(true)` reads again from Cloudflare (&fresh=1). */
 export function useJob<T>(path: string | null) {
@@ -87,7 +88,7 @@ export function Reading({ what, pending }: { what: string; pending: InvestigateP
 
 export interface PickedZone { id: string; name: string; accountId: string; accountName: string; plan: string }
 
-/** A zone search box: matches come from the server (a page of 20), chosen with the mouse or the keyboard. `accountId`: that account's zones only. */
+/** A zone search box: matches come from the zone store (a page of 20), chosen with the mouse or the keyboard. `accountId`: that account's zones only. */
 export function ZonePicker({ label, value, onChange, hint, accountId, disabled, placeholder }: { label: string; value: PickedZone | null; onChange: (z: PickedZone | null) => void; hint?: string; accountId?: string; disabled?: boolean; placeholder?: string }) {
   const id = useId();
   const [typed, setTyped] = useState<string | null>(null);
@@ -101,9 +102,9 @@ export function ZonePicker({ label, value, onChange, hint, accountId, disabled, 
     if (!open) return;
     const term = q.trim();
     let live = true;
-    // Asked when the user stops typing for a moment, not on every key.
+    // Searched when the user stops typing for a moment, not on every key.
     const t = setTimeout(() => {
-      api<{ zones: PickedZone[]; total: number }>(`/api/investigate/zones?limit=20&q=${encodeURIComponent(term)}${accountId ? `&account=${encodeURIComponent(accountId)}` : ''}`)
+      searchZones(term, { accountId, limit: 20 })
         .then((r) => { if (live) { setHits(r.zones); setTotal(r.total); setActive(0); } }).catch(() => { if (live) setHits([]); });
     }, 200);
     return () => { live = false; clearTimeout(t); };
@@ -141,12 +142,12 @@ export function ZonePicker({ label, value, onChange, hint, accountId, disabled, 
 
 export interface PickedAccount { id: string; name: string; zones: number }
 
-/** The accounts (66 or so: one list, loaded once). */
+/** The accounts with zones, from the zone store. */
 export function useAccounts() {
   const [accounts, setAccounts] = useState<PickedAccount[] | null>(null);
   useEffect(() => {
     let live = true;
-    api<{ accounts?: PickedAccount[] }>('/api/investigate/zones?limit=1&accounts=1').then((r) => { if (live) setAccounts(r.accounts ?? []); }).catch(() => { if (live) setAccounts([]); });
+    zoneAccounts().then((a) => { if (live) setAccounts(a); }).catch(() => { if (live) setAccounts([]); });
     return () => { live = false; };
   }, []);
   return accounts;

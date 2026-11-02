@@ -1,6 +1,8 @@
 // Investigation tools (Ray ID lookup, request trace, WAF false-positive finder, zone timeline): the
 // shapes the API answers with. Shared by server and client — no Node imports.
 
+import type { CfChange } from './cf-audit-report';
+
 /** A read still running in the background (see bg-job.ts): ask again with `job` to get its result. */
 export interface InvestigatePending { pending: true; job: string; done: number; total: number; startedAt: string; note?: string }
 
@@ -94,6 +96,8 @@ export interface TimelineEvent {
   at: string; kind: TimelineKind; title: string; detail?: string;
   tone?: 'ok' | 'warn' | 'bad' | 'info';
   href?: string;
+  /** A configuration change: what changed field by field (old → new), and who made it. */
+  change?: CfChange;
 }
 export interface TimelineSeries { key: '5xx' | '4xx' | 'blocked' | 'requests'; label: string; points: { t: string; v: number }[] }
 export interface TimelineSource { key: string; label: string; status: 'ok' | 'unavailable' | 'error' | 'skipped'; message?: string; count: number }

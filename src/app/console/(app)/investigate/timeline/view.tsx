@@ -4,8 +4,13 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { History } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
+import { zoneById } from '@/lib/zone-search-client';
+import { actorLabel, contextLabel, type CfChange, type CfHistoryResult } from '@/lib/cf-audit-report';
+import { FieldTable } from '@/components/change-fields';
+import { useMe } from '@/components/me';
+import { useToast } from '@/components/toast';
 import { TIMELINE_WINDOWS, type TimelineEvent, type TimelineKind, type TimelineReport, type TimelineSeries } from '@/lib/investigate-types';
-import { Alert, Badge, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
 import { RefreshBar, Reading, ZonePicker, useJob, whole, type PickedZone } from '../shared';
 
 const KIND_LABEL: Record<TimelineKind, string> = { config: 'Config change', spike: 'Traffic spike', worker: 'Worker', pages: 'Pages', certificate: 'Certificate', alert: 'Cloudflare alert', finding: 'Monitoring' };
@@ -45,6 +50,39 @@ function Markers({ events, since, until }: { events: TimelineEvent[]; since: num
   );
 }
 
+/** A configuration change: who made it, and each field it changed with the old and the new value. */
+function ChangeDetail({ c }: { c: CfChange }) {
+  const { can } = useMe();
+  const toast = useToast();
+  const [history, setHistory] = useState<CfHistoryResult | null>(null);
+  const [looking, setLooking] = useState(false);
+  // The old values are not in the log for this period: Cloudflare's Resource History has them.
+  const needsOld = c.oldSource === 'lookup' && (c.actionType === 'update' || c.actionType === 'delete') && can('activity:read');
+  const lookup = async () => {
+    setLooking(true);
+    try { setHistory(await api<CfHistoryResult>(`/api/cloudflare-audit/history?${new URLSearchParams({ accountId: c.accountId, id: c.id, time: c.time })}`)); }
+    catch (e) { toast((e as Error).message, 'bad'); } finally { setLooking(false); }
+  };
+  return (
+    <div className="mt-0.5">
+      <span className="block text-[12px] break-words text-muted">
+        {c.feature && <>{c.feature} · </>}by <span className="text-ink-2">{actorLabel(c)}</span>{c.actorContext && ` via ${contextLabel(c.actorContext)}`}{c.actorIp && ` · ${c.actorIp}`}
+      </span>
+      {c.result === 'failure' && <span className="mt-1 block text-[12px] text-bad">Cloudflare rejected this change{c.status ? ` (HTTP ${c.status})` : ''}: nothing was changed. The values below are what was attempted.</span>}
+      <FieldTable c={c} history={history ?? undefined} />
+      {c.oldNote && !history && <span className="mt-1 block text-[12px] text-muted">Old values from {c.oldNote}.</span>}
+      {needsOld && !history && <Button size="sm" className="mt-2" icon={<History className="size-3.5" />} loading={looking} onClick={lookup}>Look up old values</Button>}
+      {history && (
+        <span className="mt-1 block text-[12px] text-muted">
+          {history.previousTime
+            ? <>Old values from Cloudflare Resource History{history.historyStatus === 'approximate' ? ' (approximate match)' : ''}: previous change {fmtDate(history.previousTime)}{history.previousActor ? ` by ${history.previousActor}` : ''}.</>
+            : 'Cloudflare Resource History has no earlier state for this resource.'}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function Report({ r }: { r: TimelineReport }) {
   const kinds = useMemo(() => [...new Set(r.events.map((e) => e.kind))], [r.events]);
   const [off, setOff] = useState<Set<TimelineKind>>(new Set());
@@ -77,10 +115,10 @@ function Report({ r }: { r: TimelineReport }) {
               <li key={i} className="grid gap-1 px-5 py-2.5 sm:grid-cols-[10rem_8rem_minmax(0,1fr)] sm:gap-3">
                 <span className="font-mono text-[12px] text-muted">{fmtDate(e.at)}</span>
                 <span><Badge tone={e.tone === 'bad' ? 'bad' : e.tone === 'warn' ? 'warn' : e.tone === 'ok' ? 'ok' : 'info'}>{KIND_LABEL[e.kind]}</Badge></span>
-                <span className="min-w-0 text-[13px]">
+                <div className="min-w-0 text-[13px]">
                   {e.href ? <Link href={e.href} className="font-medium text-ink hover:underline">{e.title}</Link> : <span className="font-medium text-ink">{e.title}</span>}
-                  {e.detail && <span className="block text-[12px] break-words text-muted">{e.detail}</span>}
-                </span>
+                  {e.change ? <ChangeDetail c={e.change} /> : e.detail && <span className="block text-[12px] break-words text-muted">{e.detail}</span>}
+                </div>
               </li>
             ))}
           </ol>
@@ -106,7 +144,7 @@ export function TimelineView({ initialZone, initialHours }: { initialZone: strin
   const [hours, setHours] = useState((TIMELINE_WINDOWS as readonly number[]).includes(initialHours) ? initialHours : 24);
   useEffect(() => {
     if (!initialZone) return;
-    api<{ zones: PickedZone[] }>(`/api/investigate/zones?limit=1&q=${encodeURIComponent(initialZone)}`).then((r) => { const z = r.zones.find((x) => x.id === initialZone); if (z) setZone(z); }).catch(() => undefined);
+    zoneById(initialZone).then((z) => { if (z) setZone(z); }).catch(() => undefined);
   }, [initialZone]);
   const path = zone ? `/api/investigate/timeline?zone=${encodeURIComponent(zone.id)}&hours=${hours}` : null;
   const job = useJob<TimelineReport>(path);

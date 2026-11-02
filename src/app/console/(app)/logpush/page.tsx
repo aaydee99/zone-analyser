@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Pencil, Plus, Power, RefreshCw, Search, Trash2, Zap } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
+import { searchZones as searchStoredZones } from '@/lib/zone-search-client';
 import type { ChangeNote } from '@/lib/change-note';
 import type { JobView, LogpushPage } from '@/lib/logpush';
 import { ACCOUNT_DATASETS, LOGPUSH_STATUSES, STALE_HOURS, STATUS_LABEL, ZONE_DATASETS, type LogpushRow, type LogpushStatus } from '@/lib/logpush-types';
@@ -121,9 +122,10 @@ function JobModal({ row, onClose, direct }: { row: LogpushRow | null; onClose: (
     }).catch((e) => { if (live) setLoadErr((e as Error).message); });
     return () => { live = false; };
   }, [row, scope]);
+  // Zones are found in the zone store (the Zone explorer's list), not asked for per search.
   const searchZones = useCallback(async (term: string) => {
-    const r = await api<Scopes>(`/api/logpush/scopes?q=${encodeURIComponent(term)}`);
-    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name, sub: z.accountName })), total: r.zones.length };
+    const r = await searchStoredZones(term, { unreadable: true });
+    return { zones: r.zones.map((z) => ({ id: z.id, name: z.name, sub: z.accountName })), total: r.total };
   }, []);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));

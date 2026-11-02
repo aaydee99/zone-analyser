@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Play, RefreshCw, Search, ShieldCheck, Square } from 'lucide-react';
 import { api, fmtDate, isAbort, relTime } from '@/lib/client';
+import { zoneById } from '@/lib/zone-search-client';
 import { AUDIT_WINDOWS, DEFAULT_WINDOW, SEVERITIES, windowLabel, type AccountAuditView, type AuditListItem } from '@/lib/zone-audit/types';
 import { Alert, Badge, Button, Card, EmptyState, Loading, Modal, PageHeader, SectionHeader, Segmented, Skeleton, SkeletonTable, cx } from '@/components/ui';
 import { SeverityBadge } from '@/components/monitor-view';
@@ -173,7 +174,7 @@ export default function SecurityAuditPage() {
     const id = new URLSearchParams(window.location.search).get('zone');
     if (!id) return;
     let live = true;
-    api<{ zones: PickedZone[] }>(`/api/investigate/zones?limit=5&q=${encodeURIComponent(id)}`).then((r) => { const z = r.zones.find((x) => x.id === id); if (live && z) { setAccountId(z.accountId); setZone(z); } }).catch(() => {});
+    zoneById(id).then((z) => { if (live && z) { setAccountId(z.accountId); setZone(z); } }).catch(() => {});
     return () => { live = false; };
   }, [setAccountId]);
   // The account audit running now (or the last one), so a reload or another person sees its progress.

@@ -4,6 +4,7 @@ import { compactNum } from '@/lib/num';
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowRight, Bookmark, ChevronDown, ChevronRight, Copy, Play, Trash2 } from 'lucide-react';
 import { api, copyText } from '@/lib/client';
+import { searchZones as searchStoredZones } from '@/lib/zone-search-client';
 import { COMMON_PATHS, MAX_RESPONSE_BYTES, PathError, checkPath, fillPath } from '@/lib/api-console-paths';
 import type { QueryResult, SavedQuery } from '@/lib/api-console';
 import { Alert, Badge, Button, Card, Field, Loading, PageHeader, SectionHeader, Skeleton, cx } from '@/components/ui';
@@ -86,10 +87,15 @@ export default function ApiConsolePage() {
       .catch((e) => { if (live) { setLoaded({ for: credentialId, list: [] }); toast((e as Error).message, 'bad'); } });
     return () => { live = false; };
   }, [credentialId, toast, setAccountId]);
+  // The credential's zones in the account, from the zone store (the Zone explorer's list); the server
+  // is asked only when the store has none for that credential (e.g. one added since the list was read).
+  const credentialName = creds?.find((c) => c.id === credentialId)?.name ?? '';
   const searchZones = useCallback(async (q: string) => {
+    const kept = credentialName ? await searchStoredZones(q, { credentialName, accountId, limit: 50 }).catch(() => null) : null;
+    if (kept && (kept.total || q.trim())) return { zones: kept.zones.map((z) => ({ id: z.id, name: z.name })), total: kept.total };
     const r = await api<{ zones: ZoneOpt[]; total: number }>(`/api/tools/api-console/zones?credentialId=${encodeURIComponent(credentialId)}&accountId=${encodeURIComponent(accountId)}&q=${encodeURIComponent(q)}&limit=50`);
     return { zones: r.zones.map((z) => ({ id: z.id, name: z.name })), total: r.total };
-  }, [credentialId, accountId]);
+  }, [credentialId, credentialName, accountId]);
   // A new credential or account: its first zone, until another is chosen.
   useEffect(() => {
     if (!credentialId) return;
