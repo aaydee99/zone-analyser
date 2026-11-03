@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { db } from './supabase';
 import { HttpError } from './http';
 import type { CheckId, Coverage, Finding, ReportProblem, Row, Severity } from './monitor-types';
+import { filteredRows } from './stored-rows';
 
 // Stored results of the monitoring checks (supabase/migrations/0010_monitoring.sql and
 // 0011_monitor_queue.sql, claims in 0012_monitor_claims.sql): one result and its table rows per check and zone or account, and the
@@ -47,9 +48,6 @@ export async function readState(k: UnitKey): Promise<unknown> {
   return row?.state ?? null;
 }
 
-/** The searchable text of a row: its shown values, lower-case. */
-const searchText = (r: Row) => Object.entries(r).filter(([k, v]) => !k.startsWith('_') && v !== null && v !== undefined && v !== '').map(([, v]) => String(v)).join(' ').toLowerCase().slice(0, 2000);
-
 /** Replaces a unit's result and its rows. */
 export async function saveResult(k: UnitKey, r: { complete: boolean; problems: string[]; counts: Record<string, number>; state: unknown; durationMs: number }, rows: Partial<Record<string, Row[]>>) {
   must(await db().from('monitor_results').upsert({
@@ -59,18 +57,20 @@ export async function saveResult(k: UnitKey, r: { complete: boolean; problems: s
   must(await db().from('monitor_rows').delete().eq('check_id', k.check).eq('scope_kind', k.kind).eq('scope_id', k.id), 'Saving check rows');
   const out = Object.entries(rows).flatMap(([section, list]) => (list ?? []).map((row) => {
     const { _sort, ...data } = row as Row & { _sort?: number };
-    return { ...keyOf(k), section, sort: typeof _sort === 'number' && Number.isFinite(_sort) ? _sort : 0, data, search: searchText(data) };
+    return { ...keyOf(k), section, sort: typeof _sort === 'number' && Number.isFinite(_sort) ? _sort : 0, data };
   }));
   for (const part of chunks(out, 500)) must(await db().from('monitor_rows').insert(part), 'Saving check rows');
   // Zone search (src/lib/zone-search.ts): only queued here, indexed in the background.
   void import('./zone-search').then((m) => m.indexMonitorUnit(k, rows)).catch(() => {});
 }
 
-/** One page of a section's rows (sorted by the check; `q` searches every shown value). */
+/**
+ * One page of a section's rows (sorted by the check). `q` searches every shown value, in the database
+ * (monitor_row_text, supabase/migrations/0025_slim_search_and_rows.sql: no copy of the text is stored).
+ */
 export async function listRows(check: CheckId, section: string, opts: { offset: number; limit: number; q?: string }): Promise<{ rows: Row[]; total: number }> {
-  let q = db().from('monitor_rows').select('data', { count: 'exact' }).eq('check_id', check).eq('section', section);
-  const term = (opts.q ?? '').toLowerCase().replace(/[%_*,()\\]/g, ' ').trim().slice(0, 100);
-  if (term) q = q.ilike('search', `%${term}%`);
+  if ((opts.q ?? '').trim()) return filteredRows<Row>(check, section, { q: opts.q, offset: opts.offset, limit: opts.limit });
+  const q = db().from('monitor_rows').select('data', { count: 'exact' }).eq('check_id', check).eq('section', section);
   const res = await q.order('sort', { ascending: true }).order('id', { ascending: true }).range(opts.offset, opts.offset + opts.limit - 1);
   const rows = must(res, 'Reading check rows') as { data: Row }[];
   return { rows: rows.map((r) => r.data), total: res.count ?? rows.length };
