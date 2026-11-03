@@ -370,4 +370,23 @@ async function shutdown(sig: string) {
 async function purge() {
   await db().from('worker_calls').delete().lt('expires_at', new Date(Date.now() - 5 * 60_000).toISOString());
   await db().from('workers').delete().lt('last_seen', new Date(Date.now() - 7 * 86_400_000).toISOString());
+  await retention();
+}
+
+const RETENTION_MS = 60 * 60_000;
+const gr = globalThis as unknown as { __retentionAt?: number };
+/**
+ * Old data past its policy (retention_policy, supabase/migrations/0024_retention.sql), once an hour.
+ * pg_cron runs the same function inside the database where it is available; running it twice is harmless.
+ */
+async function retention() {
+  if (Date.now() - (gr.__retentionAt ?? 0) < RETENTION_MS) return;
+  gr.__retentionAt = Date.now();
+  const { data, error } = await db().rpc('retention_purge');
+  if (error) {
+    if (!/retention_purge|PGRST202|42883/.test(`${error.code} ${error.message}`)) log(`deleting old data failed: ${error.message}`);
+    return;
+  }
+  const gone = ((data ?? []) as { item: string; deleted: number }[]).filter((r) => Number(r.deleted) > 0);
+  if (gone.length) log(`deleted old data: ${gone.map((r) => `${r.item} ${r.deleted}`).join(', ')}`);
 }

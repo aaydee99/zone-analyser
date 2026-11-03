@@ -10,4 +10,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   const report = await zoneReport(await zoneIdOf(params), isFresh(req));
   await auditView(me, report.zone);
   return report;
-}, { perm: 'runs:read', limit: { name: 'zone-report', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-report', max: 30 } });

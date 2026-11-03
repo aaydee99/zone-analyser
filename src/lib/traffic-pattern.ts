@@ -158,7 +158,7 @@ async function build(accountId: string, zoneId: string | undefined, progress: Pr
 export async function trafficPatterns(accountId: string, zoneId: string | undefined, fresh: boolean, waitMs = 20_000): Promise<PatternReport | PatternPending> {
   const key = `path:/api/traffic/patterns?account=${encodeURIComponent(accountId)}${zoneId ? `&zone=${encodeURIComponent(zoneId)}` : ''}`;
   const asked = Date.now();
-  const out = await inBackground(`pattern:${key}`, (progress) => cached(key, CACHE_MS, () => build(accountId, zoneId, progress), fresh), waitMs);
+  const out = await inBackground(`pattern:${key}`, (progress) => cached(key, CACHE_MS, () => build(accountId, zoneId, progress), fresh), waitMs, { fresh });
   if ('pending' in out) return out;
   return Date.parse(out.generatedAt) < asked - 1_000 ? { ...out, cachedIn: cacheBackend() } : out;
 }

@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export const GET = route(async (req, _ctx, me) => {
   const id = new URL(req.url).searchParams.get('zoneId') ?? '';
   return { on: ZONE_ID.test(id) ? await isFavourite(me.id, id) : false };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });
 
 /** Stars or unstars a zone for the signed-in user ({ zoneId, on }). */
 export const PUT = route(async (req, _ctx, me) => {
@@ -17,4 +17,4 @@ export const PUT = route(async (req, _ctx, me) => {
   const zone = await knownZone(String(zoneId ?? ''));
   await setFavourite(me.id, zone, on !== false);
   return { on: on !== false };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

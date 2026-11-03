@@ -15,4 +15,4 @@ export const GET = route(async (req) => {
     status: status as LogpushStatus | undefined, scope: scope as 'account' | 'zone' | undefined, q: u.get('q') ?? '',
     offset: Math.max(0, Math.floor(Number(u.get('offset')) || 0)), limit: Math.min(200, Math.max(1, Math.floor(Number(u.get('limit')) || 50))),
   });
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

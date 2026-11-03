@@ -24,4 +24,4 @@ export const GET = route(async (req) => {
     ...(offset ? {} : { accounts: page.accounts, problems: page.problems }),
   };
   return view;
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

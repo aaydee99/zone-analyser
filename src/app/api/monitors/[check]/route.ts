@@ -22,4 +22,4 @@ export const GET = route<Ctx>(async (_req, { params }, me) => {
     coverage: c, open: counts, problems: failed, generatedAt: new Date().toISOString(),
   };
   return view;
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

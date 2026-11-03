@@ -15,4 +15,4 @@ export const GET = route(async (req, _ctx, me) => {
   await audit(me, 'traffic.exported', scope.zoneName ?? scope.accountName, { month, accountId: scope.accountId, zoneId: scope.zoneId ?? null, format: 'csv', zones: report.zones.length });
   const name = (scope.zoneName ?? scope.accountName).replace(/[^A-Za-z0-9._-]+/g, '-');
   return attachment(`cloudflare-traffic-${name}-${month}.csv`, trafficCsv(report), 'text/csv; charset=utf-8');
-}, { perm: 'runs:read', limit: { name: 'traffic-export', max: 20 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'traffic-export', max: 20 } });

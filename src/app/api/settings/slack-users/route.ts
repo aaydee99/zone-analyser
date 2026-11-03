@@ -18,7 +18,7 @@ export const GET = route(async (req) => {
     links, total, offset, generatedAt: new Date().toISOString(),
     setup: { signingSecret: !!process.env.SLACK_SIGNING_SECRET?.trim(), team: process.env.SLACK_TEAM_ID?.trim() || null, command: commandName(), requestUrl: base ? `${base}/api/hooks/slack` : null },
   };
-}, { perm: 'settings:read' });
+}, { perm: 'settings:read', on: 'web' });
 
 /**
  * Allows a Slack user: { slackUserId: "U…", userId: <console user id>, teamId?: "T…", note? }. The
@@ -41,4 +41,4 @@ export const POST = route(async (req, _ctx, me) => {
   const link = await saveLink({ slackUserId, teamId, userId, note }, me.email);
   await audit(me, 'slack.user_linked', slackUserId, { user: p.email, role: p.role, team: teamId });
   return { link };
-}, { perm: 'settings:write' });
+}, { perm: 'settings:write', on: 'web' });

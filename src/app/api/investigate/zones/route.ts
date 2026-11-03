@@ -36,4 +36,4 @@ export const GET = route(async (req) => {
     zones: sorted.slice(offset, offset + limit).map((z) => ({ id: z.id, name: z.name, accountId: z.accountId, accountName: z.accountName, plan: z.plan, status: z.status })),
     total: sorted.length, offset, limit, ...(accounts ? { accounts } : {}), listedAt: new Date(list.at).toISOString(),
   };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

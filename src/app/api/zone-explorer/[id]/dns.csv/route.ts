@@ -14,4 +14,4 @@ export const GET = route<Ctx>(async (_req, { params }, me) => {
   if (!Array.isArray(records?.data)) throw new HttpError(records?.status === 'unavailable' ? 403 : 404, records?.message ?? 'No DNS records could be read');
   await audit(me, 'cloudflare_zone.exported', dns.zoneName, { zoneId: dns.zoneId, format: 'dns-csv' });
   return attachment(`${dns.zoneName}-${dns.generatedAt.slice(0, 10)}-dns.csv`, csvFile(dnsRows(records.data as Record<string, unknown>[])), 'text/csv; charset=utf-8');
-}, { perm: 'runs:read', limit: { name: 'zone-export', max: 20 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-export', max: 20 } });

@@ -12,4 +12,4 @@ export const POST = route(async (req, _ctx, me) => {
   const r = await importCsv(csv, me.email, dryRun === true);
   if (!r.dryRun && r.changed) await audit(me, 'zone_meta.imported', `${compactNum(r.changed)} zone${r.changed === 1 ? '' : 's'}`, { rows: r.rows, matched: r.matched, changed: r.changed, unknown: r.unknownCount });
   return r;
-}, { perm: 'zones:tag', limit: { name: 'zone-meta-import', max: 20 } });
+}, { perm: 'zones:tag', on: 'web', limit: { name: 'zone-meta-import', max: 20 } });

@@ -13,4 +13,4 @@ export const GET = route<Ctx>(async (_req, { params }, me) => {
   // The user's recent zones: recorded in the background, never delaying the answer.
   touchRecent(me.id, summary.zone);
   return summary;
-}, { perm: 'runs:read', limit: { name: 'zone-report', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-report', max: 30 } });

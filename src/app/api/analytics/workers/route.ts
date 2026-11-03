@@ -11,4 +11,4 @@ export const GET = route(async (req) => {
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new HttpError(400, 'Choose an account');
   if (!isDays(days)) throw new HttpError(400, 'days must be 1, 7 or 30');
   return workersReport(accountId, days, q.get('fresh') === '1');
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

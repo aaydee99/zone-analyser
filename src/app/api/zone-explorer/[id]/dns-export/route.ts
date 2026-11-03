@@ -12,4 +12,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   const { name, text } = await dnsExport(id, isFresh(req));
   await audit(me, 'cloudflare_zone.dns_exported', name, { zoneId: id });
   return attachment(`${name}.txt`, text, 'text/plain; charset=utf-8');
-}, { perm: 'runs:read', limit: { name: 'zone-export', max: 20 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-export', max: 20 } });

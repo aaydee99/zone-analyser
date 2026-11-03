@@ -1,5 +1,7 @@
 import 'server-only';
+import { after } from 'next/server';
 import { cached, cacheBackend } from './cache';
+import { claimRefresh, loadSnapshot, saveSnapshot } from './zone-list-snapshot';
 import { HttpError } from './http';
 import { mask } from './cf-read';
 import { credentialForRun, listCredentialOptions } from './vault';
@@ -42,8 +44,36 @@ interface RawZone { id: string; name: string; status?: string; type?: string; pa
  */
 export interface ZoneList { zones: ZoneListItem[]; problems: { credential: string; error: string }[]; at: number; credentialOf: Record<string, { id: string; name: string }>; readersOf: Record<string, string[]> }
 
+/** A stored list older than LIST_TTL but younger than this is used while it is read again in the background. */
+const STALE_LIST_MS = 60 * 60_000;
+/** In memory, a list is kept until it is LIST_TTL old (at least 30 s, while a newer one is read). */
+const memoryTtl = (l: ZoneList) => Math.max(30_000, LIST_TTL - (Date.now() - l.at));
+
 export function listZones(fresh = false): Promise<ZoneList> {
-  return cached('path:/api/zone-explorer', LIST_TTL, readZoneList, fresh);
+  return cached('path:/api/zone-explorer', memoryTtl, () => sharedList(fresh), fresh);
+}
+
+/** The list every server shares (zone-list-snapshot.ts), read from Cloudflare when it is missing, too old or asked for fresh. */
+async function sharedList(fresh: boolean): Promise<ZoneList> {
+  if (!fresh) {
+    const snap = await loadSnapshot();
+    if (snap && Date.now() - snap.at < LIST_TTL) return snap;
+    if (snap && Date.now() - snap.at < STALE_LIST_MS) { refreshLater(); return snap; }
+  }
+  const list = await readZoneList();
+  await saveSnapshot(list);
+  return list;
+}
+
+/** Reads the list again after this request (one server at a time), and keeps it here too. */
+function refreshLater() {
+  const p = (async () => {
+    if (!(await claimRefresh())) return;
+    const list = await readZoneList();
+    await saveSnapshot(list);
+    await cached('path:/api/zone-explorer', memoryTtl, async () => list, true);
+  })().catch((err) => console.warn('[zone-list] reading the zone list again failed:', err instanceof Error ? err.message : err));
+  try { after(() => p); } catch { /* not in a request: it just runs */ }
 }
 
 /** The zone list read now, without the shared cache (monitoring lists zones on its own schedule). */

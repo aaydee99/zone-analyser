@@ -25,4 +25,4 @@ export const POST = route(async (req, _ctx, me) => {
     });
   }
   return r;
-}, { perm: 'zones:tag', limit: { name: 'zone-meta-bulk', max: 30 } });
+}, { perm: 'zones:tag', on: 'web', limit: { name: 'zone-meta-bulk', max: 30 } });

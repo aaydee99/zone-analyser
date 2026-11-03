@@ -19,4 +19,4 @@ export const GET = route(async (req) => {
   };
   const key = `ray:${ray}:${opts.zoneId ?? ''}:${opts.host ?? ''}:${opts.accountId ?? ''}:${opts.all ? 1 : 0}:${opts.hours ?? ''}:${opts.at ?? ''}`;
   return backgroundAnswer(key, q.get('job'), (progress) => lookupRay(ray, { ...opts, progress }));
-}, { perm: 'runs:read', limit: { name: 'investigate-ray', max: 120 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'investigate-ray', max: 120 } });

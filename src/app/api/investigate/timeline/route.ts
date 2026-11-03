@@ -12,4 +12,4 @@ export const GET = route(async (req) => {
   const hours = Number(q.get('hours')) || 24;
   const fresh = q.get('fresh') === '1';
   return backgroundAnswer(`timeline:${zone}:${hours}:${fresh ? 1 : 0}`, q.get('job'), (progress) => zoneTimeline(zone, hours, fresh, progress));
-}, { perm: 'runs:read', limit: { name: 'investigate-timeline', max: 120 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'investigate-timeline', max: 120 } });

@@ -7,4 +7,4 @@ type Ctx = { params: Promise<{ id: string }> };
 export const DELETE = route<Ctx>(async (_req, { params }, me) => {
   await deleteSaved(me, (await params).id);
   return { ok: true };
-}, { perm: 'cloudflare:query' });
+}, { perm: 'cloudflare:query', on: 'web' });

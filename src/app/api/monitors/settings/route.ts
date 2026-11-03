@@ -6,7 +6,7 @@ import { listNotifications } from '@/lib/monitor-store';
 export const dynamic = 'force-dynamic';
 
 /** The schedule and where notifications go (addresses masked), with the notifications sent lately. */
-export const GET = route(async () => ({ config: await monitorConfigView(), sent: await listNotifications(30) }), { perm: 'settings:read' });
+export const GET = route(async () => ({ config: await monitorConfigView(), sent: await listNotifications(30) }), { perm: 'settings:read', on: 'web' });
 
 /** { scheduled?, intervals?: { [check]: hours }, minSeverity?, slack?: url | null, webhook?: url | null } — null removes an address. */
 export const PUT = route(async (req, _ctx, me) => {
@@ -20,4 +20,4 @@ export const PUT = route(async (req, _ctx, me) => {
     ...(p.webhook !== undefined ? { webhook: p.webhook ? 'set' : 'removed' } : {}),
   });
   return { config };
-}, { perm: 'monitors:manage' });
+}, { perm: 'monitors:manage', on: 'web' });

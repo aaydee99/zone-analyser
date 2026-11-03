@@ -13,4 +13,4 @@ export const GET = route(async () => {
     if (m.allTags) tags = (await m.allTags()).slice(0, 500);
   } catch { /* zone tags not set up: typed in by hand */ }
   return { accounts, tags, channels: { slack: !!cfg.slack, webhook: !!cfg.webhook }, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

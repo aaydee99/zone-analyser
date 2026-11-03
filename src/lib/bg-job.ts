@@ -1,4 +1,5 @@
 import 'server-only';
+import { isWebRole } from './worker-link';
 
 // Long reads (Cloudflare analytics) run in the background: a request waits at most `waitMs` and
 // otherwise answers how far the read got, so no request runs into the Cloudflare, Vercel or
@@ -16,8 +17,13 @@ interface Job extends Progress { id: string; p: Promise<unknown>; startedAt: str
 const g = globalThis as unknown as { __bgJobs?: Map<string, Job> };
 const jobs = (g.__bgJobs ??= new Map());
 
+/** `fresh`: the request asks for data read now (the web side then doesn't hand it a finished read). */
+export interface BackgroundOptions { keepMs?: number; join?: string | null; abandonMs?: number; fresh?: boolean }
+
 export async function inBackground<T>(key: string, build: (progress: Progress) => Promise<T>, waitMs: number,
-  opts: { keepMs?: number; join?: string | null; abandonMs?: number } = {}): Promise<T | Pending> {
+  opts: BackgroundOptions = {}): Promise<T | Pending> {
+  // On the web side (Vercel) the next poll may reach another instance: progress and results are kept in Supabase.
+  if (isWebRole()) return (await import('./web-jobs')).sharedBackground(key, build, waitMs, opts);
   let job = jobs.get(key);
   if (job?.finished && job.id !== opts.join) job = undefined;
   if (!job) {

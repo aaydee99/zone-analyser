@@ -1,12 +1,16 @@
 import 'server-only';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { tag } from './cache';
+import { HttpError } from './http';
+import { hitLimit, type Hit } from './rate-limit';
+import { isWebRole } from './worker-link';
 
 // Cloudflare API calls for the monitoring checks and actions. Every call spends from one budget per
 // token (a "lane"): Cloudflare allows 1,200 calls per 5 minutes per user or token. Monitoring takes
 // at most MONITOR_BUDGET of it (800 by default) and none at all while a backup or restore uses the
-// token, which then has it to itself; actions and analytics may use up to 1,150. Calls wait for room
-// instead of going over, and a 429 pauses the token until Cloudflare's Retry-After has passed.
+// token, which then has it to itself; actions and analytics may use up to 1,000 on the worker, and
+// the web side (Vercel) 150 more (WEB_BUDGET). Calls wait for room instead of going over, and a 429
+// pauses the token until Cloudflare's Retry-After has passed.
 // Cloudflare counts a user's API tokens together: tokens the queue found to belong to the same user
 // (GET /user, see setLaneGroup) share one budget. A token whose user cannot be told (an
 // account-owned token, or one without "User Details Read") keeps a budget of its own — two such
@@ -16,7 +20,14 @@ import { tag } from './cache';
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const WINDOW_MS = 5 * 60_000;
 export const MONITOR_BUDGET = Math.max(20, Number(process.env.MONITOR_BUDGET) || 800);
-const TOTAL_BUDGET = Math.max(MONITOR_BUDGET, 1_150);
+const TOTAL_BUDGET = Math.max(MONITOR_BUDGET, 1_000);
+/**
+ * The web side's share (Vercel): every instance together makes at most this many calls per token in
+ * 5 minutes, counted in the shared rate-limit store (Supabase, migration 0014). With the worker's
+ * 1,000 that is 1,150, under Cloudflare's 1,200. Taken in blocks of WEB_BLOCK, one count per block.
+ */
+export const WEB_BUDGET = Math.max(10, Number(process.env.WEB_CF_BUDGET) || 150);
+const WEB_BLOCK = 10;
 /** Longest a call waits for room in the budget before the check gives up on it. */
 const MAX_WAIT_MS = 90_000;
 
@@ -34,7 +45,7 @@ export function setLanePause(fn: (lane: string) => string | null) { pause.fn = f
 export const laneOf = (token: string) => tag(token);
 
 interface Bucket { calls: number[]; pausedUntil: number }
-const gb = globalThis as unknown as { __cfBudget?: Map<string, Bucket>; __cfLaneGroups?: Map<string, string> };
+const gb = globalThis as unknown as { __cfBudget?: Map<string, Bucket>; __cfLaneGroups?: Map<string, string>; __cfWebReserve?: Map<string, { left: number; until: number }> };
 const buckets = (gb.__cfBudget ??= new Map<string, Bucket>());
 /** Lane → the budget it spends from (its user's, when known); a lane not listed has its own. */
 const groups = (gb.__cfLaneGroups ??= new Map<string, string>());
@@ -70,9 +81,41 @@ async function take(token: string, signal?: AbortSignal) {
     // A backup using any token of the same user holds monitoring back on all of them.
     const held = m ? siblings(key).map((l) => pause.fn(l)).find(Boolean) ?? null : null;
     const wait = held ? 5_000 : Math.max(b.pausedUntil - now, b.calls.length >= limit ? b.calls[b.calls.length - limit] + WINDOW_MS - now : 0);
-    if (wait <= 0) { b.calls.push(now); if (m) m.calls++; return; }
+    if (wait <= 0) {
+      if (isWebRole()) await webTake(key, started, signal);
+      b.calls.push(Date.now()); if (m) m.calls++; return;
+    }
     if (now - started + wait > MAX_WAIT_MS) throw new BudgetError(held ?? undefined);
     await sleep(Math.min(wait, 5_000), signal);
+  }
+}
+
+/** Calls this instance has taken from the web side's shared share, per lane, until its window ends. */
+const reserves = (gb.__cfWebReserve ??= new Map<string, { left: number; until: number }>());
+
+/** A block being taken for a lane: calls that start meanwhile wait for it instead of taking blocks of their own. */
+const refills = new Map<string, Promise<Hit>>();
+
+/** One call from the web side's share of the lane's budget (shared by every Vercel instance). */
+async function webTake(key: string, started: number, signal?: AbortSignal) {
+  for (;;) {
+    const r = reserves.get(key);
+    if (r && r.left > 0 && Date.now() < r.until) { r.left--; return; }
+    let refill = refills.get(key);
+    const mine = !refill;
+    if (!refill) {
+      refill = hitLimit(`cf-web:${key}`, WINDOW_MS, Math.floor(WEB_BUDGET / WEB_BLOCK)).then((hit) => {
+        if (hit.allowed) reserves.set(key, { left: WEB_BLOCK, until: Date.now() + hit.resetMs });
+        return hit;
+      }).finally(() => refills.delete(key));
+      refills.set(key, refill);
+    }
+    const hit = await refill;
+    if (hit.allowed || !mine) continue; // take from the new block, or (refused for another call) look again
+    if (Date.now() - started + hit.resetMs > MAX_WAIT_MS) {
+      throw new HttpError(503, 'This token has used its share of Cloudflare’s rate limit for now — try again in a few minutes', { 'Retry-After': String(Math.ceil(hit.resetMs / 1000)) });
+    }
+    await sleep(Math.min(hit.resetMs, 5_000), signal);
   }
 }
 

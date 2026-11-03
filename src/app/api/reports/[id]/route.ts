@@ -15,7 +15,7 @@ export const GET = route<Ctx>(async (req, { params }) => {
   const limit = Math.min(50, Math.max(1, Math.floor(Number(u.get('limit')) || 50)));
   const { runs, total } = await listRuns(d.id, offset, limit);
   return { definition: d, runs, total, offset, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });
 
 /** New settings for a report (the same fields as creating one); its next run is worked out again. */
 export const PUT = route<Ctx>(async (req, { params }, me) => {
@@ -29,7 +29,7 @@ export const PUT = route<Ctx>(async (req, { params }, me) => {
     .filter((k) => JSON.stringify(before[k]) !== JSON.stringify(d[k])).map((k) => [k, { from: before[k], to: d[k] }]));
   await audit(me, 'report.updated', d.name, { id: d.id, ...changed });
   return { definition: d };
-}, { perm: 'monitors:manage' });
+}, { perm: 'monitors:manage', on: 'web' });
 
 /** Deletes a report and its history. */
 export const DELETE = route<Ctx>(async (_req, { params }, me) => {
@@ -37,4 +37,4 @@ export const DELETE = route<Ctx>(async (_req, { params }, me) => {
   if (!d) throw new HttpError(404, 'Report not found');
   await audit(me, 'report.deleted', d.name, { id: d.id });
   return { ok: true };
-}, { perm: 'monitors:manage' });
+}, { perm: 'monitors:manage', on: 'web' });

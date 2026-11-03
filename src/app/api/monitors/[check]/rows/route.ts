@@ -18,4 +18,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   const limit = Math.min(200, Math.max(1, Math.floor(Number(u.get('limit')) || 50)));
   const page: RowsPage = { ...(await listRows(id, section, { offset, limit, q: u.get('q') ?? '' })), offset };
   return page;
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

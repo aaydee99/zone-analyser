@@ -9,4 +9,4 @@ export const GET = route<Ctx>(async (_req, { params }) => {
   const a = await getAudit((await params).auditId);
   if (!a) throw new HttpError(404, 'Audit not found');
   return { audit: a, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

@@ -28,4 +28,4 @@ export const GET = route(async (req, _ctx, me) => {
   const zoneMeta = ids.length ? await metaOf(ids).then(liteOf).catch(() => ({})) : {};
   const out: FindingsPage & { zoneMeta: Record<string, ZoneMetaLite> } = { ...page, offset, zoneMeta };
   return out;
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

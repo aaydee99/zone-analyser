@@ -13,7 +13,7 @@ export const GET = route(async (req) => {
   const { definitions, total } = await listDefinitions(offset, limit);
   const latest = await latestRuns(definitions.map((d) => d.id));
   return { definitions: definitions.map((d) => ({ ...d, latest: latest.get(d.id) ?? null })), total, offset, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });
 
 /** A new report: { name, scope, accounts?, tags?, cadence, weekday?, hour, sections, channels, enabled? }. */
 export const POST = route(async (req, _ctx, me) => {
@@ -22,4 +22,4 @@ export const POST = route(async (req, _ctx, me) => {
   const d = await createDefinition(c.value, me.email);
   await audit(me, 'report.created', d.name, { id: d.id, scope: d.scope, cadence: d.cadence, hour: d.hour, weekday: d.weekday, sections: d.sections, channels: d.channels });
   return { definition: d };
-}, { perm: 'monitors:manage' });
+}, { perm: 'monitors:manage', on: 'web' });

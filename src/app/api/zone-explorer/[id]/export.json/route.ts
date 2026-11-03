@@ -12,4 +12,4 @@ export const GET = route<Ctx>(async (_req, { params }, me) => {
   const report = await zoneReport(await zoneIdOf(params));
   await audit(me, 'cloudflare_zone.exported', report.zone.name, { zoneId: report.zone.id, format: 'json' });
   return attachment(`${report.zone.name}-${report.generatedAt.slice(0, 10)}-cloudflare.json`, JSON.stringify(orderedReport(report), null, 2), 'application/json');
-}, { perm: 'runs:read', limit: { name: 'zone-export', max: 20 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-export', max: 20 } });

@@ -15,4 +15,4 @@ export const DELETE = route<Ctx>(async (_req, { params }, me) => {
   await removeLink(id);
   await audit(me, 'slack.user_unlinked', id, { user: link.email });
   return { ok: true };
-}, { perm: 'settings:write' });
+}, { perm: 'settings:write', on: 'web' });

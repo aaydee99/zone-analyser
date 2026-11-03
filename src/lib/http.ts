@@ -9,7 +9,7 @@ import { can, type Permission } from './rbac';
 import { isAllowedHost } from './hosts';
 import { audit } from './audit';
 import { hitLimit, rateStore } from './rate-limit';
-import { RelayError, relay, relayed, relayedMe } from './worker-link';
+import { RelayError, UseWorker, relay, relayed, relayedMe, webDirect } from './worker-link';
 
 export const SESSION_COOKIE = 'cfbc_session';
 const SESSION_MAX_AGE = 12 * 3600;
@@ -178,9 +178,11 @@ type Handler<C> = (req: Request, ctx: C, me: Me) => Promise<Response | unknown>;
 /**
  * Wraps a signed-in route: origin check, session, rate limits, permission, JSON errors.
  * `?peek=1` on a GET checks the session without counting as activity. `limit` adds a tighter
- * per-user limit for a sensitive route (revealing secrets, testing keys, applying …).
+ * per-user limit for a sensitive route (revealing secrets, testing keys, applying …). `on: 'web'`
+ * runs the handler on the web side too (Vercel), for handlers that only use Supabase: no disk, child
+ * process, vault unlock or worker memory (tests/route-placement.test.ts checks their imports).
  */
-export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; limit?: { name: string; max: number; windowMs?: number } } = {}) {
+export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; limit?: { name: string; max: number; windowMs?: number }; on?: 'web' } = {}) {
   return async (req: Request, ctx: C) => {
     let who: Me | null = null;
     const t = new Timing();
@@ -201,9 +203,15 @@ export function route<C = unknown>(fn: Handler<C>, opts: { perm?: Permission; li
       if (opts.perm) requirePerm(me, opts.perm);
       if (opts.limit && !fromWeb) await rateLimit(`user:${me.id}:${opts.limit.name}`, opts.limit.max, opts.limit.windowMs);
       t.mark('limit', 'rate limits');
-      // On Vercel (web role): the worker runs it, from its own server and IP.
-      if (!fromWeb && relayed(req)) { const res = await relay(req, me); t.mark('relay', 'worker relay'); return t.on(res); }
-      const res = toResponse(await fn(req, ctx, me));
+      // On Vercel (web role): the worker runs it, from its own server and IP, unless it runs here.
+      if (!fromWeb && relayed(req) && !(opts.on === 'web' && webDirect())) { const res = await relay(req, me); t.mark('relay', 'worker relay'); return t.on(res); }
+      let out: Response | unknown;
+      try { out = await fn(req, ctx, me); } catch (err) {
+        // A handler on the web side that needs the worker after all (web-jobs.ts): relay it now.
+        if (!(err instanceof UseWorker) || fromWeb || !relayed(req)) throw err;
+        const res = await relay(req, me); t.mark('relay', 'worker relay'); return t.on(res);
+      }
+      const res = toResponse(out);
       t.mark('app', 'handler');
       return t.on(res);
     } catch (err) {

@@ -16,4 +16,4 @@ export const GET = route(async (req) => {
   };
   const key = `waf:${o.zoneId ?? ''}:${o.accountId ?? ''}:${o.hours ?? ''}:${o.offset}:${o.limit ?? ''}:${o.fresh ? 1 : 0}`;
   return backgroundAnswer(key, q.get('job'), (progress) => wafReport({ ...o, progress }));
-}, { perm: 'runs:read', limit: { name: 'investigate-waf', max: 120 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'investigate-waf', max: 120 } });

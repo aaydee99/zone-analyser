@@ -32,4 +32,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   if (csv === null) throw new HttpError(404, 'This report has no such section');
   await audit(me, 'report.downloaded', run.content.name, { run: run.id, format, section });
   return attachment(`${base}-${section}.csv`, csv, 'text/csv; charset=utf-8');
-}, { perm: 'runs:read', limit: { name: 'report-download', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'report-download', max: 30 } });

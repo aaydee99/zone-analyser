@@ -13,4 +13,4 @@ export const POST = route(async (req, _ctx, me) => {
   const r = await traceRequest(await readBody<TraceInput>(req));
   await audit(me, 'cloudflare.request_traced', r.zoneName, { method: r.method, url: r.url.split('?')[0], status: r.statusCode });
   return r;
-}, { perm: 'runs:read', limit: { name: 'investigate-trace', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'investigate-trace', max: 30 } });

@@ -361,3 +361,17 @@ const WEB_ROUTES = [
 ];
 
 export const relayed = (req: Request) => isWebRole() && !WEB_ROUTES.some((r) => r.test(new URL(req.url).pathname));
+
+/**
+ * Handlers marked `on: 'web'` (route() in http.ts) run on the web side too. CONSOLE_WEB_DIRECT=0
+ * sends them to the worker again, as before.
+ */
+export const webDirect = () => process.env.CONSOLE_WEB_DIRECT?.trim() !== '0';
+
+/**
+ * Thrown by a handler running on the web side when this request must run on the worker after all
+ * (a read longer than Vercel allows, or a table the web side needs is missing): route() relays it.
+ */
+export class UseWorker extends Error {
+  constructor(why: string) { super(why); }
+}

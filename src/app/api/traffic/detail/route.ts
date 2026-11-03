@@ -21,4 +21,4 @@ export const GET = route(async (req) => {
     // A poll of a running read waits briefly: a waiting request holds one of the worker's slots.
     q.get('job') ? POLL_WAIT_MS : undefined);
   return 'pending' in r ? NextResponse.json(r, { status: 202, headers: { 'Retry-After': '3' } }) : r;
-}, { perm: 'runs:read', limit: { name: 'traffic-detail', max: 120 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'traffic-detail', max: 120 } });

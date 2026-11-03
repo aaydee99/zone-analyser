@@ -5,7 +5,7 @@ A web dashboard for `backup.js` (Cloudflare → Terraform backups) with role-bas
 ## Set up
 
 1. **Supabase project**: create one at supabase.com (or run one locally).
-2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql), [`0020_reports.sql`](supabase/migrations/0020_reports.sql), [`0021_zone_audits.sql`](supabase/migrations/0021_zone_audits.sql) and [`0022_fk_indexes.sql`](supabase/migrations/0022_fk_indexes.sql) (there is no 0017). When you update the console, run any new ones the same way. (`0022` only adds indexes, so deleting a user does not scan the whole audit log; rollback `supabase/rollbacks/0022_fk_indexes.down.sql`.)
+2. **Schema**: in the Supabase SQL editor, run every file in [`supabase/migrations`](supabase/migrations), in order: [`0001_backup_console.sql`](supabase/migrations/0001_backup_console.sql), [`0002_hardening.sql`](supabase/migrations/0002_hardening.sql), [`0003_vault_server_key.sql`](supabase/migrations/0003_vault_server_key.sql), [`0004_worker.sql`](supabase/migrations/0004_worker.sql), [`0005_worker_state.sql`](supabase/migrations/0005_worker_state.sql), [`0006_worker_wakeups.sql`](supabase/migrations/0006_worker_wakeups.sql), [`0007_worker_versions.sql`](supabase/migrations/0007_worker_versions.sql), [`0008_indexes_and_guards.sql`](supabase/migrations/0008_indexes_and_guards.sql), [`0009_worker_calls_realtime.sql`](supabase/migrations/0009_worker_calls_realtime.sql), [`0010_monitoring.sql`](supabase/migrations/0010_monitoring.sql), [`0011_monitor_queue.sql`](supabase/migrations/0011_monitor_queue.sql), [`0012_monitor_claims.sql`](supabase/migrations/0012_monitor_claims.sql), [`0013_worker_locks.sql`](supabase/migrations/0013_worker_locks.sql), [`0014_rate_limits.sql`](supabase/migrations/0014_rate_limits.sql), [`0015_zone_meta.sql`](supabase/migrations/0015_zone_meta.sql), [`0016_zone_search.sql`](supabase/migrations/0016_zone_search.sql), [`0018_zone_health.sql`](supabase/migrations/0018_zone_health.sql), [`0019_ops_tools.sql`](supabase/migrations/0019_ops_tools.sql), [`0020_reports.sql`](supabase/migrations/0020_reports.sql), [`0021_zone_audits.sql`](supabase/migrations/0021_zone_audits.sql) [`0022_fk_indexes.sql`](supabase/migrations/0022_fk_indexes.sql) [`0023_web_shared_reads.sql`](supabase/migrations/0023_web_shared_reads.sql) and [`0024_retention.sql`](supabase/migrations/0024_retention.sql) (there is no 0017). When you update the console, run any new ones the same way. (`0022` only adds indexes, so deleting a user does not scan the whole audit log; rollback `supabase/rollbacks/0022_fk_indexes.down.sql`. `0023` lets the web side share the zone list and long reads between its instances; see [Vercel + worker](#vercel--worker); rollback `supabase/rollbacks/0023_web_shared_reads.down.sql`. `0024` deletes old data automatically; see [Old data is deleted automatically](#old-data-is-deleted-automatically); rollback `supabase/rollbacks/0024_retention.down.sql`.)
 3. **Turn off public sign-up**: go to Authentication › Sign In / Providers and disable *Allow new users to sign up*. The console creates accounts itself through the admin API. Settings › Environment warns you if sign-up is still on.
 4. **Environment**: fill in `.env.local` (template: [`.env.example`](.env.example)):
 
@@ -48,6 +48,9 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 | `CONSOLE_PUBLIC_URL` | unset | The console's public address: links in monitoring notifications, the Cloudflare alerts webhook, robots.txt and the sitemap (without it, the request's host), and the absolute URLs in link previews (Open Graph and X/Twitter tags on every page; read at build time, `https://castellan.com` when unset). |
 | `CONSOLE_DATA_DIR` | `./data` (a temporary folder on Vercel) | Where managed tools, the plugin cache, run folders and file records live. |
 | `CONSOLE_STATE_MIRROR` | on (workers only) | `0` stops a worker copying file records (approvals, restore history) to Supabase `state_files`. |
+| `CONSOLE_WEB_DIRECT` | on | `0` sends the API calls that only use Supabase (reports, findings, presets, stored audits …, see [Vercel + worker](#vercel--worker)) to the worker again, as before. Takes effect on the next deployment. |
+| `WEB_CF_BUDGET` | `150` | Cloudflare calls per token per 5 minutes that the web side (all Vercel instances together, counted in Supabase) may make with the console's stored tokens; the worker keeps 1,000 of Cloudflare's 1,200. |
+| `WEB_JOB_MAX_MS` | `270000` | On the web side, a long read (traffic, investigate) still running after this long is stopped and sent to the worker. Keep it under Vercel's function limit (300 s in `vercel.json`). |
 | `CONSOLE_RELAY_TIMEOUT_MS` | `280000` | How long an API call on the web side waits for the worker. Behind Cloudflare keep it under 100 s (`90000`). |
 | `CONSOLE_RELAY_CHUNK` | `524288` (512 KB) | Worker answers larger than this come back in chunks of this size. |
 | `CONSOLE_WAKE_WAIT_MS` | `45000` | How long a request waits for a worker that is being started before it answers "starting". |
@@ -127,9 +130,56 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 - **Notices:** `npm run notices` ([`scripts/gen-notices.mjs`](scripts/gen-notices.mjs)) walks the production dependency tree in `node_modules` and writes [`public/THIRD_PARTY_NOTICES.txt`](public/THIRD_PARTY_NOTICES.txt) (every package with its licence text, the SIL OFL 1.1 for the fonts, the caniuse-lite CC BY 4.0 attribution, an LGPL note for sharp/libvips) and `src/app/licenses/packages.json` (what `/licenses` lists). Run it again after changing dependencies, ideally on the build platform (optional native packages differ per OS).
 - `tests/landing-numbers.test.ts` checks the landing page's Terraform type counts ([`src/lib/landing-numbers.ts`](src/lib/landing-numbers.ts)) against `runner/backup.js`.
 
+## Old data is deleted automatically
+
+Migration `0024` keeps the database small (Supabase Free allows 500 MB). Every hour, `retention_purge()` deletes what is past its policy in `retention_policy`. It runs inside the database with pg_cron where that is available (Supabase has it), and also from the worker while it runs.
+
+| Kind | Kept for | Never deleted |
+|---|---|---|
+| Console audit log | 365 days | |
+| Finished backup and restore runs | 365 days | running runs |
+| Log lines of finished runs | 30 days | the run and its summary (until 365 days) |
+| Monitoring notifications sent, Cloudflare alerts received | 90 days | |
+| Resolved monitoring findings | 90 days after they resolved | open findings |
+| Sign-in sessions | 1 day after they expired | |
+| Security audits | 90 days | the latest audit of each zone, running audits |
+| Report runs | 180 days | the newest run of each report |
+
+It also clears short-lived rows whose use is over: worker calls nobody collected, used relay nonces, ended rate-limit windows, finished web-side reads, stopped Worker log tails and workers not seen for a week. Configuration is never touched: credentials, presets, tags, monitoring targets, templates, reports, users.
+
+**Changing a period:** in the SQL editor, `update public.retention_policy set days = 180 where item = 'audit_log';` (`null` keeps it for ever). It applies on the next run. Each run deletes at most 20,000 rows per kind (100 runs, audits, reports or log tails), so a large backlog goes over a few hours. To clear it at once: `select * from public.retention_purge(200000);`, run again until every count is 0.
+
+**Deleting doesn't shrink the database by itself.** Postgres reuses the freed space for new rows, so it stops growing, but the size Supabase reports drops only after `vacuum full public.TABLE;`. That rewrites the table and locks it while it runs, so do it at a quiet time, one table per statement.
+
 ## Vercel + worker
 
 On Vercel the console runs as the **web** side: sign-in, pages, users and the audit log. Vercel can't do the rest: its disk is read-only, functions stop after a few minutes, and its outgoing IP changes. So everything else goes to a **worker**: backups, restores, tool installs, the vault and every Cloudflare, R2 and S3 call. The worker is the same console, started with `npm run worker` on a machine or container you control.
+
+Some API calls only read or write Supabase, and Vercel answers those itself. That covers sign-in, users and the audit log, and also:
+
+- reports and their runs and downloads;
+- monitoring findings, check results and monitoring settings;
+- presets, the approval policy and Slack users;
+- stored security audits and their downloads;
+- compare templates, renaming a tag and saved API console queries;
+- search, health scores, tags and personal shortcuts;
+- Cloudflare reads for one zone or account with the stored tokens: a zone in the Zone explorer (summary, each section, certificates, hosts, rulesets, DNS and exports), DNS & Workers analytics, Cloudflare activity (and who read the configuration), Lists, the API console, the onboarding check, and the Logpush list.
+
+Every Cloudflare call made on Vercel takes from the web side's share of that token's rate limit (`WEB_CF_BUDGET`, 150 per 5 minutes), counted across all instances in Supabase (`rate_limits`, migration 0014); each instance takes it 10 calls at a time. When it is used up, a call waits for the next window for up to 90 seconds, then the request answers 503 "This token has used its share of Cloudflare's rate limit for now". The worker keeps 1,000 calls (monitoring 800 of them), so together they stay under Cloudflare's 1,200. Writes stay on the worker: cache purges, rollbacks, Logpush changes (including the ownership challenge) and reverts.
+
+With migration `0023` applied, Vercel also runs:
+
+- the Zone explorer's zone list, zone search, tags and favourites, the Investigate zone list and request trace, and the Logpush scopes;
+- traffic (the month, a day's detail, unusual traffic, the CSV download) and Investigate's Ray ID, timeline and WAF reads.
+
+Two Supabase tables make that work across Vercel's instances:
+
+- **`zone_list_snapshot`** keeps the last zone list read (zones, accounts and which stored credential reads each; never a token). Every server starts from it instead of reading every zone of every account again. After 10 minutes the next request still gets it and one server reads the list again in the background; **Refresh** reads it at once.
+- **`web_jobs`** keeps a long read's progress and, when done, its result, sealed with AES-256-GCM under the vault server key. The read runs on the instance that started it; the page's next poll can reach any instance and is answered from the row. A read still running after `WEB_JOB_MAX_MS` is stopped and sent to the worker, and the same read goes to the worker for the next hour.
+
+Without `0023`, the zone list is read on each server as before, and the long reads go to the worker. One difference on the web side: the Cloudflare activity behind the Investigate timeline fills a deleted object's old value from Cloudflare's Resource History only, since there is no local backup folder to look in.
+
+Those handlers are marked `on: 'web'` in `route()`. `tests/route-placement.test.ts` fails if a marked route reaches code that needs the worker (backups, restores, tools, Worker logs, approvals, backup files, the monitoring queue). `CONSOLE_WEB_DIRECT=0` sends them to the worker again.
 
 ```text
 browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (sealed) ◄── worker (npm run worker) ──► Cloudflare / R2 / S3
@@ -147,7 +197,7 @@ browser ──► Vercel (CONSOLE_ROLE=web) ──► Supabase: worker_calls (se
   - **On GitHub Actions** (the default below): the outgoing IP changes with every run, so the console's Cloudflare API tokens must **not** be restricted to client IPs.
   - **On a machine with a fixed IP**: **Settings › Worker** shows its public IP, and you can restrict tokens to it.
 - **Live logs**: the worker writes each run's log to Supabase as it goes. The run page on Vercel follows it there and reconnects every few minutes.
-- **Worker offline**: a banner on every page says so. Backups, restores, the vault and Cloudflare pages answer "The worker is offline". Sign-in, users and the audit log keep working.
+- **Worker offline**: a banner on every page says so. Backups, restores, the vault and Cloudflare pages answer "The worker is offline". Sign-in, users, the audit log and the pages Vercel answers itself (reports, findings, presets, stored audits, templates, saved queries, and with `0023` the zone list, tags, traffic and Investigate) keep working.
 
 ### Deploy to Vercel
 
@@ -545,7 +595,7 @@ Not reverted: service tokens and identity providers (they carry secrets the audi
 | Page Rules | Page Rules still in use and which new rules each one becomes, from Cloudflare's [migration guide](https://developers.cloudflare.com/rules/reference/page-rules-migration/): one row per rule to create (Cache rule, Configuration rule, Single Redirect, Origin rule or Managed Transform), where to create it, its match — the Page Rule's URL as `http.request.full_uri wildcard "http*://…*"` (scheme and query string matched as Page Rules did), or a wildcard pattern and target with `${n}` for a redirect — and each field to set with its value; whether the Page Rule moves fully, partly or not at all; settings with no direct replacement (Disable Railgun, Response Buffering, WAF, Disable Performance, Disable Security) and what to do instead. Rows are listed lowest priority first: Page Rules stop at the first match, the new rules all apply and the last match wins | Page Rules Read |
 
 - **Findings** have a severity. The same problem keeps one finding across runs; it closes by itself once a run has read its account or zone again and the problem is gone (a failed read never closes one). Admins can dismiss a finding: it stays out of counts and notifications, also after later runs.
-- **How it runs (designed for many zones):** each check is split into units — one per zone, one per account, or one for the whole console — and each unit has its own next run in `monitor_targets`. The worker takes what is due, hand-started units first, and runs them in **lanes**: one per stored API token, side by side, at most 6 units at a time per token and `MONITOR_PARALLEL` (24) overall. Each lane makes at most `MONITOR_BUDGET` monitoring calls per 5 minutes (**800** of Cloudflare's 1,200 by default; the console's own reads may use up to 1,150). **While a backup or restore uses a token, monitoring makes no calls with it** until it is done; other tokens carry on. A 429 pauses that token until Cloudflare's `Retry-After`. Nothing is lost when the worker stops: what is due stays due in the table, and a unit a stopped worker was running is taken again after 15 minutes. **Overview › API tokens** shows each token's accounts, zones, calls in the last 5 minutes and whether it is paused.
+- **How it runs (designed for many zones):** each check is split into units — one per zone, one per account, or one for the whole console — and each unit has its own next run in `monitor_targets`. The worker takes what is due, hand-started units first, and runs them in **lanes**: one per stored API token, side by side, at most 6 units at a time per token and `MONITOR_PARALLEL` (24) overall. Each lane makes at most `MONITOR_BUDGET` monitoring calls per 5 minutes (**800** of Cloudflare's 1,200 by default; the console's own reads may use up to 1,000 on the worker, plus `WEB_CF_BUDGET` (150) on Vercel, counted across its instances in Supabase). **While a backup or restore uses a token, monitoring makes no calls with it** until it is done; other tokens carry on. A 429 pauses that token until Cloudflare's `Retry-After`. Nothing is lost when the worker stops: what is due stays due in the table, and a unit a stopped worker was running is taken again after 15 minutes. **Overview › API tokens** shows each token's accounts, zones, calls in the last 5 minutes and whether it is paused.
 - **How often:** each check has its own interval (Overview › Schedule and notifications), and units with nothing to watch are read less often:
 
   | Check | Default | Notes |

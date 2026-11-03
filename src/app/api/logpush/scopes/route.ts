@@ -10,4 +10,4 @@ export const GET = route(async (req) => {
   const [{ accounts }, list] = await Promise.all([accountTargets(), listZones()]);
   const zones = list.zones.filter((z) => !q || z.name.includes(q)).slice(0, 50).map((z) => ({ id: z.id, name: z.name, accountName: z.accountName }));
   return { accounts: accounts.map((a) => ({ id: a.accountId, name: a.accountName || a.accountId })), zones };
-}, { perm: 'cloudflare:act' });
+}, { perm: 'cloudflare:act', on: 'web' });

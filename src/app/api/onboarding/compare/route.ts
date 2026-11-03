@@ -14,4 +14,4 @@ export const POST = route(async (req) => {
   if (typeof body.zoneId !== 'string' || !ID.test(body.zoneId)) throw new HttpError(400, 'Choose a zone');
   if (typeof body.text !== 'string') throw new HttpError(400, 'Paste or upload a zone file first');
   return compareFile(body.zoneId, body.text, body.fresh === true);
-}, { perm: 'runs:read', limit: { name: 'onboarding-compare', max: 30, windowMs: 5 * 60_000 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'onboarding-compare', max: 30, windowMs: 5 * 60_000 } });

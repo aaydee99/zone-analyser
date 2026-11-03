@@ -28,4 +28,4 @@ export const GET = route(async (req) => {
     if (!msg || msg.includes('fetch failed')) console.error('[zones]', err);
     throw new HttpError(502, !msg || msg.includes('fetch failed') ? 'Could not reach the Cloudflare API' : msg);
   }
-}, { perm: 'runs:start' });
+}, { perm: 'runs:start', on: 'web' });

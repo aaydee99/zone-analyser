@@ -17,4 +17,4 @@ export const GET = route(async (req) => {
   if (cursor && !/^[A-Za-z0-9_=-]+$/.test(cursor)) throw new HttpError(400, 'Not a page cursor');
   const search = (u.get('search') ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200);
   return listItems(account, list, { cursor, search });
-}, { perm: 'runs:read', limit: { name: 'list-items', max: 120, windowMs: 5 * 60_000 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'list-items', max: 120, windowMs: 5 * 60_000 } });

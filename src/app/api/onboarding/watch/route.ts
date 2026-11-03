@@ -23,4 +23,4 @@ export const GET = route(async (req) => {
   const limit = Math.min(200, Math.max(1, Math.floor(Number(u.get('limit')) || 50)));
   const view: PendingView = { ...(await pendingZones({ offset, limit, account })), offset, generatedAt: new Date().toISOString() };
   return view;
-}, { perm: 'runs:read', limit: { name: 'onboarding-watch', max: 120, windowMs: 5 * 60_000 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'onboarding-watch', max: 120, windowMs: 5 * 60_000 } });

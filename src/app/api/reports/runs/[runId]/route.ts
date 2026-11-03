@@ -10,4 +10,4 @@ export const GET = route<Ctx>(async (_req, { params }) => {
   if (!run) throw new HttpError(404, 'Report not found');
   const definition = await getDefinition(run.definitionId);
   return { run, definition, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

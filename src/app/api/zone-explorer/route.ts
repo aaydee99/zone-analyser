@@ -28,4 +28,4 @@ export const GET = route(async (req) => {
   }
   if (u.get('list') === '0') return { ids: ids ? shown.map((z) => z.id) : null, of: zones.length, ...(meta ? { meta } : {}), ...(metaError ? { metaError } : {}) };
   return { zones: shown, problems, listedAt: new Date(at).toISOString(), ...(ids ? { filtered: true, of: zones.length } : {}), ...(meta ? { meta } : {}), ...(metaError ? { metaError } : {}) };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

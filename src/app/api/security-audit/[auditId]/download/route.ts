@@ -27,4 +27,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   res.headers.set('X-Content-Type-Options', 'nosniff');
   await audit(me, 'zone_audit.downloaded', a.zoneName || a.zoneId, { audit: a.id, format });
   return res;
-}, { perm: 'runs:read', limit: { name: 'zone-audit-download', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-audit-download', max: 30 } });

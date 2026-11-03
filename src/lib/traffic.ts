@@ -295,7 +295,7 @@ export async function trafficReport(month: string, accountId: string, zoneId?: s
   const months = trafficMonths();
   if (!months.includes(month)) throw new HttpError(400, `Pick a month from the last ${MONTHS} (YYYY-MM)`);
   const scope = await scopeOf(accountId, zoneId || undefined);
-  const out = await inBackground(`traffic:${month}&${scopeKey(scope)}`, (progress) => buildReport(month, scope, fresh, months, progress), waitMs);
+  const out = await inBackground(`traffic:${month}&${scopeKey(scope)}`, (progress) => buildReport(month, scope, fresh, months, progress), waitMs, { fresh });
   return 'pending' in out ? { ...out, month, accountId: scope.accountId, ...(scope.zoneId ? { zoneId: scope.zoneId } : {}) } : out;
 }
 

@@ -16,4 +16,4 @@ export const GET = route(async (req) => {
   const limit = Math.min(200, Math.max(1, Math.floor(Number(u.get('limit')) || 50)));
   const view: RefsView = { ...(await listRefs({ account, list, offset, limit })), offset };
   return view;
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

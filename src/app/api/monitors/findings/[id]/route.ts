@@ -14,4 +14,4 @@ export const POST = route<Ctx>(async (req, { params }, me) => {
   if (!f) throw new HttpError(404, 'Finding not found');
   await audit(me, dismissed === false ? 'monitoring.finding_restored' : 'monitoring.finding_dismissed', f.title, { check: f.check, severity: f.severity });
   return { finding: f };
-}, { perm: 'monitors:manage' });
+}, { perm: 'monitors:manage', on: 'web' });

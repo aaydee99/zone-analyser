@@ -14,4 +14,4 @@ export const GET = route(async (req) => {
   const q = new URL(req.url).searchParams;
   const r = await trafficReport(q.get('month') || trafficMonths()[0], q.get('account') ?? '', q.get('zone') || undefined, isFresh(req));
   return 'pending' in r ? NextResponse.json(r, { status: 202, headers: { 'Retry-After': '3' } }) : r;
-}, { perm: 'runs:read', limit: { name: 'traffic', max: 120 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'traffic', max: 120 } });

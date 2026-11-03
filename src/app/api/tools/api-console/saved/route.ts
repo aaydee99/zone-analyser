@@ -4,7 +4,7 @@ import { listSaved, saveQuery } from '@/lib/api-console';
 export const dynamic = 'force-dynamic';
 
 /** This user's saved queries. */
-export const GET = route(async (_req, _ctx, me) => ({ saved: await listSaved(me) }), { perm: 'cloudflare:query' });
+export const GET = route(async (_req, _ctx, me) => ({ saved: await listSaved(me) }), { perm: 'cloudflare:query', on: 'web' });
 
 /** Saves { name, path } (the path as typed, with its placeholders). */
-export const POST = route(async (req, _ctx, me) => saveQuery(me, await readBody(req)), { perm: 'cloudflare:query' });
+export const POST = route(async (req, _ctx, me) => saveQuery(me, await readBody(req)), { perm: 'cloudflare:query', on: 'web' });

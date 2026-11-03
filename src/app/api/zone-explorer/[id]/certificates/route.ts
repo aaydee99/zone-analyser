@@ -14,4 +14,4 @@ export const GET = route<Ctx>(async (req, { params }) => {
     zoneId: ssl.zoneId, zoneName: ssl.zoneName, generatedAt: ssl.generatedAt, ...(ssl.cachedIn ? { cachedIn: ssl.cachedIn } : {}),
     certificates: certificatesOf(ssl.sections).map((c) => ({ ...c, daysLeft: daysLeft(c.expiresOn, now) })),
   };
-}, { perm: 'runs:read', limit: { name: 'zone-section', max: 400 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-section', max: 400 } });

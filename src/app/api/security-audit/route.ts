@@ -25,7 +25,7 @@ export const GET = route(async (req) => {
   const term = (q.get('q') ?? '').trim().slice(0, 100);
   const r = await latestAudits({ q: term, sort, offset, limit });
   return { ...r, offset, limit, sort, generatedAt: new Date().toISOString() };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });
 
 /**
  * Audits one zone now: { accountId, zoneId, hours?: 24|168|720 } (the zone must be in the account),

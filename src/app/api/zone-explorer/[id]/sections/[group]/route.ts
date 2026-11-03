@@ -13,4 +13,4 @@ export const GET = route<Ctx>(async (req, { params }, me) => {
   const part = await zoneGroup(id, group, isFresh(req));
   await auditView(me, { id, name: part.zoneName, accountName: '' });
   return part;
-}, { perm: 'runs:read', limit: { name: 'zone-section', max: 400 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-section', max: 400 } });

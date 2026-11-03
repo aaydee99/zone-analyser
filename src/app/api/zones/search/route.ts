@@ -22,4 +22,4 @@ export const GET = route(async (req) => {
     zones: page.map((z) => ({ id: z.id, name: z.name, accountName: z.accountName, status: z.status, plan: z.plan })),
     meta: liteOf(meta), total: hits.length, offset, of: zones.length,
   };
-}, { perm: 'runs:read' });
+}, { perm: 'runs:read', on: 'web' });

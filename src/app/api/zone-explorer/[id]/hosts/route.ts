@@ -13,4 +13,4 @@ export const GET = route<Ctx>(async (req, { params }) => {
     zoneId: r.zone.id, generatedAt: r.generatedAt, ...(r.cachedIn ? { cachedIn: r.cachedIn } : {}),
     ...rulesByHost(r.zone.name, r.rules, r.sections, r.rulesetNames),
   };
-}, { perm: 'runs:read', limit: { name: 'zone-report', max: 30 } });
+}, { perm: 'runs:read', on: 'web', limit: { name: 'zone-report', max: 30 } });

@@ -10,4 +10,4 @@ export const POST = route(async (req, _ctx, me) => {
   const r = await renameTag(from, to ?? '', me.email);
   if (r.changed) await audit(me, r.to ? 'zone_meta.tag_renamed' : 'zone_meta.tag_removed', r.from, { from: r.from, to: r.to || null, zones: r.changed });
   return r;
-}, { perm: 'zones:tag', limit: { name: 'zone-meta-bulk', max: 30 } });
+}, { perm: 'zones:tag', on: 'web', limit: { name: 'zone-meta-bulk', max: 30 } });
