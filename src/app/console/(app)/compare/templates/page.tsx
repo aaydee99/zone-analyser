@@ -12,6 +12,7 @@ import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 import { useSnapshot } from '../../monitoring/use-run';
 import { ZonePicker } from '../parts';
+import { LIBRARY, libraryItems } from '@/lib/template-library';
 
 type Row = Omit<Template, 'items'> & { itemCount: number };
 const DEFAULT_KINDS: IndexKind[] = ['setting', 'rule', 'header', 'redirect'];
@@ -23,7 +24,7 @@ export default function TemplatesPage() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Compare" title="Templates"
-        description="A template is a named baseline — the settings, rules and records every zone of a kind should have — made from a zone you trust and then edited. Each zone's gaps against it are computed from stored data. Nothing is applied to Cloudflare."
+        description="A template is a named baseline — the settings, rules and records every zone of a kind should have — made from a zone you trust or from the best-practice library, then edited and added to by hand. Each zone's gaps against it are computed from stored data. Nothing is applied to Cloudflare."
         actions={<>
           <Button variant="ghost" loading={loading && !!data} onClick={reload} icon={<RefreshCw className="size-4" />}>Refresh</Button>
           {can('zones:tag') && <Button variant="primary" onClick={() => setOpen(true)} icon={<Plus className="size-4" />}>New template</Button>}
@@ -56,29 +57,38 @@ function CreateTemplate({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState('');
   const [zone, setZone] = useState<{ id: string; name: string } | null>(null);
   const [kinds, setKinds] = useState<IndexKind[]>(DEFAULT_KINDS);
+  const [from, setFrom] = useState<'zone' | 'library'>('zone');
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
     try {
-      const r = await api<{ template: Template }>('/api/compare/templates', { method: 'POST', json: { name, description, zoneId: zone?.id, kinds } });
+      const r = await api<{ template: Template }>('/api/compare/templates', { method: 'POST', json: from === 'zone' ? { name, description, zoneId: zone?.id, kinds } : { name, description, items: libraryItems() } });
       toast(`Template “${r.template.name}” made with ${r.template.items.length} items`);
       router.push(`/console/compare/templates/${r.template.id}`);
     } catch (e) { toast((e as Error).message, 'bad'); setSaving(false); }
   };
   return (
-    <Modal open onClose={onClose} title="New template" description="Start from a zone's stored configuration, then edit the expected values on the next page." width="max-w-xl"
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} disabled={!name.trim() || !zone || !kinds.length} onClick={save}>Make template</Button></>}>
+    <Modal open onClose={onClose} title="New template" description="Start from a zone's stored configuration or from the best-practice library, then add, remove and edit items on the next page." width="max-w-xl"
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} disabled={!name.trim() || (from === 'zone' && (!zone || !kinds.length))} onClick={save}>Make template</Button></>}>
       <div className="space-y-4">
         <Field label="Name"><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Production web zones" /></Field>
         <Field label="Description" optional><input className="input" value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} /></Field>
-        <ZonePicker label="Start from zone" value={zone} onChange={setZone} />
+        <Field label="Start from">
+          <div className="flex flex-wrap gap-2">
+            {([['zone', 'A zone I trust'], ['library', `The best-practice library (${LIBRARY.length} items)`]] as const).map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setFrom(k)} aria-pressed={from === k}
+                className={`rounded-lg border px-3 py-1.5 text-[12.5px] ${from === k ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>{l}</button>
+            ))}
+          </div>
+        </Field>
+        {from === 'zone' && <><ZonePicker label="Start from zone" value={zone} onChange={setZone} />
         <Field label="What to include">
           <div className="grid gap-2 sm:grid-cols-2">
             {INDEX_KINDS.map((k) => (
               <Checkbox key={k.kind} label={k.label} checked={kinds.includes(k.kind)} onChange={(v) => setKinds((list) => (v ? [...list, k.kind] : list.filter((x) => x !== k.kind)))} />
             ))}
           </div>
-        </Field>
+        </Field></>}
       </div>
     </Modal>
   );

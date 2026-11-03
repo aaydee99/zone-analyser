@@ -13,6 +13,8 @@
 //   (clean()). `bannedIn()` finds any that would slip through (the tests run it on the document).
 
 import { postureOf, AREAS, THREATS } from './posture';
+import { findingRules } from './actions';
+import { refText, ruleIndex } from './rule-refs';
 import { SOURCES, SEVERITY_RANK, byWorst, windowLabel, type AuditFinding, type AuditReport, type RuleEffect, type RuleGroup, type Severity, GROUP_LABEL } from './types';
 
 export type ClientSeverity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Advisory';
@@ -65,7 +67,7 @@ const IPV6 = /\b(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}\b|\b[0-9a-f]{1,4}(?::[0-9a-
 const COMMAND = /`[^`]*\b(?:curl|openssl|dig|whois|nslookup|wget|nc)\b[^`]*`/gi;
 
 /** Plain client text: no dashes, no internal names, IDs, paths, commands or addresses. */
-export function clean(s: string, ruleIds: Set<string> = new Set(), names: Map<string, string> = new Map()): string {
+export function clean(s: string, ruleIds: Set<string> = new Set(), names: Map<string, string> = new Map(), opts: { keepAddresses?: boolean } = {}): string {
   let t = String(s ?? '');
   for (const [id, name] of names) if (t.includes(id)) t = t.split(id).join(`"${name}"`);
   t = t.replace(COMMAND, 'a test request');
@@ -82,7 +84,8 @@ export function clean(s: string, ruleIds: Set<string> = new Set(), names: Map<st
   t = t.replace(HEX_ID, '');
   // Only the audit's own rule IDs: Cloudflare fields such as cf.waf.score look alike and must stay.
   t = t.replace(RULE_ID, (m, at: number, all: string) => (ruleIds.has(m) && all[at - 1] !== '.' ? '' : m));
-  t = t.replace(IPV6, 'a published address').replace(IPV4, 'a published address');
+  // Origin addresses stay out of the client's copy; an IP Access rule's own value (its allow or block entry) is kept.
+  if (!opts.keepAddresses) t = t.replace(IPV6, 'a published address').replace(IPV4, 'a published address');
   // A range between numbers ("15–30") reads "15 to 30"; any other dash becomes a comma.
   t = t.replace(/(\d)\s*–\s*(\d)/g, '$1 to $2');
   t = t.replace(/\s+[—–]\s+/g, ', ').replace(/[—–]/g, ', ');
@@ -240,6 +243,7 @@ export function clientReport(r: AuditReport, opts: { client: string; preparedOn?
   for (const x of r.effectiveness?.rules ?? []) { if (x.ruleId && x.name && x.name !== x.ruleId) names.set(x.ruleId, x.name); }
   for (const m of r.managed?.rulesets ?? []) if (m.id && m.name) names.set(m.id, m.name);
   const C = (s: string) => clean(s, ids, names);
+  const refIdx = ruleIndex(null, r.effectiveness);
 
   // Group by theme (unknown rules by their audit group), worst first; beyond MAX_GAPS, the rest merge.
   const groups = new Map<string, Group>();
@@ -270,7 +274,10 @@ export function clientReport(r: AuditReport, opts: { client: string; preparedOn?
     const integrationFindings = new Set(g.findings.filter((f) => looksLikeIntegrations(effectOf(r, f))).map((f) => f.fingerprint));
     const shown = g.findings.slice(0, 6);
     const rows: CardRow[] = [];
-    rows.push({ label: 'Gap', lines: [...shown.map((f) => sentence(C(f.title))), ...(g.findings.length > shown.length ? [`And ${g.findings.length - shown.length} more of the same kind.`] : [])] });
+    // The rules the gap is about, by type and name (custom, rate limiting, managed, OWASP, exception …).
+    const refs = [...new Map(g.findings.flatMap((f) => findingRules(f, r, refIdx)).map((x) => [`${x.kind}:${x.name}`, x])).values()];
+    const involved = refs.length ? [`Rules involved: ${refs.map((x) => clean(refText(x), ids, names, { keepAddresses: x.kind === 'access' })).join(', ')}.`] : [];
+    rows.push({ label: 'Gap', lines: [...shown.map((f) => sentence(C(f.title))), ...(g.findings.length > shown.length ? [`And ${g.findings.length - shown.length} more of the same kind.`] : []), ...involved] });
     // Traffic first (the networks and paths are the evidence a reader acts on), then what was read.
     const ev = uniq([...effects.slice(0, 2).flatMap((e) => trafficLines(e, ids, names)), ...shown.flatMap((f) => evidenceOf(f, ids, names, effects.length > 0))]).slice(0, 10);
     if (ev.length) rows.push({ label: 'Evidence', lines: ev });

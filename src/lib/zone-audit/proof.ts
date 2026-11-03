@@ -18,7 +18,7 @@ import { AREAS, penaltyOf, postureOf } from './posture';
 import { MASK, SEVERITY_LABEL, SOURCES, redact, type AuditFinding, type AuditReport, type Evidence, type RuleGroup, type Snapshot, type SourceKey } from './types';
 import { compactNum } from '../num';
 
-export const RAW_MAX = 1_500;
+export const RAW_MAX = 20_000;
 const API = 'https://api.cloudflare.com/client/v4';
 
 const BY_PATH = new Map(Object.entries(SOURCES).map(([k, v]) => [v.path, k as SourceKey]));
@@ -31,7 +31,7 @@ export function sourceKeyOf(source: string): SourceKey | null {
 
 const show = (v: unknown) => {
   const t = JSON.stringify(v, null, 1) ?? String(v);
-  return t.length > RAW_MAX ? `${t.slice(0, RAW_MAX)}\n… (${compactNum(t.length)} characters in all)` : t;
+  return t.length > RAW_MAX ? `${t.slice(0, RAW_MAX)}\n[first ${RAW_MAX.toLocaleString('en-US')} of ${t.length.toLocaleString('en-US')} characters; the Re-check command returns all of it]` : t;
 };
 /** The key an evidence field names last ("rule.ratelimit.mitigation_timeout" → mitigation_timeout). */
 const lastKey = (field: string) => (field.split('.').pop() ?? '').trim().toLowerCase();
@@ -41,7 +41,7 @@ const common = (v: string) => v.length <= 5;
 /** Where the evidence value is in Cloudflare's answer: the record holding it, and whether it sits under the named key. */
 function locate(root: unknown, want: string, key: string) {
   let best: { holder: unknown; keyMatch: boolean } | null = null;
-  const cut = want.match(/^(.*)… \(\d+ characters\)$/s)?.[1];
+  const cut = want.match(/^(.*) \[first [\d,]+ of [\d,]+ characters\]$/s)?.[1] ?? want.match(/^(.*)… \(\d+ characters\)$/s)?.[1];
   const same = (node: unknown) => {
     if (node === null || node === undefined) return false;
     if (typeof node === 'object') {

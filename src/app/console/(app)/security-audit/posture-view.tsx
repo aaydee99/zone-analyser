@@ -7,7 +7,8 @@ import { whole } from '@/lib/num';
 import { PENALTY, RATING_LABEL, THREAT_LABEL, postureOf, type Rating, type Step, type ThreatStatus } from '@/lib/zone-audit/posture';
 import { verifyReport } from '@/lib/zone-audit/verify';
 import { COVERAGE_LABEL, type AuditReport } from '@/lib/zone-audit/types';
-import { AuditNav } from './audit-view';
+import { AuditNav, AuditReportCtx, RuleRefs } from './audit-view';
+import { findingRules } from '@/lib/zone-audit/actions';
 
 // The Posture tab of the audit report: the grade and verdict, the area scorecard, enforcement in the
 // traffic, threat coverage, next steps by urgency, what the gaps cost to close, and what to watch.
@@ -20,9 +21,17 @@ const RATING_TONE: Record<Rating, 'ok' | 'warn' | 'bad' | 'neutral' | 'info'> = 
 const THREAT_TONE: Record<ThreatStatus, 'ok' | 'warn' | 'bad' | 'neutral'> = { covered: 'ok', partial: 'warn', gap: 'bad', unknown: 'neutral', not_applicable: 'neutral' };
 const gradeTone = (g: string | null) => (g === 'A' || g === 'B' ? 'text-ok' : g === 'C' ? 'text-warn' : g ? 'text-bad' : 'text-muted');
 
+/** A finding named in the posture: opens it, with the rules it is about under its title. */
 function FindingLink({ fp, children }: { fp: string; children: ReactNode }) {
   const nav = useContext(AuditNav);
-  return <button type="button" className="min-w-0 text-left wrap-anywhere text-ink-2 hover:text-signal hover:underline" onClick={() => nav.finding(fp)}>{children}</button>;
+  const report = useContext(AuditReportCtx);
+  const refs = useMemo(() => { const f = report?.findings.find((x) => x.fingerprint === fp); return f && report ? findingRules(f, report) : []; }, [report, fp]);
+  return (
+    <span className="min-w-0">
+      <button type="button" className="min-w-0 text-left wrap-anywhere text-ink-2 hover:text-signal hover:underline" onClick={() => nav.finding(fp)}>{children}</button>
+      <RuleRefs refs={refs} className="mt-0.5" />
+    </span>
+  );
 }
 
 /** "How this was worked out": the inputs and the arithmetic behind a number. */
@@ -154,8 +163,8 @@ export function PostureView({ r }: { r: AuditReport }) {
               <p><strong>WAF matches only logged</strong> = managed and custom rule matches with the action Log ({whole.format(pr.wafLogged)}) ÷ all their decided matches ({whole.format(pr.wafDecided)}) = {share(en.logOnlyShare)}.</p>
               <p><strong>Challenge solve rate</strong> = solved ({whole.format(pr.solved)}) ÷ challenges issued ({whole.format(pr.challenged)}){pr.challenged < 10 ? ' — fewer than 10 issued, so not measured' : ` = ${share(en.solveRate)}`}.</p>
               <p><strong>Bad traffic let through</strong> = bot + malicious requests counted on the rules that log, skip or allow{pr.badByRule.length ? ':' : ' — none found.'}</p>
-              {pr.badByRule.length > 0 && <div className="max-w-xl space-y-1">{pr.badByRule.slice(0, 10).map((x) => <Row key={x.rule} n={whole.format(x.bots + x.malicious)}>{x.rule} <span className="text-muted">({whole.format(x.bots)} bots + {whole.format(x.malicious)} malicious)</span></Row>)}</div>}
-              <p><strong>Rules with no match</strong>: {pr.silentRules.length ? pr.silentRules.slice(0, 15).join(', ') : 'none'}.</p>
+              {pr.badByRule.length > 0 && <div className="max-w-xl space-y-1">{pr.badByRule.map((x) => <Row key={x.rule} n={whole.format(x.bots + x.malicious)}>{x.rule} <span className="text-muted">({whole.format(x.bots)} bots + {whole.format(x.malicious)} malicious)</span></Row>)}</div>}
+              <p><strong>Rules with no match</strong>: {pr.silentRules.length ? pr.silentRules.join(', ') : 'none'}.</p>
             </HowWorkedOut>
           </div>
         )}
@@ -186,7 +195,7 @@ export function PostureView({ r }: { r: AuditReport }) {
                 <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
                   {t.checks.map((c) => (
                     <li key={c.ruleId} className="flex min-w-0 items-baseline justify-between gap-2">
-                      <code className="min-w-0 truncate font-mono text-[11px]" title={c.ruleId}>{c.ruleId}</code>
+                      <code className="min-w-0 font-mono text-[11px] wrap-anywhere">{c.ruleId}</code>
                       <span className={cx('shrink-0', c.state === 'finding' ? 'text-warn' : c.state === 'passed' ? 'text-ok' : 'text-muted')}>{COVERAGE_LABEL[c.state]}{c.findings ? ` (${c.findings})` : ''}</span>
                     </li>
                   ))}

@@ -110,5 +110,5 @@ export function Pager({ offset, limit, shown, total, onPage }: { offset: number;
 export function Values({ v }: { v: (string | null)[] }) {
   const list = v.filter((x): x is string => x !== null);
   if (!list.length) return <span className="text-faint">—</span>;
-  return <span className="font-mono text-[12px] break-all whitespace-pre-wrap text-ink-2">{list.map((x) => (x.length > 400 ? `${x.slice(0, 400)}…` : x)).join('\n')}</span>;
+  return <span className="font-mono text-[12px] break-all whitespace-pre-wrap text-ink-2">{list.join('\n')}</span>;
 }

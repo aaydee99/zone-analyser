@@ -2,9 +2,10 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Play, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ChevronDown, Play, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
-import { INDEX_KINDS, TEMPLATE_MATCHES, type IndexKind, type TemplateItem, type TemplateMatch } from '@/lib/zone-index';
+import { CHECK_MATCHES, INDEX_KINDS, MATCH_TEXT, MAX_CHECK_CONDITIONS, TEMPLATE_MATCHES, type CheckMatch, type CheckWhen, type IndexKind, type TemplateItem, type TemplateMatch } from '@/lib/zone-index';
+import { LIBRARY, LIBRARY_GROUPS, PHASES, PHASE_LABEL, RULE_FIELDS, SETTING_IDS } from '@/lib/template-library';
 import type { GapsPage, Template } from '@/lib/compare';
 import { Alert, Badge, Button, Card, Checkbox, Field, Loading, Modal, PageHeader, SectionHeader, SkeletonTable, cx } from '@/components/ui';
 import { useMe } from '@/components/me';
@@ -14,7 +15,7 @@ import { Pager, Values } from '../../parts';
 import { whole } from '@/lib/num';
 const PAGE = 50;
 const KIND_LABEL = Object.fromEntries(INDEX_KINDS.map((k) => [k.kind, k.label])) as Record<IndexKind, string>;
-const MATCH_LABEL: Record<TemplateMatch, string> = { equals: 'is', contains: 'contains', present: 'exists', absent: 'does not exist' };
+const MATCH_LABEL = MATCH_TEXT;
 type Answer = GapsPage & { generatedAt: string };
 
 export default function TemplatePage({ params }: { params: Promise<{ id: string }> }) {
@@ -61,10 +62,179 @@ export default function TemplatePage({ params }: { params: Promise<{ id: string 
           aside={manage ? <Button variant="primary" size="sm" disabled={!dirty} loading={saving} onClick={save} icon={<Save className="size-4" />}>Save</Button> : undefined} />
         <ItemTable items={items} manage={manage} onChange={setItems} />
       </Card>
+      {manage && <AddItems items={items} onAdd={(add) => setItems((l) => [...l, ...add.filter((x) => !l.some((y) => y.item === x.item))])} />}
       <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title={`Delete “${template.name}”?`} description="The template and its kept results go. Zones are not changed."
         footer={<><Button variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button><Button variant="danger" onClick={remove}>Delete</Button></>}>
         <p className="text-sm text-muted">This cannot be undone.</p>
       </Modal>
+    </div>
+  );
+}
+
+const PRESENCE: TemplateMatch[] = ['present', 'absent'];
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 60) || 'item';
+/** The template's key for a new item, not taken yet. */
+function freeKey(base: string, taken: Set<string>) {
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) if (!taken.has(`${base}_${i}`)) return `${base}_${i}`;
+}
+
+/** What an item checks, in words. */
+function ItemExpected({ t }: { t: TemplateItem }) {
+  if (t.check) {
+    return (
+      <div className="text-[12px]">
+        <div className="text-muted">{t.match === 'absent' ? 'No rule' : 'A rule'} in {PHASE_LABEL[t.check.phase] ?? t.check.phase} where</div>
+        <ul className="mt-0.5 space-y-0.5">{t.check.when.map((w, i) => <li key={i} className="font-mono break-words [overflow-wrap:anywhere] text-ink-2">{w.field} <span className="text-muted">{MATCH_TEXT[w.match]}</span> {w.value}</li>)}</ul>
+      </div>
+    );
+  }
+  if (t.match === 'present' || t.match === 'absent') return <span className="text-faint">—</span>;
+  return <span className="font-mono text-[12px] break-words [overflow-wrap:anywhere]"><span className="text-muted">{MATCH_TEXT[t.match]}</span> {t.expected}</span>;
+}
+
+/** Add items by hand: from the best-practice library, or any setting, rule check or stored item. */
+function AddItems({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: TemplateItem[]) => void }) {
+  const [tab, setTab] = useState<'library' | 'custom'>('library');
+  return (
+    <Card>
+      <SectionHeader title="Add items" description="Pick best-practice items or define your own: zone settings, custom rules, rate limiting, managed rules and OWASP, cache rules, headers, redirects, or any stored item. They are checked against every zone; nothing is written to Cloudflare. Save to keep them." />
+      <div className="flex gap-1 border-b border-line px-5" role="tablist">
+        {([['library', 'Best-practice library'], ['custom', 'Custom item']] as const).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+            className={cx('-mb-px border-b-2 px-3 py-2 text-[13px] font-medium', tab === k ? 'border-signal text-ink' : 'border-transparent text-muted hover:text-ink')}>{label}</button>
+        ))}
+      </div>
+      {tab === 'library' ? <Library items={items} onAdd={onAdd} /> : <CustomItem items={items} onAdd={onAdd} />}
+    </Card>
+  );
+}
+
+function Library({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: TemplateItem[]) => void }) {
+  const have = new Set(items.map((i) => i.item));
+  const [picked, setPicked] = useState<string[]>([]);
+  const free = LIBRARY.filter((e) => !have.has(e.item.item));
+  const add = () => { onAdd(LIBRARY.filter((e) => picked.includes(e.id)).map((e) => e.item)); setPicked([]); };
+  return (
+    <div className="px-5 py-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="primary" disabled={!picked.length} onClick={add} icon={<Plus className="size-3.5" />}>Add {picked.length || ''} selected</Button>
+        <Button size="sm" variant="ghost" disabled={!free.length} onClick={() => setPicked(free.map((e) => e.id))}>Select all not added ({free.length})</Button>
+        {picked.length > 0 && <Button size="sm" variant="ghost" onClick={() => setPicked([])}>Clear</Button>}
+      </div>
+      <div className="space-y-5">
+        {LIBRARY_GROUPS.map((g) => (
+          <section key={g}>
+            <h3 className="mb-1.5 text-[12px] font-semibold tracking-wide text-muted uppercase">{g}</h3>
+            <ul className="divide-y divide-line/60 rounded-lg border border-line">
+              {LIBRARY.filter((e) => e.group === g).map((e) => {
+                const added = have.has(e.item.item);
+                return (
+                  <li key={e.id} className="flex gap-3 px-3 py-2.5">
+                    <span className="mt-0.5 shrink-0"><Checkbox label={<span className="sr-only">{e.title}</span>} disabled={added}
+                      checked={added || picked.includes(e.id)} onChange={(v) => setPicked((p) => (v ? [...p, e.id] : p.filter((y) => y !== e.id)))} /></span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-medium text-ink">{e.title}</span>{added && <Badge tone="ok">added</Badge>}</div>
+                      <p className="text-[12px] text-muted">{e.why}</p>
+                      <div className="mt-1"><ItemExpected t={e.item} /></div>
+                      {!e.item.check && <div className="mt-0.5 font-mono text-[11px] text-faint">{e.item.item}</div>}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type CustomKind = 'setting' | 'rule' | 'other';
+function CustomItem({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: TemplateItem[]) => void }) {
+  const toast = useToast();
+  const [kind, setKind] = useState<CustomKind>('rule');
+  const [label, setLabel] = useState('');
+  // A setting, or any stored item.
+  const [key, setKey] = useState('');
+  const [itemKind, setItemKind] = useState<IndexKind>('resource');
+  const [match, setMatch] = useState<TemplateMatch>('equals');
+  const [value, setValue] = useState('');
+  // A rule check.
+  const [phase, setPhase] = useState(PHASES[0].phase);
+  const [must, setMust] = useState<'present' | 'absent'>('present');
+  const [when, setWhen] = useState<CheckWhen[]>([{ field: 'expression', match: 'contains', value: '' }, { field: 'action', match: 'equals', value: '' }]);
+  const setW = (i: number, patch: Partial<CheckWhen>) => setWhen((l) => l.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const needsValue = match !== 'present' && match !== 'absent';
+  const taken = new Set(items.map((i) => i.item));
+
+  const reset = () => { setLabel(''); setKey(''); setValue(''); setWhen([{ field: 'expression', match: 'contains', value: '' }, { field: 'action', match: 'equals', value: '' }]); };
+  const add = () => {
+    let item: TemplateItem;
+    if (kind === 'rule') {
+      const conds = when.filter((w) => w.field.trim() && w.value.trim()).map((w) => ({ ...w, field: w.field.trim() }));
+      if (!conds.length) return toast('Give at least one condition with a field and a value', 'bad');
+      if (conds.some((w) => w.field.includes('<'))) return toast('Replace <Header-Name> with the header’s name', 'bad');
+      const p = PHASES.find((x) => x.phase === phase)!;
+      const title = label.trim() || `${p.label}: ${conds.map((w) => `${w.field} ${MATCH_TEXT[w.match]} ${w.value}`).join(', ')}`;
+      item = { item: freeKey(`check:${phase}:${slug(label || conds.map((w) => w.value).join(' '))}`, taken), kind: p.kind, path: title.slice(0, 300), expected: '', match: must, check: { phase, when: conds } };
+    } else {
+      const k = kind === 'setting' ? `setting:${key.trim()}` : key.trim();
+      if (!key.trim()) return toast(kind === 'setting' ? 'Give the setting ID' : 'Give the item key', 'bad');
+      if (taken.has(k)) return toast('That item is in the template already: change it in the list below', 'bad');
+      if (needsValue && !value.trim()) return toast('Give the expected value', 'bad');
+      item = { item: k, kind: kind === 'setting' ? 'setting' : itemKind, path: (label.trim() || (kind === 'setting' ? `Setting ${key.trim()}` : k)).slice(0, 300), expected: needsValue ? value : '', match };
+    }
+    onAdd([item]); reset(); toast('Added — Save to keep it', 'info');
+  };
+
+  return (
+    <div className="space-y-4 px-5 py-4">
+      <Field label="What to check">
+        <div className="flex flex-wrap gap-2">
+          {([['rule', 'A rule (custom, rate limiting, managed, OWASP, cache, headers, redirects)'], ['setting', 'A zone setting'], ['other', 'Any stored item']] as const).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => { setKind(k); setMatch(k === 'other' ? 'present' : 'equals'); }}
+              className={cx('rounded-lg border px-3 py-1.5 text-[12.5px]', kind === k ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink')}>{l}</button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Name" optional hint="How it is shown in the list and the gaps."><input className="input" value={label} maxLength={300} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'rule' ? 'Block access to /wp-login.php' : 'Minimum TLS 1.2'} /></Field>
+      {kind === 'rule' ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Where"><select className="input" value={phase} onChange={(e) => setPhase(e.target.value)}>{PHASES.map((p) => <option key={p.phase} value={p.phase}>{p.label}</option>)}</select></Field>
+            <Field label="Expect"><select className="input" value={must} onChange={(e) => setMust(e.target.value as 'present' | 'absent')}><option value="present">A rule that meets every condition exists</option><option value="absent">No rule meets every condition</option></select></Field>
+          </div>
+          <Field label="Conditions" hint="Fields as Cloudflare names them in the rule (see the suggestions); [*] is any position in a list, e.g. action_parameters.overrides.rules[*].score_threshold. Any rule of the phase may meet them, wherever it sits.">
+            <div className="space-y-2">
+              {when.map((w, i) => (
+                <div key={i} className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,2fr)_auto]">
+                  <input className="input font-mono !text-[12px]" list="tmpl-rule-fields" aria-label={`Field ${i + 1}`} value={w.field} maxLength={200} onChange={(e) => setW(i, { field: e.target.value })} placeholder="expression" />
+                  <select className="input !text-[12.5px]" aria-label={`Comparison ${i + 1}`} value={w.match} onChange={(e) => setW(i, { match: e.target.value as CheckMatch })}>{CHECK_MATCHES.map((m) => <option key={m} value={m}>{MATCH_TEXT[m]}</option>)}</select>
+                  <input className="input font-mono !text-[12px]" aria-label={`Value ${i + 1}`} value={w.value} maxLength={4000} onChange={(e) => setW(i, { value: e.target.value })} placeholder={w.match === 'one_of' ? 'block, managed_challenge' : w.field === 'action' ? 'block' : '/login'} />
+                  <Button size="sm" variant="ghost" aria-label={`Remove condition ${i + 1}`} disabled={when.length === 1} onClick={() => setWhen((l) => l.filter((_, j) => j !== i))} icon={<Trash2 className="size-3.5" />} />
+                </div>
+              ))}
+              <Button size="sm" variant="ghost" disabled={when.length >= MAX_CHECK_CONDITIONS} onClick={() => setWhen((l) => [...l, { field: '', match: 'equals', value: '' }])} icon={<Plus className="size-3.5" />}>Add condition</Button>
+              <datalist id="tmpl-rule-fields">{RULE_FIELDS.map((f) => <option key={f} value={f} />)}</datalist>
+            </div>
+          </Field>
+        </>
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {kind === 'setting'
+              ? <Field label="Setting ID" hint="As Cloudflare names it, for example ssl, min_tls_version or always_use_https (see the suggestions)."><input className="input font-mono" list="tmpl-settings" value={key} maxLength={100} onChange={(e) => setKey(e.target.value)} placeholder="min_tls_version" /><datalist id="tmpl-settings">{SETTING_IDS.map((s) => <option key={s} value={s} />)}</datalist></Field>
+              : <Field label="Item key" hint="As Search and Compare show it, for example dns:A:www, pagerule:url:{zone}/old/*:forwarding_url or bot_management:-:fight_mode."><input className="input font-mono" value={key} maxLength={300} onChange={(e) => setKey(e.target.value)} placeholder="dns:CAA:@" /></Field>}
+            {kind === 'other' && <Field label="Kind"><select className="input" value={itemKind} onChange={(e) => setItemKind(e.target.value as IndexKind)}>{INDEX_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}</select></Field>}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+            <Field label="Expect"><select className="input" value={match} onChange={(e) => setMatch(e.target.value as TemplateMatch)}>{TEMPLATE_MATCHES.map((m) => <option key={m} value={m}>{MATCH_TEXT[m]}</option>)}</select></Field>
+            {needsValue && <Field label="Value" hint={match === 'one_of' ? 'Separate the values with commas' : match === 'at_least' || match === 'at_most' ? 'A number or a version (1.2)' : '{zone} stands for each zone’s own name'}><input className="input font-mono" value={value} maxLength={4000} onChange={(e) => setValue(e.target.value)} placeholder={kind === 'setting' ? '1.2' : ''} /></Field>}
+          </div>
+        </>
+      )}
+      <Button variant="primary" size="sm" onClick={add} icon={<Plus className="size-3.5" />}>Add to the template</Button>
     </div>
   );
 }
@@ -88,12 +258,12 @@ function ItemTable({ items, manage, onChange }: { items: TemplateItem[]; manage:
               <td className="px-4 py-2">
                 {manage ? (
                   <select className="input !py-1 !text-[12.5px]" aria-label={`Rule for ${t.path}`} value={t.match} onChange={(e) => set(i, { match: e.target.value as TemplateMatch })}>
-                    {TEMPLATE_MATCHES.map((m) => <option key={m} value={m}>{MATCH_LABEL[m]}</option>)}
+                    {(t.check ? PRESENCE : TEMPLATE_MATCHES).map((m) => <option key={m} value={m}>{t.check ? (m === 'present' ? 'a rule exists' : 'no rule exists') : MATCH_LABEL[m]}</option>)}
                   </select>
                 ) : MATCH_LABEL[t.match]}
               </td>
               <td className="w-[40%] px-4 py-2">
-                {t.match === 'present' || t.match === 'absent' ? <span className="text-faint">—</span>
+                {t.check || t.match === 'present' || t.match === 'absent' ? <ItemExpected t={t} />
                   : manage ? <input className="input !py-1 font-mono !text-[12px]" aria-label={`Expected value of ${t.path}`} value={t.expected} maxLength={4000} onChange={(e) => set(i, { expected: e.target.value })} />
                     : <Values v={[t.expected]} />}
               </td>
@@ -176,7 +346,7 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
                         {z.details.map((g) => (
                           <tr key={g.item} className="align-top">
                             <td className="py-1 pr-3 text-ink-2">{g.path} <Badge tone={g.problem === 'different' ? 'warn' : 'bad'}>{g.problem}</Badge></td>
-                            <td className="max-w-[320px] py-1 pr-3">{g.match === 'present' || g.match === 'absent' ? <span className="text-muted">{MATCH_LABEL[g.match]}</span> : <Values v={[`${g.match === 'contains' ? '… ' : ''}${g.expected}`]} />}</td>
+                            <td className="max-w-[320px] py-1 pr-3">{g.item.startsWith('check:') ? <Values v={[`${g.match === 'absent' ? 'No rule where' : 'A rule where'} ${g.expected}`]} /> : g.match === 'present' || g.match === 'absent' ? <span className="text-muted">{MATCH_LABEL[g.match]}</span> : <Values v={[`${MATCH_LABEL[g.match]} ${g.expected}`]} />}</td>
                             <td className="max-w-[320px] py-1"><Values v={g.actual} /></td>
                           </tr>
                         ))}

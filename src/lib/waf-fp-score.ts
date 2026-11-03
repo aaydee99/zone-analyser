@@ -5,7 +5,7 @@
 // or takes points and says why, so the score can be checked by hand. It is a heuristic: it ranks
 // what to look at first; it does not prove a false positive.
 
-import type { WafFix, WafSignal, WafSuspect } from './investigate-types';
+import type { WafCheck, WafEvidence, WafFix, WafSignal, WafSuspect } from './investigate-types';
 import { compactNum } from './num';
 import { OWASP_ANOMALY_RULE, OWASP_RULESET } from './traffic-types';
 import { OWASP_DEFAULT_THRESHOLD, actionLabel, sourceLabel, thresholdLabel } from './waf-labels';
@@ -55,45 +55,94 @@ export function commonPrefix(paths: string[]): string {
 /** Minimum mitigations for a rule to be judged at all (fewer says nothing). */
 export const MIN_EVENTS = 10;
 
+const n0 = (x: number) => x.toLocaleString('en-US');
+/** A share with one decimal: "2.7%", "80.0%". */
+const pc1 = (x: number) => `${(Math.round(x * 1000) / 10).toFixed(1)}%`;
+/** "1,200 of 1,500 = 80.0%". */
+const ratio = (a: number, b: number) => `${n0(a)} of ${n0(b)} = ${pc1(b ? a / b : 0)}`;
+
+/** The main path's responses: all requests to it, those security stopped, and the 2xx/3xx of the others. */
+export interface PathCounts { requests: number; stopped: number; others: number; ok: number }
+
 /**
  * The score (0–100) and the signals behind it. `okShare`: of the requests to the rule's main path
  * that security did not stop, the share that answered 2xx or 3xx (null when it could not be read).
+ * `checks` lists every check with the numbers it measured and its bands, including those that scored 0.
  */
-export function scoreRule(s: RuleStats, okShare: number | null): { score: number; signals: WafSignal[]; mitigated: number; challenged: number; solved: number; blocked: number; residentialShare: number; browserShare: number; pathShare: number } {
+export function scoreRule(s: RuleStats, okShare: number | null, path: PathCounts | null = null): { score: number; signals: WafSignal[]; checks: WafCheck[]; sum: number; mitigated: number; challenged: number; solved: number; blocked: number; residentialShare: number; browserShare: number; pathShare: number } {
   const signals: WafSignal[] = [];
-  const add = (key: string, label: string, points: number, detail: string) => { if (points) signals.push({ key, label, points, detail }); };
+  const checks: WafCheck[] = [];
+  const add = (key: string, label: string, points: number, detail: string, measured: string, bands: string) => {
+    checks.push({ key, label, points, measured, bands });
+    if (points) signals.push({ key, label, points, detail });
+  };
   let challenged = 0, solved = 0, blocked = 0, other = 0;
   for (const [a, n] of Object.entries(s.actions)) {
     if (isSolved(a)) solved += n; else if (isChallenge(a)) challenged += n; else if (isBlock(a)) blocked += n; else if (!PASSIVE_ACTIONS.includes(normAction(a))) other += n;
   }
   const mitigated = challenged + blocked + other;
-  const ipTotal = sum(s.ips) || 1;
-  const topIp = s.ips.length ? Math.max(...s.ips.map((x) => x.count)) / ipTotal : 1;
-  const asnTotal = sum(s.asns) || 1;
-  const residentialShare = s.asns.length ? sum(s.asns.filter((a) => !isHostingAsn(a.name))) / asnTotal : 0;
-  const uaTotal = sum(s.uas) || 1;
-  const browserShare = s.uas.length ? sum(s.uas.filter((u) => isBrowserUa(u.ua))) / uaTotal : 0;
-  const pathTotal = sum(s.paths) || 1;
-  const pathShare = s.paths.length ? Math.max(...s.paths.map((p) => p.count)) / pathTotal : 0;
+  const ipSum = sum(s.ips), ipTotal = ipSum || 1;
+  const topIpN = s.ips.length ? Math.max(...s.ips.map((x) => x.count)) : 0;
+  const topIp = s.ips.length ? topIpN / ipTotal : 1;
+  const asnSum = sum(s.asns), asnTotal = asnSum || 1;
+  const consumer = sum(s.asns.filter((a) => !isHostingAsn(a.name)));
+  const residentialShare = s.asns.length ? consumer / asnTotal : 0;
+  const uaSum = sum(s.uas), uaTotal = uaSum || 1;
+  const browsers = sum(s.uas.filter((u) => isBrowserUa(u.ua)));
+  const browserShare = s.uas.length ? browsers / uaTotal : 0;
+  const pathSum = sum(s.paths), pathTotal = pathSum || 1;
+  const topPathN = s.paths.length ? Math.max(...s.paths.map((p) => p.count)) : 0;
+  const pathShare = s.paths.length ? topPathN / pathTotal : 0;
+  const busiestIp = s.ips.length ? `busiest IP: ${ratio(topIpN, ipSum)} of the events` : 'no IP addresses read';
 
   const ips = s.ips.length;
-  add('ips', 'Many different clients', ips >= 50 ? 20 : ips >= 20 ? 12 : ips >= 5 ? 5 : 0, `${ips}${ips >= 2000 ? '+' : ''} distinct IP addresses`);
-  if (ips >= 5) add('spread', 'No single client dominates', topIp < 0.1 ? 10 : 0, `the busiest IP has ${pct(topIp)} of the events`);
-  add('one-client', 'One client dominates', topIp > 0.5 ? -15 : 0, `one IP has ${pct(topIp)} of the events — more like one attacker or bot`);
+  add('ips', 'Many different clients', ips >= 50 ? 20 : ips >= 20 ? 12 : ips >= 5 ? 5 : 0, `${ips}${ips >= 2000 ? '+' : ''} distinct IP addresses`,
+    `${n0(ips)}${ips >= 2000 ? '+' : ''} distinct IP addresses (${n0(ipSum)} events)`, '50 or more → +20 · 20–49 → +12 · 5–19 → +5 · under 5 → 0');
+  add('spread', 'No single client dominates', ips >= 5 && topIp < 0.1 ? 10 : 0, `the busiest IP has ${pct(topIp)} of the events`,
+    busiestIp, 'busiest IP under 10%, with 5 or more IPs → +10');
+  add('one-client', 'One client dominates', topIp > 0.5 ? -15 : 0, `one IP has ${pct(topIp)} of the events — more like one attacker or bot`,
+    busiestIp, 'busiest IP over 50% → −15');
   const asns = s.asns.length;
-  add('asns', 'Many networks', asns >= 10 ? 10 : asns >= 4 ? 5 : 0, `${asns} networks (ASNs)`);
+  add('asns', 'Many networks', asns >= 10 ? 10 : asns >= 4 ? 5 : 0, `${asns} networks (ASNs)`, `${n0(asns)} networks (ASNs)`, '10 or more → +10 · 4–9 → +5 · under 4 → 0');
   add('residential', residentialShare >= 0.4 ? 'Mostly consumer networks' : 'Mostly hosting networks', residentialShare >= 0.7 ? 15 : residentialShare >= 0.4 ? 8 : residentialShare < 0.2 && asns ? -10 : 0,
-    `${pct(residentialShare)} of the events from residential or mobile networks (not hosting / cloud)`);
+    `${pct(residentialShare)} of the events from residential or mobile networks (not hosting / cloud)`,
+    asns ? `consumer networks: ${ratio(consumer, asnSum)} of the events (hosting / cloud: ${n0(asnSum - consumer)})` : 'no networks read',
+    '70% or more → +15 · 40–69% → +8 · 20–39% → 0 · under 20% → −10');
   add('browsers', browserShare >= 0.5 ? 'Ordinary browsers' : 'Few browsers', browserShare >= 0.8 ? 15 : browserShare >= 0.5 ? 8 : browserShare < 0.2 && s.uas.length ? -10 : 0,
-    `${pct(browserShare)} of the events with a normal browser user agent`);
-  if (okShare !== null) add('ok-path', 'The path normally works', okShare >= 0.9 ? 15 : okShare >= 0.7 ? 8 : 0, `${pct(okShare)} of the other requests to that path answered 2xx/3xx`);
-  if (challenged >= MIN_EVENTS) {
-    const rate = solved / challenged;
-    add('solved', 'Challenges are solved', rate >= 0.5 ? 20 : rate >= 0.2 ? 10 : 0, `${pct(rate)} of ${compactNum(challenged)} challenges were solved (a person or a real browser passed)`);
-  }
-  add('one-path', 'One rule, one path', pathShare >= 0.8 && mitigated >= 50 ? 10 : 0, `${pct(pathShare)} of its mitigations hit one path`);
-  const score = Math.max(0, Math.min(100, signals.reduce((n, x) => n + x.points, 0)));
-  return { score, signals, mitigated, challenged, solved, blocked, residentialShare, browserShare, pathShare };
+    `${pct(browserShare)} of the events with a normal browser user agent`,
+    s.uas.length ? `browser user agents: ${ratio(browsers, uaSum)} of the events (${n0(s.uas.length)} user agent${s.uas.length === 1 ? '' : 's'})` : 'no user agents read',
+    '80% or more → +15 · 50–79% → +8 · 20–49% → 0 · under 20% → −10');
+  if (okShare !== null) add('ok-path', 'The path normally works', okShare >= 0.9 ? 15 : okShare >= 0.7 ? 8 : 0, `${pct(okShare)} of the other requests to that path answered 2xx/3xx`,
+    path ? `${ratio(path.ok, path.others)} answered 2xx/3xx (${n0(path.requests)} requests to the path − ${n0(path.stopped)} stopped by security = ${n0(path.others)})` : `${pc1(okShare)} answered 2xx/3xx`,
+    '90% or more → +15 · 70–89% → +8 · under 70% → 0');
+  else checks.push({ key: 'ok-path', label: 'The path normally works', points: 0, measured: 'not read (the zone keeps no request analytics, or no other request reached the path)', bands: '90% or more → +15 · 70–89% → +8 · under 70% → 0' });
+  const rate = challenged ? solved / challenged : 0;
+  if (challenged >= MIN_EVENTS) add('solved', 'Challenges are solved', rate >= 0.5 ? 20 : rate >= 0.2 ? 10 : 0, `${pct(rate)} of ${compactNum(challenged)} challenges were solved (a person or a real browser passed)`,
+    `${ratio(solved, challenged)} of the challenges issued were solved`, `50% or more → +20 · 20–49% → +10 · under 20% → 0`);
+  else checks.push({ key: 'solved', label: 'Challenges are solved', points: 0, measured: challenged ? `only ${n0(challenged)} challenges issued (${n0(solved)} solved)` : 'no challenges issued', bands: `needs ${MIN_EVENTS} or more challenges · then 50% or more solved → +20 · 20–49% → +10` });
+  add('one-path', 'One rule, one path', pathShare >= 0.8 && mitigated >= 50 ? 10 : 0, `${pct(pathShare)} of its mitigations hit one path`,
+    s.paths.length ? `busiest path: ${ratio(topPathN, pathSum)} of the events; ${n0(mitigated)} mitigations in all` : 'no paths read', '80% or more on one path, with 50 or more mitigations → +10');
+  const total = signals.reduce((n, x) => n + x.points, 0);
+  const score = Math.max(0, Math.min(100, total));
+  return { score, signals, checks, sum: total, mitigated, challenged, solved, blocked, residentialShare, browserShare, pathShare };
+}
+
+/** How many of each breakdown the evidence lists (the busiest first; the full count is given beside it). */
+export const EVIDENCE_TOP = 10;
+
+/** The hard numbers behind a score, for the page. */
+export function evidenceOf(s: RuleStats, sc: Pick<ReturnType<typeof scoreRule>, 'checks' | 'sum'>, path: PathCounts | null, window: { since: string; until: string }): WafEvidence {
+  const top = <T extends { count: number }>(xs: T[]) => [...xs].sort((a, b) => b.count - a.count).slice(0, EVIDENCE_TOP);
+  const consumerEvents = sum(s.asns.filter((a) => !isHostingAsn(a.name)));
+  return {
+    ...window,
+    counted: { ips: sum(s.ips), asns: sum(s.asns), paths: sum(s.paths), uas: sum(s.uas) },
+    topIps: top(s.ips), ipCount: s.ips.length,
+    networks: top(s.asns).map((a) => ({ ...a, consumer: !isHostingAsn(a.name) })), networkCount: s.asns.length, consumerEvents, hostingEvents: sum(s.asns) - consumerEvents,
+    userAgents: top(s.uas).map((u) => ({ ...u, browser: isBrowserUa(u.ua) })), uaCount: s.uas.length, browserEvents: sum(s.uas.filter((u) => isBrowserUa(u.ua))),
+    paths: top(s.paths), pathCount: s.paths.length,
+    pathStatus: path, checks: sc.checks, sum: sc.sum,
+  };
 }
 
 // ── Draft exception ─────────────────────────────────────────────────────────

@@ -73,7 +73,7 @@ const MANAGED: RuleDef[] = [
         const weakCats = list(o.categories).filter((x) => x.enabled === false || x.action === 'log');
         if (weakRules.length || weakCats.length) out.push({ resource: `${r.id}:overrides`, verdict: 'confirmed', severity: 'medium',
           title: `${[weakRules.length ? plural(weakRules.length, 'rule') : '', weakCats.length ? cats(weakCats.length) : ''].filter(Boolean).join(' and ')} of the Cloudflare Managed Ruleset ${weakRules.length + weakCats.length === 1 ? 'is' : 'are'} off or only log${weakRules.length + weakCats.length === 1 ? 's' : ''}`,
-          description: `Matches of these rules reach the origin: ${[...weakCats.map((x) => `category ${String(x.category)} (${x.enabled === false ? 'disabled' : 'log'})`), ...weakRules.slice(0, 10).map((x) => `rule ${String(x.id)} (${x.enabled === false ? 'disabled' : 'log'})`)].join(', ')}${weakRules.length > 10 ? ', …' : ''}.`,
+          description: `Matches of these rules reach the origin: ${[...weakCats.map((x) => `category ${String(x.category)} (${x.enabled === false ? 'disabled' : 'log'})`), ...weakRules.map((x) => `rule ${String(x.id)} (${x.enabled === false ? 'disabled' : 'log'})`)].join(', ')}.`,
           rootCause: 'Rule or category overrides on the deploy rule.', intendedBehavior: 'Overrides only for rules proven to cause false positives, preferably as narrow exceptions instead.',
           evidence: [ev(managedPath, `${name}.overrides.categories (off or log)`, weakCats.map((x) => String(x.category)).join(', ') || '(none)'), ev(managedPath, `${name}.overrides.rules (off or log)`, weakRules.map((x) => String(x.id)).join(', ') || '(none)')],
           fix: ['Security › WAF › Managed rules › Cloudflare Managed Ruleset › Configure › Browse rules: re-enable them, and handle false positives with an exception limited to the affected path.'] });
@@ -282,7 +282,7 @@ const BYPASS: RuleDef[] = [
       const paused = (c.v<LegacyRule[]>('lockdowns') ?? []).filter((r) => r.paused);
       return paused.length ? [{ verdict: 'confirmed', severity: 'low', title: `${plural(paused.length, 'Zone Lockdown rule')} paused`, description: 'A paused lockdown no longer limits its URLs to the allowed addresses: they are open to everyone.',
         rootCause: 'Paused legacy rules.', intendedBehavior: 'Active, or replaced by a custom rule (Zone Lockdown is a legacy product).', evidence: paused.slice(0, 10).map((r) => ev('GET /zones/{id}/firewall/lockdowns', r.description || r.id, (r.urls ?? []).join(', '))),
-        fix: ['Security › WAF › Tools › Zone Lockdown: resume or delete each rule; better, recreate it as a custom rule `(http.request.uri.path in {…} and not ip.src in $allowed)` → Block.'] }] : [];
+        fix: ['Security › WAF › Tools › Zone Lockdown: resume or delete each rule; better, recreate it as a custom rule `(http.request.uri.path in {"/the/locked/path"} and not ip.src in $allowed)` with its own paths and addresses → Block.'] }] : [];
     },
   },
   {

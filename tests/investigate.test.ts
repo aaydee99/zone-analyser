@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseRay, rayWindow } from '@/lib/ray-parse';
 import { fillBuckets, findSpikes, median, thresholdOf } from '@/lib/timeline-spikes';
-import { commonPrefix, draftException, isBrowserUa, isChallenge, isHostingAsn, isSolved, normAction, ruleString, scoreRule, type RuleStats } from '@/lib/waf-fp-score';
+import { EVIDENCE_TOP, commonPrefix, draftException, evidenceOf, isBrowserUa, isChallenge, isHostingAsn, isSolved, normAction, ruleString, scoreRule, type RuleStats } from '@/lib/waf-fp-score';
 
 const CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
@@ -76,6 +76,39 @@ test('scoreRule ranks one scanner from a hosting network low', () => {
   assert.equal(s.score, 0, `the minus points outweigh "one rule, one path": ${JSON.stringify(s.signals)}`);
   assert.ok(s.signals.some((x) => x.key === 'one-client' && x.points < 0));
   assert.equal(s.blocked, 500);
+});
+
+test('the evidence shows every check with its counts, the bands and the sum that makes the score', () => {
+  const st = legit(80, 3);
+  const path = { requests: 10_000, stopped: 240, others: 9_760, ok: 9_500 };
+  const sc = scoreRule(st, path.ok / path.others, path);
+  // Every check is listed, including those that scored nothing, and they add up to the score.
+  assert.deepEqual(sc.checks.map((c) => c.key), ['ips', 'spread', 'one-client', 'asns', 'residential', 'browsers', 'ok-path', 'solved', 'one-path']);
+  assert.equal(sc.checks.find((c) => c.key === 'one-client')!.points, 0);
+  assert.equal(sc.sum, sc.checks.reduce((n, c) => n + c.points, 0));
+  assert.equal(sc.score, Math.min(100, sc.sum));
+  const m = (k: string) => sc.checks.find((c) => c.key === k)!.measured;
+  assert.equal(m('solved'), '168 of 240 = 70.0% of the challenges issued were solved');
+  assert.equal(m('ok-path'), '9,500 of 9,760 = 97.3% answered 2xx/3xx (10,000 requests to the path − 240 stopped by security = 9,760)');
+  assert.match(m('spread'), /^busiest IP: \d+ of 240 = \d+\.\d% of the events$/);
+  assert.match(m('residential'), /^consumer networks: 240 of 240 = 100\.0% of the events \(hosting \/ cloud: 0\)$/);
+  for (const c of sc.checks) assert.ok(c.bands.length > 0 && c.measured.length > 0, c.key);
+  // The breakdowns: the busiest few with the full count beside them.
+  const e = evidenceOf(st, sc, path, { since: '2026-11-01T00:00:00Z', until: '2026-11-02T00:00:00Z' });
+  assert.equal(e.ipCount, 80);
+  assert.equal(e.topIps.length, EVIDENCE_TOP);
+  assert.equal(e.counted.ips, 240);
+  assert.equal(e.consumerEvents + e.hostingEvents, e.counted.asns);
+  assert.equal(e.browserEvents, 240);
+  assert.ok(e.userAgents.every((u) => u.browser));
+  assert.deepEqual(e.pathStatus, path);
+});
+
+test('a check that cannot be measured says so instead of scoring', () => {
+  const sc = scoreRule({ ...legit(3, 2), actions: { block: 6 } }, null);
+  assert.equal(sc.checks.find((c) => c.key === 'ok-path')!.measured.startsWith('not read'), true);
+  assert.equal(sc.checks.find((c) => c.key === 'solved')!.measured, 'no challenges issued');
+  assert.ok(!sc.signals.some((x) => x.key === 'ok-path' || x.key === 'solved'));
 });
 
 test('draftException skips one managed rule for one path', () => {

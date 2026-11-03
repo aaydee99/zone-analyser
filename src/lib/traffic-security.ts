@@ -60,6 +60,9 @@ const REQUEST_SPECS: Spec[] = [
   { alias: 'browsers', dims: ['userAgentBrowser'], limit: 20 },
   { alias: 'devices', dims: ['clientDeviceType'], limit: 10 },
   { alias: 'protocols', dims: ['clientRequestHTTPProtocol'], limit: 10 },
+  // Bot Management: requests per bot score (1–99, 0 = not scored) and per what scored them. Plans without it leave these out.
+  { alias: 'botScores', dims: ['botScore'], limit: 100 },
+  { alias: 'botSources', dims: ['botScoreSrcName'], limit: 20 },
 ];
 
 /** The time series of a window: per day for the month, per hour for a day, per minute for an hour. */
@@ -82,13 +85,15 @@ function timeCacheSpec(f: DetailFilter | null): Spec {
 }
 
 /** Shown per breakdown, after the parts are added up. */
-const SHOW: Record<string, number> = { rules: 250, ips: 100, paths: 50, timeActions: 5000, timeCache: 5000 };
+const SHOW: Record<string, number> = { rules: 250, ips: 100, paths: 50, timeActions: 5000, timeCache: 5000, botScores: 100 };
 
 const EVENT_FIELDS = ['datetime', 'action', 'source', 'ruleId', 'rulesetId', 'description', 'clientIP', 'clientCountryName', 'clientAsn', 'clientASNDescription',
   'clientRequestHTTPMethodName', 'clientRequestHTTPHost', 'clientRequestPath', 'clientRequestQuery', 'userAgent', 'edgeResponseStatus', 'rayName'];
 const EVENT_FIELDS_MIN = ['datetime', 'action', 'source', 'ruleId', 'description', 'clientIP', 'clientRequestPath'];
 const REQUEST_FIELDS = ['datetime', 'clientIP', 'clientCountryName', 'clientASNDescription', 'clientRequestHTTPMethodName', 'clientRequestHTTPHost', 'clientRequestPath',
-  'clientRequestQuery', 'clientRequestHTTPProtocol', 'edgeResponseStatus', 'cacheStatus', 'edgeResponseBytes', 'userAgent', 'rayName'];
+  'clientRequestQuery', 'clientRequestHTTPProtocol', 'edgeResponseStatus', 'cacheStatus', 'edgeResponseBytes', 'userAgent', 'rayName', 'botScore', 'botScoreSrcName'];
+/** Fields only some plans have (Bot Management): left out first when a read of single records fails. */
+const OPTIONAL_FIELDS = ['botScore', 'botScoreSrcName'];
 const REQUEST_FIELDS_MIN = ['datetime', 'clientIP', 'clientRequestPath', 'edgeResponseStatus'];
 
 // ── GraphQL ─────────────────────────────────────────────────────────────────
@@ -347,8 +352,11 @@ async function readSingles(gq: Ask, dataset: 'firewallEventsAdaptive' | 'httpReq
   const ask = (x: string[]) => gq(zoneQuery(zoneId,
     `rows: ${dataset}(limit: ${Math.min(listSize(f), limits.maxPageSize)}, filter: { datetime_geq: ${J(last.since)}, datetime_lt: ${J(last.until)}${filterOf(dataset, f)} }, orderBy: [datetime_DESC]) { ${x.join(' ')} }`));
   const named = fields.some((x) => offered(limits, x)) ? limits : { ...limits, availableFields: null };
-  let r = await ask(fields.filter((x) => offered(named, x)));
-  if (r.errors.length && !r.data && !r.errors.some((e) => e.extensions?.code === LIMIT_CODE)) r = await ask(minimal.filter((x) => offered(named, x)));
+  const first = fields.filter((x) => offered(named, x));
+  let r = await ask(first);
+  const retry = () => r.errors.length && !r.data && !r.errors.some((e) => e.extensions?.code === LIMIT_CODE);
+  if (retry() && first.some((x) => OPTIONAL_FIELDS.includes(x))) r = await ask(first.filter((x) => !OPTIONAL_FIELDS.includes(x)));
+  if (retry()) r = await ask(minimal.filter((x) => offered(named, x)));
   if (r.errors.length && !r.data) return { list: [], note: `Single ${what} could not be read: ${errorText(r.errors)}` };
   return { list: Array.isArray(r.data?.rows) ? (r.data!.rows as FirewallEvent[]) : [], since: last.since };
 }

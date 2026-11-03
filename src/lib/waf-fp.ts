@@ -7,7 +7,7 @@ import { J, errorText, gql, isLimit, isPermission, tokenCache, zoneLimits, type 
 import { rankZones, zonesOf } from './investigate-scope';
 import { WAF_WINDOWS, type WafReport, type WafSuspect, type WafZoneResult } from './investigate-types';
 import { MANAGED_RULESETS } from './traffic-types';
-import { MIN_EVENTS, PASSIVE_ACTIONS, actionsOf, currentActionOf, draftException, fixesOf, scoreRule, type RuleStats } from './waf-fp-score';
+import { MIN_EVENTS, PASSIVE_ACTIONS, actionsOf, currentActionOf, draftException, evidenceOf, fixesOf, scoreRule, type RuleStats } from './waf-fp-score';
 import { readManaged } from './traffic-security';
 import { actionLabel, deployOfManaged, tuningOf } from './waf-labels';
 import type { ZoneListItem } from './zone-catalog';
@@ -162,7 +162,8 @@ async function readZone(z: ZoneListItem, token: string, hours: number, progress:
     const st = statusOf.get(`${top.host}${top.path}`);
     const others = st ? st.total - (stoppedOn.get(`${top.host}${top.path}`) ?? 0) : 0;
     const okShare = st && others > 0 ? Math.min(1, st.ok / others) : null;
-    const sc = scoreRule(s, okShare);
+    const pathCounts = st && others > 0 ? { requests: st.total, stopped: st.total - others, others, ok: Math.min(st.ok, others) } : null;
+    const sc = scoreRule(s, okShare, pathCounts);
     const rulesetName = names[s.rulesetId];
     const common = { ruleId: s.ruleId, rulesetId: s.rulesetId, source: s.source, description: s.description, ...(rulesetName ? { rulesetName } : {}), host: top.host, path: top.path, pathShare: sc.pathShare };
     const dep = s.source === 'firewallManaged' ? deployed.find((d) => d.rulesetId === s.rulesetId && d.enabled) ?? deployed.find((d) => d.rulesetId === s.rulesetId) : undefined;
@@ -178,6 +179,7 @@ async function readZone(z: ZoneListItem, token: string, hours: number, progress:
       score: sc.score, signals: sc.signals, draft,
       actions: actionsOf(s.actions), currentAction, ...(deploy ? { deploy } : {}),
       fixes: fixesOf({ ...common, currentAction, draft, deploy }),
+      evidence: evidenceOf(s, sc, pathCounts, { since: parts[0].since, until: parts.at(-1)!.until }),
     };
   }).sort((a, b) => b.score - a.score || b.mitigated - a.mitigated);
   const events = rows('rules').reduce((n, r) => n + r.count, 0);
@@ -201,14 +203,14 @@ export async function wafReport(o: { zoneId?: string; accountId?: string; hours?
   const token = tokenCache();
   const zones = await inParallel(page, PARALLEL_ZONES, async (z): Promise<WafZoneResult> => {
     try {
-      const read = (fresh?: boolean) => cached<WafZoneResult>(`investigate:waf:v2:${z.id}:${hours}`, (v) => (v.status === 'error' ? 60_000 : TTL), async () => {
+      const read = (fresh?: boolean) => cached<WafZoneResult>(`investigate:waf:v3:${z.id}:${hours}`, (v) => (v.status === 'error' ? 60_000 : TTL), async () => {
         const t = await token(scope.list.credentialOf[z.id].id);
         if (!t) return { zoneId: z.id, zoneName: z.name, status: 'error', message: 'The stored credential could not be decrypted', events: 0, suspects: [] };
         return readZone(z, t, hours, progress);
       }, fresh);
       const got = await read(o.fresh);
       // A kept result without a suspect's details (what the rule did, how to fix it) is read again from Cloudflare.
-      return got.suspects.some((s) => !Array.isArray(s.actions) || !Array.isArray(s.fixes) || !s.draft) ? await read(true) : got;
+      return got.suspects.some((s) => !Array.isArray(s.actions) || !Array.isArray(s.fixes) || !s.draft || !s.evidence) ? await read(true) : got;
     } catch (e) {
       progress.signal?.throwIfAborted();
       return { zoneId: z.id, zoneName: z.name, status: 'error', message: e instanceof Error ? e.message : String(e), events: 0, suspects: [] };

@@ -316,7 +316,9 @@ test('expression helpers', () => {
 test('redaction', () => {
   assert.equal(redact('authorization', 'Bearer abc'), MASK);
   assert.equal(redact('url', 'https://example.test/x?token=abc&y=1'), `https://example.test/x?token=${MASK}&y=1`);
-  assert.match(redact('x', 'a'.repeat(500)), /… \(500 characters\)$/);
+  // Kept whole (rule expressions included); only past 20,000 characters is the rest left out, and said.
+  assert.equal(redact('x', 'a'.repeat(500)), 'a'.repeat(500));
+  assert.match(redact('x', 'a'.repeat(20_500)), /\[first 20,000 of 20,500 characters\]$/);
 });
 test('renderers: findings.json, REPORT.md and CSV', () => {
   const r = buildReport(snap((x) => { setting('ssl', 'flexible')(x); delete x.bot; }), { accountId: 'a1', accountName: 'Test', startedAt: NOW, finishedAt: NOW, calls: 31, lookups: 2 });

@@ -1050,6 +1050,18 @@ This keeps a clean result from being mistaken for "everything was checked".
 
 **Downloads:** `REPORT.md` (sections in the page's order, the posture after the summary), `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table, the managed rulesets or the coverage ledger.
 
+**Which rule.** Every finding, recommended action and posture item names the zone's rules it is about, with their type and name, for example "Custom rule “Watch API”" or "OWASP Core Ruleset". The types are:
+- custom rule, rate limiting rule;
+- managed rule, OWASP rule, managed rule exception, managed ruleset;
+- configuration, cache, origin and transform rule;
+- IP Access rule, Page Rule, Zone Lockdown or User Agent Blocking rule.
+
+Where it appears:
+- **On the page:** under the finding's title and in its "Applies to" row; on recommended actions and posture items; in the type column of the Effectiveness table, where managed, OWASP and exception rules are told apart.
+- **In the files:** REPORT.md ("Applies to"), the findings CSV (`applies_to`), and the client report ("Rules involved", without IDs).
+
+How it works: when the report is built, each finding's fingerprint is matched against every rule the audit read and every rule in the traffic table (`src/lib/zone-audit/rule-refs.ts`; stored as `rules` on the finding). A check about several rules names them from its evidence. A check about a ruleset names the ruleset. A check about something missing, such as no rate limiting rule, names none. Audits made before this work their rules out from the report on the page, from the traffic table and the managed rulesets.
+
 **Client report** (the **Client report** button; `GET …/download?format=docx&client=NAME`). A Word document to hand to the client, `<zone>-Gaps-and-Recommendations.docx`: "Cloudflare Security Review: Gaps and recommendations", prepared by Adapture for the client named in the dialog. It is built from the same report in fixed rules (`src/lib/zone-audit/client-report.ts`, rendered by `client-report-docx.ts`):
 
 - **Sections:**

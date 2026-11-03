@@ -516,12 +516,23 @@ export function diffZones(a: StoredRow[], aZone: string, b: StoredRow[], bZone: 
 
 // ── Templates ───────────────────────────────────────────────────────────────
 
-export type TemplateMatch = 'equals' | 'contains' | 'present' | 'absent';
-export const TEMPLATE_MATCHES: TemplateMatch[] = ['equals', 'contains', 'present', 'absent'];
-export interface TemplateItem { item: string; kind: IndexKind; path: string; expected: string; match: TemplateMatch }
+/** How a value is compared: one_of takes values separated by commas; at_least / at_most compare numbers and versions ("1.2"). */
+export type CheckMatch = 'equals' | 'not_equals' | 'contains' | 'one_of' | 'at_least' | 'at_most';
+export const CHECK_MATCHES: CheckMatch[] = ['equals', 'not_equals', 'contains', 'one_of', 'at_least', 'at_most'];
+export type TemplateMatch = CheckMatch | 'present' | 'absent';
+export const TEMPLATE_MATCHES: TemplateMatch[] = [...CHECK_MATCHES, 'present', 'absent'];
+/** One condition on a rule's field ("action", "expression", "action_parameters.headers.X-Frame-Options.value"; [*] is any list position). */
+export interface CheckWhen { field: string; match: CheckMatch; value: string }
+/**
+ * A rule check: some rule of the phase (any position) meets every condition (match "present"), or
+ * none does (match "absent"). Read from backups, which hold each rule's fields.
+ */
+export interface RuleCheck { phase: string; when: CheckWhen[] }
+export interface TemplateItem { item: string; kind: IndexKind; path: string; expected: string; match: TemplateMatch; check?: RuleCheck }
 export interface Gap { item: string; path: string; expected: string; match: TemplateMatch; actual: string[]; problem: 'missing' | 'different' | 'unexpected' }
 
 export const MAX_TEMPLATE_ITEMS = 500;
+export const MAX_CHECK_CONDITIONS = 10;
 
 /** A template's items from a zone's rows: the kinds chosen (all when none), its name written as {zone}. */
 export function templateFrom(rows: StoredRow[], zone: string, kinds: IndexKind[] = [], prefixes: string[] = []): TemplateItem[] {
@@ -534,22 +545,116 @@ export function templateFrom(rows: StoredRow[], zone: string, kinds: IndexKind[]
   return out.sort((p, q) => p.kind.localeCompare(q.kind) || p.item.localeCompare(q.item)).slice(0, MAX_TEMPLATE_ITEMS);
 }
 
+/** A version or a number ("1.2", "40"), compared part by part; null when it is not one. */
+function numParts(v: string): number[] | null {
+  const t = v.trim();
+  return /^-?\d+(\.\d+)*$/.test(t) ? t.split('.').map(Number) : null;
+}
+function cmpNum(a: string, b: string): number | null {
+  const x = numParts(a), y = numParts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] ?? 0) - (y[i] ?? 0); if (d) return d; }
+  return 0;
+}
+
+/** One value against an expected value. */
+export function valueMatches(actual: string, match: TemplateMatch | CheckMatch, expected: string): boolean {
+  const a = actual.trim().toLowerCase(), e = expected.trim().toLowerCase();
+  if (match === 'equals') return a === e;
+  if (match === 'not_equals') return a !== e;
+  if (match === 'contains') return a.includes(e);
+  if (match === 'one_of') return e.split(',').map((x) => x.trim()).filter(Boolean).includes(a);
+  if (match === 'at_least') { const c = cmpNum(a, e); return c !== null && c >= 0; }
+  if (match === 'at_most') { const c = cmpNum(a, e); return c !== null && c <= 0; }
+  return true;
+}
+
+export const MATCH_TEXT: Record<TemplateMatch, string> = { equals: 'is', not_equals: 'is not', contains: 'contains', one_of: 'is one of', at_least: 'is at least', at_most: 'is at most', present: 'exists', absent: 'does not exist' };
+/** "action is block · expression contains /login". */
+export const checkText = (c: RuleCheck) => c.when.map((w) => `${w.field} ${MATCH_TEXT[w.match]} ${w.value}`).join(' · ');
+
+/** A field pattern ("rules[*].score_threshold") against a field ("rules[2].score_threshold"). */
+function fieldRe(pattern: string): RegExp {
+  const esc = pattern.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${esc.split('\\[\\*\\]').join('\\[\\d+\\]')}$`, 'i');
+}
+
+/** The rules of one phase in a zone: position → field → values. */
+function rulesOf(v: Map<string, { values: string[] }>, phase: string): Map<string, Map<string, string[]>> {
+  const out = new Map<string, Map<string, string[]>>();
+  const prefix = `ruleset:${phase}:`;
+  for (const [item, x] of v) {
+    if (!item.startsWith(prefix)) continue;
+    const rest = item.slice(prefix.length);
+    const at = rest.indexOf(':');
+    if (at < 1 || !/^\d+$/.test(rest.slice(0, at))) continue;
+    const n = rest.slice(0, at), field = rest.slice(at + 1);
+    const m = out.get(n) ?? new Map<string, string[]>();
+    m.set(field, x.values);
+    out.set(n, m);
+  }
+  return out;
+}
+
+/** How a rule check stands in a zone: the rules that meet it, or the closest one and what it lacks. */
+function checkRules(c: RuleCheck, v: Map<string, { values: string[] }>): { hits: string[]; closest: string | null; rules: number } {
+  const rules = rulesOf(v, c.phase);
+  const hits: string[] = [];
+  let best: { n: string; met: number; miss: string } | null = null;
+  for (const [n, fields] of [...rules].sort((x, y) => Number(x[0]) - Number(y[0]))) {
+    let met = 0, miss = '';
+    for (const w of c.when) {
+      const re = fieldRe(w.field);
+      const vals = [...fields].filter(([f]) => re.test(f)).flatMap(([, x]) => x);
+      if (vals.some((x) => valueMatches(x, w.match, w.value))) met++;
+      else if (!miss) miss = vals.length ? `${w.field} is ${vals.slice(0, 3).join(', ')}` : `no ${w.field}`;
+    }
+    const name = fields.get('description')?.[0] ? `rule ${n} “${fields.get('description')![0]}”` : `rule ${n}`;
+    if (met === c.when.length) hits.push(name);
+    else if (!best || met > best.met) best = { n: name, met, miss };
+  }
+  return { hits, closest: best ? `${best.n}: ${best.met} of ${c.when.length} conditions met (${best.miss})` : null, rules: rules.size };
+}
+
 /** How a zone differs from a template (only what does not match). */
 export function evaluate(items: TemplateItem[], rows: StoredRow[], zone: string): Gap[] {
   const v = itemValues(rows, zone);
   const gaps: Gap[] = [];
   for (const t of items) {
+    if (t.check) {
+      const r = checkRules(t.check, v);
+      const expected = checkText(t.check);
+      if (t.match === 'absent') { if (r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: t.match, actual: r.hits.slice(0, 5), problem: 'unexpected' }); }
+      else if (!r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: 'present', actual: r.closest ? [r.closest] : [r.rules ? 'no rule meets it' : `no ${t.check.phase} rules stored`], problem: r.rules ? 'different' : 'missing' });
+      continue;
+    }
     const actual = v.get(t.item)?.values ?? [];
-    const exp = t.expected.trim().toLowerCase();
-    const has = (fn: (x: string) => boolean) => actual.some((x) => fn(x.trim().toLowerCase()));
     let problem: Gap['problem'] | null = null;
     if (t.match === 'absent') problem = actual.length ? 'unexpected' : null;
     else if (!actual.length) problem = 'missing';
-    else if (t.match === 'equals' && !has((x) => x === exp)) problem = 'different';
-    else if (t.match === 'contains' && !has((x) => x.includes(exp))) problem = 'different';
+    else if (t.match !== 'present' && !actual.some((x) => valueMatches(x, t.match, t.expected))) problem = 'different';
     if (problem) gaps.push({ item: t.item, path: t.path, expected: t.expected, match: t.match, actual: actual.slice(0, 5), problem });
   }
   return gaps;
+}
+
+const PHASE = /^[a-z0-9_]{1,64}$/;
+/** A rule check from a client, or undefined when it is not one. */
+function cleanCheck(v: unknown): RuleCheck | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const phase = typeof o.phase === 'string' ? o.phase.trim() : '';
+  if (!PHASE.test(phase) || !Array.isArray(o.when)) return undefined;
+  const when: CheckWhen[] = [];
+  for (const w of o.when.slice(0, MAX_CHECK_CONDITIONS)) {
+    if (!w || typeof w !== 'object') continue;
+    const x = w as Record<string, unknown>;
+    const field = typeof x.field === 'string' ? x.field.trim().slice(0, 200) : '';
+    const value = typeof x.value === 'string' ? x.value.slice(0, MAX_VALUE) : '';
+    if (!field || !value.trim() || !/^[\w.\-[\]*]+$/.test(field)) continue;
+    when.push({ field, match: CHECK_MATCHES.includes(x.match as CheckMatch) ? x.match as CheckMatch : 'equals', value });
+  }
+  return when.length ? { phase, when } : undefined;
 }
 
 /** Cleans a template item list from a client. */
@@ -562,16 +667,23 @@ export function cleanItems(v: unknown): TemplateItem[] {
     const o = x as Record<string, unknown>;
     const item = typeof o.item === 'string' ? o.item.trim().slice(0, 300) : '';
     if (!item || seen.has(item)) continue;
+    const check = o.check === undefined ? undefined : cleanCheck(o.check);
+    if (o.check !== undefined && !check) continue;
     seen.add(item);
+    const match = TEMPLATE_MATCHES.includes(o.match as TemplateMatch) ? o.match as TemplateMatch : check ? 'present' : 'equals';
     out.push({
-      item, kind: isIndexKind(o.kind) ? o.kind : 'resource',
+      item, kind: isIndexKind(o.kind) ? o.kind : check ? 'rule' : 'resource',
       path: typeof o.path === 'string' ? o.path.slice(0, 300) : item,
-      expected: typeof o.expected === 'string' ? o.expected.slice(0, MAX_VALUE) : '',
-      match: TEMPLATE_MATCHES.includes(o.match as TemplateMatch) ? o.match as TemplateMatch : 'equals',
+      expected: check ? checkText(check) : typeof o.expected === 'string' ? o.expected.slice(0, MAX_VALUE) : '',
+      match: check ? (match === 'absent' ? 'absent' : 'present') : match,
+      ...(check ? { check } : {}),
     });
   }
   return out;
 }
+
+/** Whether rule checks are among the items (they need every rule of the zone, not named items). */
+export const hasChecks = (items: TemplateItem[]) => items.some((i) => i.check);
 
 // ── Search terms ────────────────────────────────────────────────────────────
 

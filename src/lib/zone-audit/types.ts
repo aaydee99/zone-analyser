@@ -59,6 +59,8 @@ export interface AuditFinding {
   fix: string[];
   /** needs_validation: the exact check that settles it. */
   validation: string | null;
+  /** The zone's rules the finding is about (rule-refs.ts); absent in audits made before it, empty for a check about something missing. */
+  rules?: RuleRef[];
 }
 
 /** passed · finding · not_applicable (plan or feature absent) · not_read (permission or API error). */
@@ -178,6 +180,8 @@ export interface ActionItem {
   fingerprint?: string;
   ruleName: string;
   ruleKey?: string;
+  /** The rules the action changes (rule-refs.ts). */
+  rules?: RuleRef[];
 }
 
 export type AuditStatus = 'running' | 'ready' | 'failed';
@@ -219,6 +223,9 @@ export interface AccountAuditView {
   grades?: Partial<Record<string, number>>;
   problems: { zoneId: string; zoneName: string; kind: 'failed' | 'skipped'; reason: string }[];
 }
+
+import type { RuleRef } from './rule-refs';
+export type { RuleRef } from './rule-refs';
 
 // ── The snapshot the rules read ─────────────────────────────────────────────
 
@@ -462,13 +469,16 @@ export interface Snapshot {
 const SECRET = /secret|password|passwd|private_?key|api_?key|client_?key|psk|authorization|signing_?key|access_?key|^token$|_token$|^auth_?key$|cookie|bearer/i;
 export const MASK = '••••••••';
 
-/** A value as evidence: secret-looking fields masked, long values cut (with the length said). */
+/** Longest evidence value kept (longer than any Cloudflare rule expression); beyond it the length is said. */
+export const EVIDENCE_MAX = 20_000;
+
+/** A value as evidence: secret-looking fields masked, in full up to EVIDENCE_MAX characters. */
 export function redact(field: string, value: unknown): string {
   if (SECRET.test(field)) return MASK;
   const s = typeof value === 'string' ? value : value === undefined ? '(not set)' : JSON.stringify(value);
   const masked = s.replace(/([?&](?:[^=&]*(?:secret|key|sig|token|password|auth|credential)[^=&]*)=)[^&\s"]*/gi, `$1${MASK}`)
     .replace(/(bearer\s+)[A-Za-z0-9._~+/-]+=*/gi, `$1${MASK}`);
-  return masked.length > 400 ? `${masked.slice(0, 400)}… (${masked.length} characters)` : masked;
+  return masked.length > EVIDENCE_MAX ? `${masked.slice(0, EVIDENCE_MAX)} [first ${EVIDENCE_MAX.toLocaleString('en-US')} of ${masked.length.toLocaleString('en-US')} characters]` : masked;
 }
 
 export function emptySummary(): AuditSummary {

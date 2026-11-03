@@ -8,6 +8,7 @@ import { MANAGED_TRAFFIC_RULES, managedOverview } from './managed-effect';
 import { postureOf } from './posture';
 import { attachProof } from './proof';
 import { verifyReport } from './verify';
+import { refsOf, ruleIndex } from './rule-refs';
 import { SKILL_RULES } from './rules-skills';
 import { SOURCES, type AuditReport, type AuditZone, type Snapshot, type SourceKey, type ZoneInfo } from './types';
 
@@ -17,6 +18,10 @@ export function buildReport(s: Snapshot, meta: { accountId: string; accountName:
   const { findings, coverage } = runRules(s, ALL_RULES);
   // Each evidence value looked up in Cloudflare's raw answer (code apart from the rules).
   attachProof(findings, s);
+  const effectiveness = effectivenessOf(s)?.eff ?? null;
+  // Which of the zone's rules each finding is about (custom, rate limiting, managed, OWASP, exception …).
+  const idx = ruleIndex(s, effectiveness);
+  for (const f of findings) f.rules = refsOf(f, idx);
   const z = s.reads.zone?.state === 'ok' ? s.reads.zone.value as ZoneInfo : null;
   const zone: AuditZone = { id: s.zoneId, name: z?.name || s.zoneName, accountId: meta.accountId, accountName: meta.accountName, plan: z?.plan ?? '', type: z?.type ?? '', status: z?.status ?? '' };
   const reads = (Object.keys(SOURCES) as SourceKey[]).map((key) => {
@@ -25,7 +30,7 @@ export function buildReport(s: Snapshot, meta: { accountId: string; accountName:
   });
   const report: AuditReport = {
     version: 1, zone, startedAt: meta.startedAt, finishedAt: meta.finishedAt, findings, coverage,
-    summary: summarize(findings, coverage, meta.calls, meta.lookups), reads, effectiveness: effectivenessOf(s)?.eff ?? null, managed: managedOverview(s),
+    summary: summarize(findings, coverage, meta.calls, meta.lookups), reads, effectiveness, managed: managedOverview(s),
     queries: s.queries ?? [],
   };
   // The grade goes in the stored summary too, so the lists can show it without reading the report.

@@ -530,7 +530,7 @@ const AVAILABILITY: RuleDef[] = [
           if (x.action === 'log') weak.push(`rule ${x.id} log`);
           if (x.sensitivity_level === 'low' || x.sensitivity_level === 'eoff') weak.push(`rule ${x.id} sensitivity ${x.sensitivity_level}`);
         }
-        if (weak.length) out.push({ resource: r.id ?? ruleName(r), verdict: 'confirmed', severity: 'high', title: `HTTP DDoS protection is weakened (${weak.slice(0, 3).join(', ')}${weak.length > 3 ? ', …' : ''})`,
+        if (weak.length) out.push({ resource: r.id ?? ruleName(r), verdict: 'confirmed', severity: 'high', title: `HTTP DDoS protection is weakened (${weak.join(', ')})`,
           description: 'With these overrides, HTTP floods that Cloudflare detects are only logged or detected later, and the traffic reaches the origin.',
           rootCause: 'An override of the HTTP DDoS attack protection ruleset lowers its sensitivity or action.', intendedBehavior: 'Default sensitivity and actions, with narrow overrides only for traffic proven to be false positives.',
           evidence: [ev(phasePath('ddos_l7'), `${ruleName(r)}.action_parameters.overrides`, o)], fix: ['Security › DDoS › HTTP DDoS attack protection: restore default sensitivity and action, or limit the override with an expression to the traffic that needs it.'] });
@@ -682,7 +682,7 @@ const CLIENT_RULES: RuleDef[] = [
         description: 'Without frame protection a state-changing page can be framed (clickjacking); without a CSP, an injected script runs with full page rights; without nosniff, uploaded files can be interpreted as scripts. The origin may set these itself, which the zone configuration cannot show.',
         rootCause: 'No response header rule, managed transform or zone setting adds these headers.', intendedBehavior: 'Every HTML response carries a CSP with frame-ancestors (or X-Frame-Options) and X-Content-Type-Options: nosniff.',
         evidence: [ev(phasePath('http_response_headers_transform'), 'headers set', [...set].join(', ') || '(none)'), ev('GET /zones/{id}/managed_headers', 'add_security_headers', managed?.enabled ?? false)],
-        fix: ['Rules › Transform Rules › Managed Transforms: turn on "Add security headers" (X-Frame-Options, X-Content-Type-Options, Referrer-Policy …).', 'For a CSP, add a response header transform rule setting Content-Security-Policy (start in Report-Only).'],
+        fix: ['Rules › Transform Rules › Managed Transforms: turn on "Add security headers" (X-Frame-Options, X-Content-Type-Options, Referrer-Policy and X-XSS-Protection).', 'For a CSP, add a response header transform rule setting Content-Security-Policy (start in Report-Only).'],
         validation: `Run \`curl -sI https://${c.s.zoneName}/\` and the main application pages: if the origin already sends ${missing.join(', ')}, this is settled.` }];
     },
   },

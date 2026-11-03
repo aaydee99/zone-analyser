@@ -157,7 +157,7 @@ function areaScore(def: AreaDef, cov: CoverageEntry[], findings: AuditFinding[])
   const applicable = read + mine.filter((c) => c.state === 'not_read').length;
   const base = { id: def.id, label: def.label, what: def.what, weight: def.weight, read, applicable, passed: mine.filter((c) => c.state === 'passed').length, findings: fs.length,
     top: fs.length ? { title: fs[0].title, severity: fs[0].severity, fingerprint: fs[0].fingerprint } : null,
-    good: mine.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!),
+    good: mine.filter((c) => c.state === 'passed' && c.reason).map((c) => c.reason!),
     penalties: fs.map((f) => ({ title: f.title, severity: f.severity, verdict: f.verdict, points: penaltyOf(f), fingerprint: f.fingerprint })) };
   if (!applicable) return { ...base, rating: 'not_applicable', score: null };
   if (read * 2 < applicable) return { ...base, rating: 'unknown', score: null };
@@ -203,8 +203,8 @@ function threatOf(def: ThreatDef, cov: Map<string, CoverageEntry>, findings: Aud
   const entries = def.rules.map((id) => cov.get(id)).filter((c): c is CoverageEntry => !!c);
   const fs = findings.filter((f) => def.rules.includes(f.ruleId));
   const read = entries.filter((c) => c.state === 'passed' || c.state === 'finding');
-  const base = { id: def.id, label: def.label, checks: entries.map((c) => ({ ruleId: c.ruleId, title: c.title, state: c.state, findings: c.findings })), controls: read.filter((c) => c.state === 'passed' && c.reason).slice(0, 3).map((c) => c.reason!),
-    gaps: fs.slice(0, 3).map((f) => ({ title: f.title, severity: f.severity, fingerprint: f.fingerprint })), playbook: def.playbook };
+  const base = { id: def.id, label: def.label, checks: entries.map((c) => ({ ruleId: c.ruleId, title: c.title, state: c.state, findings: c.findings })), controls: read.filter((c) => c.state === 'passed' && c.reason).map((c) => c.reason!),
+    gaps: fs.map((f) => ({ title: f.title, severity: f.severity, fingerprint: f.fingerprint })), playbook: def.playbook };
   if (!read.length) return { ...base, status: entries.some((c) => c.state === 'not_read') ? 'unknown' : 'not_applicable', playbook: [] };
   const gap = fs.some((f) => f.verdict === 'confirmed' && SEVERITY_RANK[f.severity] >= SEVERITY_RANK.high);
   const partial = fs.some((f) => SEVERITY_RANK[f.severity] >= SEVERITY_RANK.medium);
@@ -265,8 +265,6 @@ export function postureOf(r: AuditReport): Posture {
   const short = [...findings.filter((f) => !used.has(f.fingerprint) && ((f.verdict === 'needs_validation' && SEVERITY_RANK[f.severity] >= SEVERITY_RANK.high) || (f.verdict === 'confirmed' && f.severity === 'medium'))).map(step), ...traffic];
   short.forEach((s) => used.add(s.fingerprint));
   const hard = findings.filter((f) => !used.has(f.fingerprint) && SEVERITY_RANK[f.severity] >= SEVERITY_RANK.low).map(step);
-  const CAP = 8;
-  const more = Math.max(0, immediate.length - CAP) + Math.max(0, short.length - CAP) + Math.max(0, hard.length - CAP);
 
   const notRead = r.coverage.filter((c) => c.state === 'not_read');
   const perms = [...new Set(notRead.map((c) => c.permission).filter(Boolean))];
@@ -274,7 +272,7 @@ export function postureOf(r: AuditReport): Posture {
   const limits = [
     'Passive only: the audit reads the configuration and the traffic Cloudflare logged. It sends no test requests to the zone, so it cannot show how the WAF would treat an evasion attempt that never arrived.',
     'Findings that need validation count half in the score; each says how to settle it.',
-    ...(notRead.length ? [`${notRead.length} checks could not be read${perms.length ? ` (token permissions: ${perms.slice(0, 6).join(', ')}${perms.length > 6 ? ', …' : ''})` : ''}; areas with less than half of their checks read are not graded.`] : []),
+    ...(notRead.length ? [`${notRead.length} checks could not be read${perms.length ? ` (token permissions: ${perms.join(', ')})` : ''}; areas with less than half of their checks read are not graded.`] : []),
     ...(hours ? [`Traffic numbers cover ${windowLabel(hours)}${r.effectiveness && r.effectiveness.askedHours > hours ? ` (shortened from ${windowLabel(r.effectiveness.askedHours)} to what the plan keeps)` : ''}; only the busiest paths and networks are read, so counts are lower bounds.`] : ['Security events could not be read: “Rules in practice” is not graded.']),
     'DNS tunneling and network-layer (L3/L4) DDoS are account-level (Gateway, Magic Transit) and outside a zone audit.',
   ];
@@ -302,9 +300,9 @@ export function postureOf(r: AuditReport): Posture {
     grade: g?.grade ?? null, label: g?.label ?? 'Not graded', score, verdict: parts.join(' '),
     gradeProof: { rows: graded.map((a) => ({ area: a.label, score: a.score!, weight: a.weight })), mean, cap },
     areas, enforcement, threats,
-    steps: { immediate: immediate.slice(0, CAP), shortTerm: short.slice(0, CAP), hardening: hard.slice(0, CAP), more },
+    steps: { immediate, shortTerm: short, hardening: hard, more: 0 },
     upgrades: upgradesOf(r.zone.plan, threats),
-    noCost: findings.filter((f) => NO_COST.has(f.ruleId)).slice(0, 6).map((f) => ({ title: f.title, fingerprint: f.fingerprint })),
+    noCost: findings.filter((f) => NO_COST.has(f.ruleId)).map((f) => ({ title: f.title, fingerprint: f.fingerprint })),
     monitor: monitorOf(r, enforcement, threats), limits,
   };
 }

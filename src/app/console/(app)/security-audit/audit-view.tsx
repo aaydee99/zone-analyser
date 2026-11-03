@@ -17,6 +17,25 @@ import {
 
 import { whole } from '@/lib/num';
 import { CHECK_LABEL, explain, reproduce } from '@/lib/zone-audit/proof';
+import { findingRules } from '@/lib/zone-audit/actions';
+import { REF_LABEL, effectRef, type RuleRef } from '@/lib/zone-audit/rule-refs';
+
+/** The rules a finding or action is about, each with its type: "Custom rule · Watch API". */
+export function RuleRefs({ refs, className }: { refs: RuleRef[]; className?: string }) {
+  if (!refs.length) return null;
+  return (
+    <span className={cx('flex min-w-0 flex-wrap gap-1', className)}>
+      {refs.map((r) => (
+        // A plain block that wraps inside narrow columns (the posture scorecard), the type first.
+        <span key={`${r.kind}:${r.id ?? r.name}`} className="max-w-full min-w-0 rounded-md border border-line bg-sunken/60 px-1.5 py-0.5 text-[11px] leading-tight wrap-anywhere">
+          <span className="text-muted">{REF_LABEL[r.kind]}</span>
+          {!(r.kind === 'owasp_ruleset' || r.kind === 'managed_ruleset') || r.name !== REF_LABEL[r.kind] ? <> <span className="text-ink-2">{r.name}</span></> : null}
+          {r.detail && r.detail !== r.name && <span className="text-muted"> · <span className="font-mono text-ink-2">{r.detail}</span></span>}
+        </span>
+      ))}
+    </span>
+  );
+}
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 export type AuditTab = 'posture' | 'findings' | 'actions' | 'effectiveness' | 'managed' | 'coverage';
@@ -118,6 +137,7 @@ function FullRec({ f, r }: { f: AuditFinding; r: AuditReport }) {
 
 function FindingCard({ f }: { f: AuditFinding }) {
   const report = useContext(AuditReportCtx);
+  const refs = useMemo(() => (report ? findingRules(f, report) : f.rules ?? []), [f, report]);
   const id = findingId(f.fingerprint);
   const targeted = useTargeted(id);
   const [opened, setOpen] = useState(false);
@@ -129,6 +149,7 @@ function FindingCard({ f }: { f: AuditFinding }) {
         <span className="min-w-0 flex-1">
           <span className="block text-[13.5px] font-medium text-ink">{f.title}</span>
           <span className="mt-0.5 block text-xs text-muted">{VERDICT_LABEL[f.verdict]} · {GROUP_LABEL[f.group]} · {f.attackClass}</span>
+          <RuleRefs refs={refs} className="mt-1.5" />
         </span>
         <ChevronDown className={cx('mt-0.5 size-4 shrink-0 text-muted transition-transform', open && 'rotate-180')} />
       </button>
@@ -138,6 +159,7 @@ function FindingCard({ f }: { f: AuditFinding }) {
           <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[10rem_1fr]">
             <dt className="text-muted">Root cause</dt><dd>{f.rootCause}</dd>
             <dt className="text-muted">Intended behaviour</dt><dd>{f.intendedBehavior}</dd>
+            <dt className="text-muted">Applies to</dt><dd>{refs.length ? <RuleRefs refs={refs} /> : <span className="text-muted">No single rule: the check is about the zone&apos;s settings or something missing.</span>}</dd>
             <dt className="text-muted">Rule</dt><dd><code className="font-mono text-xs">{f.ruleId}</code> · from <span className="font-mono text-xs">{f.skillRef}</span></dd>
           </dl>
           <Proof f={f} />
@@ -236,7 +258,7 @@ function EffectRow({ x, total, open: initial }: { x: Effectiveness['rules'][numb
       <tr id={`${panel}-row`} className={cx('border-t border-line/70 align-top', open && 'bg-raised/30')}>
         <td className="py-2.5 pr-3 pl-5">
           <span className="font-medium text-ink">{x.name}</span>
-          <div className="text-xs text-muted">{x.exception ? 'Managed-rule exception' : KIND_LABEL[x.kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
+          <div className="text-xs text-muted">{REF_LABEL[effectRef(x).kind]}{x.configAction ? ` · ${x.configAction}` : ''}{x.enabled === false ? ' · disabled' : ''}</div>
         </td>
         <td className="w-36 px-3 py-2.5">
           <span className={cx('tabular-nums', !x.events && 'text-faint')}>{whole.format(x.events)}</span>
@@ -349,7 +371,8 @@ export function RecommendedActions({ items, e }: { items: ActionItem[]; e: Effec
                 {x.impact > 0 && <span className="text-xs tabular-nums text-muted">{whole.format(x.impact)} requests in the window</span>}
               </div>
               <p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted">
-                <span>{x.source === 'traffic' ? 'From traffic' : 'From configuration'} · {x.ruleName}</span>
+                <span>{x.source === 'traffic' ? 'From traffic' : 'From configuration'}{x.rules?.length ? '' : ` · ${x.ruleName}`}</span>
+                {x.rules?.length ? <RuleRefs refs={x.rules} /> : null}
                 {x.fingerprint && <button type="button" className="text-signal hover:underline" onClick={() => nav.finding(x.fingerprint!)}>Finding and evidence</button>}
                 {x.ruleKey && <button type="button" className="text-signal hover:underline" onClick={() => nav.effect(x.ruleKey!)}>Its traffic</button>}
               </p>
@@ -359,7 +382,7 @@ export function RecommendedActions({ items, e }: { items: ActionItem[]; e: Effec
           ))}
         </ol>
       )}
-      {e && e.notAnalysed.length > 0 && <p className="border-t border-line px-5 py-3 text-xs text-muted">Not analysed ({e.notAnalysed.length}): {e.notAnalysed.slice(0, 10).map((x) => `${x.ruleName} (${whole.format(x.passed)})`).join(', ')}{e.notAnalysed.length > 10 ? ', …' : ''} — {e.notAnalysed[0].reason}.</p>}
+      {e && e.notAnalysed.length > 0 && <p className="border-t border-line px-5 py-3 text-xs text-muted">Not analysed ({e.notAnalysed.length}): {e.notAnalysed.map((x) => `${x.ruleName} (${whole.format(x.passed)})`).join(', ')} — {e.notAnalysed[0].reason}.</p>}
     </Card>
   );
 }
@@ -415,9 +438,9 @@ export function ManagedOverviewCard({ m }: { m: ManagedOverview }) {
   );
 }
 
-/** A ranked list with counts and bars; long values are cut short, with the full value on hover. */
+/** A ranked list with counts and bars: every item read, long values wrapped in full. */
 function RankList({ title, items, mono }: { title: string; items: { label: string; sub?: string; count: number }[]; mono?: boolean }) {
-  const top = items.slice(0, 5);
+  const top = items;
   const max = Math.max(1, ...top.map((i) => i.count));
   return (
     <div className="min-w-0">
@@ -427,7 +450,7 @@ function RankList({ title, items, mono }: { title: string; items: { label: strin
           {top.map((i, n) => (
             <li key={`${i.label}:${n}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3">
               <span className="min-w-0">
-                <span className={cx('block truncate text-[12.5px] text-ink-2', mono && 'font-mono text-[12px]')} title={i.label}>{i.label}</span>
+                <span className={cx('block text-[12.5px] text-ink-2 wrap-anywhere', mono && 'font-mono text-[12px]')}>{i.label}</span>
                 {i.sub && <span className="block text-[11px] text-faint">{i.sub}</span>}
                 <span className="mt-1 block h-1 rounded-full bg-line" aria-hidden="true"><span className="block h-1 rounded-full bg-signal/60" style={{ width: `${Math.max(4, (i.count / max) * 100)}%` }} /></span>
               </span>
@@ -475,10 +498,10 @@ export function Method({ r }: { r: AuditReport }) {
       <SectionHeader title="What was read" description={`${whole.format(r.summary.calls)} Cloudflare API calls (GETs and GraphQL analytics queries) and ${whole.format(r.summary.lookups)} public DNS lookups. Nothing was written.`} />
       <ul className="grid gap-x-6 gap-y-1 px-5 py-3 text-[13px] sm:grid-cols-2">
         {r.reads.map((x) => (
-          <li key={x.key} className="flex items-baseline gap-2">
+          <li key={x.key} className="flex min-w-0 items-baseline gap-2">
             <span className={cx('size-2 shrink-0 rounded-full', x.state === 'ok' ? 'bg-ok' : x.state === 'absent' ? 'bg-muted' : 'bg-warn')} aria-hidden />
             <span className="text-ink-2">{x.label}</span>
-            {x.state !== 'ok' && <span className="truncate text-xs text-muted" title={x.reason}>— {x.state === 'absent' ? 'not on this zone' : x.reason}</span>}
+            {x.state !== 'ok' && <span className="min-w-0 text-xs text-muted wrap-anywhere">— {x.state === 'absent' ? 'not on this zone' : x.reason}</span>}
           </li>
         ))}
       </ul>

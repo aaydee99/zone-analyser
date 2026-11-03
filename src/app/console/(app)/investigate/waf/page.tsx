@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Copy, ShieldQuestion } from 'lucide-react';
-import { copyText } from '@/lib/client';
+import { copyText, fmtDate } from '@/lib/client';
 import { WAF_WINDOWS, type WafReport, type WafSuspect } from '@/lib/investigate-types';
 import { actionLabel, sourceLabel, tuningLines } from '@/lib/waf-labels';
 import { Alert, Badge, Button, Card, EmptyState, Field, PageHeader, SectionHeader, cx } from '@/components/ui';
@@ -12,6 +12,97 @@ import { Code, RefreshBar, Reading, ZonePicker, useAccounts, useJob, whole, type
 const PAGE = 5;
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)}%`);
 const tone = (score: number) => (score >= 60 ? 'bad' : score >= 35 ? 'warn' : 'neutral');
+
+/** Exact counts in the evidence (not rounded to 9.7k). */
+const exact = (n: number) => n.toLocaleString('en-US');
+const share = (n: number, of: number) => (of ? `${(Math.round((n / of) * 1000) / 10).toFixed(1)}%` : '—');
+const pts = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '0');
+
+/** One breakdown: the busiest rows with their counts and share of the events counted. */
+function Breakdown({ title, total, of, rows }: { title: string; total: number; of: number; rows: { key: string; cells: ReactNode[]; count: number }[] }) {
+  return (
+    <div className="min-w-0">
+      <h4 className="mb-1 text-[12px] font-semibold text-ink-2">{title}</h4>
+      <p className="mb-1.5 text-[11.5px] text-faint">{rows.length < total ? `The busiest ${rows.length} of ${exact(total)}` : `All ${exact(total)}`} · {exact(of)} events counted</p>
+      {rows.length ? (
+        <table className="w-full text-[12px]">
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-t border-line align-top">
+                {r.cells.map((c, i) => <td key={i} className="py-1 pr-2 break-words [overflow-wrap:anywhere]">{c}</td>)}
+                <td className="py-1 pr-2 text-right font-mono whitespace-nowrap tabular-nums text-ink">{exact(r.count)}</td>
+                <td className="py-1 text-right font-mono whitespace-nowrap tabular-nums text-muted">{share(r.count, of)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="text-[12px] text-muted">None read.</p>}
+    </div>
+  );
+}
+
+/** How the score was reached: every check with the numbers it measured, and the counts read from Cloudflare. */
+function Evidence({ s }: { s: WafSuspect }) {
+  const e = s.evidence;
+  if (!e) return <p className="px-5 py-4 text-[12.5px] text-muted">This result was kept from before evidence was recorded. Refresh to read it again.</p>;
+  const scored = e.checks.filter((c) => c.points);
+  const other = s.mitigated - s.blocked - s.challenged;
+  return (
+    <details open className="group border-t border-line">
+      <summary className="cursor-pointer px-5 py-3 text-[12px] font-semibold tracking-wide text-muted uppercase select-none">Evidence: how the score was reached</summary>
+      <div className="space-y-5 px-5 pb-5">
+        <p className="text-[12.5px] text-ink-2">
+          Read from Cloudflare security events {fmtDate(e.since)} – {fmtDate(e.until)} (log-only, allow and skip events left out).
+          Mitigated {exact(s.mitigated)} = blocked {exact(s.blocked)} + challenged {exact(s.challenged)}{other ? ` + other actions ${exact(other)}` : ''}; {exact(s.solved)} challenges solved.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[40rem] text-[12.5px]">
+            <thead>
+              <tr className="text-left text-[11.5px] text-faint">
+                <th className="py-1 pr-3 font-medium">Check</th><th className="py-1 pr-3 font-medium">Measured</th><th className="py-1 pr-3 font-medium">Scoring bands</th><th className="py-1 text-right font-medium">Points</th>
+              </tr>
+            </thead>
+            <tbody>
+              {e.checks.map((c) => (
+                <tr key={c.key} className="border-t border-line align-top">
+                  <td className="py-1.5 pr-3 font-medium text-ink-2">{c.label}</td>
+                  <td className="py-1.5 pr-3 font-mono text-[12px] break-words text-ink">{c.measured}</td>
+                  <td className="py-1.5 pr-3 text-[12px] break-words text-muted">{c.bands}</td>
+                  <td className={cx('py-1.5 text-right font-mono tabular-nums', c.points > 0 ? 'text-warn' : c.points < 0 ? 'text-ok' : 'text-faint')}>{pts(c.points)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-line">
+                <td colSpan={3} className="py-1.5 pr-3 font-mono text-[12px] break-words text-ink-2">
+                  {scored.length ? scored.map((c) => pts(c.points)).join(' ') : '0'} = {pts(e.sum)}{e.sum !== s.score ? ` → kept within 0–100 = ${s.score}` : ''}
+                </td>
+                <td className="py-1.5 text-right font-mono font-semibold tabular-nums text-ink">{s.score}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        {e.pathStatus && (
+          <p className="text-[12.5px] text-ink-2">
+            Main path <span className="font-mono break-all">{s.host}{s.path}</span>: {exact(e.pathStatus.requests)} requests in the window, {exact(e.pathStatus.stopped)} stopped by security,
+            {' '}{exact(e.pathStatus.others)} answered by the site, of which {exact(e.pathStatus.ok)} ({share(e.pathStatus.ok, e.pathStatus.others)}) were 2xx/3xx.
+          </p>
+        )}
+        <div className="grid gap-5 lg:grid-cols-2">
+          <Breakdown title="Client IP addresses" total={e.ipCount} of={e.counted.ips}
+            rows={e.topIps.map((x) => ({ key: x.ip, count: x.count, cells: [<span key="i" className="font-mono">{x.ip}</span>] }))} />
+          <Breakdown title={`Networks · consumer ${exact(e.consumerEvents)} (${share(e.consumerEvents, e.counted.asns)}) · hosting ${exact(e.hostingEvents)} (${share(e.hostingEvents, e.counted.asns)})`} total={e.networkCount} of={e.counted.asns}
+            rows={e.networks.map((x) => ({ key: x.asn, count: x.count, cells: [<span key="a" className="font-mono">AS{x.asn}</span>, x.name || '—', <Badge key="k" tone={x.consumer ? 'neutral' : 'warn'}>{x.consumer ? 'consumer' : 'hosting'}</Badge>] }))} />
+          <Breakdown title={`User agents · browser ${exact(e.browserEvents)} (${share(e.browserEvents, e.counted.uas)})`} total={e.uaCount} of={e.counted.uas}
+            rows={e.userAgents.map((x) => ({ key: x.ua, count: x.count, cells: [<span key="u" className="font-mono text-[11.5px]">{x.ua || '(empty)'}</span>, <Badge key="b" tone={x.browser ? 'neutral' : 'warn'}>{x.browser ? 'browser' : 'not a browser'}</Badge>] }))} />
+          <Breakdown title="Paths" total={e.pathCount} of={e.counted.paths}
+            rows={e.paths.map((x) => ({ key: `${x.host}${x.path}`, count: x.count, cells: [<span key="p" className="font-mono">{x.host}{x.path}</span>] }))} />
+        </div>
+        <p className="text-[11.5px] text-faint">Cloudflare counts each breakdown separately, so their totals can differ a little from each other and from the mitigated count. Consumer means any network not on the hosting / cloud list; browser means a Mozilla/5.0 user agent of Chrome, Firefox, Safari, Edge or Opera with no bot or tool name.</p>
+      </div>
+    </details>
+  );
+}
 
 function Suspect({ s }: { s: WafSuspect }) {
   const toast = useToast();
@@ -33,7 +124,7 @@ function Suspect({ s }: { s: WafSuspect }) {
           </p>
         </div>
         <div className="grid grid-cols-3 gap-x-5 gap-y-1 text-right text-[12px] sm:grid-cols-6">
-          {([['Mitigated', whole.format(s.mitigated)], ['Blocked', whole.format(s.blocked)], ['Challenged', whole.format(s.challenged)], ['Solved', whole.format(s.solved)], ['IPs', whole.format(s.ips)], ['Path OK', pct(s.okShare)]] as const).map(([k, v]) => (
+          {([['Mitigated', exact(s.mitigated)], ['Blocked', exact(s.blocked)], ['Challenged', exact(s.challenged)], ['Solved', exact(s.solved)], ['IPs', exact(s.ips)], ['Path OK', pct(s.okShare)]] as const).map(([k, v]) => (
             <div key={k}><div className="text-faint">{k}</div><div className="font-mono tabular-nums text-ink">{v}</div></div>
           ))}
         </div>
@@ -48,7 +139,7 @@ function Suspect({ s }: { s: WafSuspect }) {
               ['Ruleset', s.rulesetName ?? (s.rulesetId ? <span className="font-mono text-[12px] break-all">{s.rulesetId}</span> : '—')],
               ['Kind', sourceLabel(s.source)],
               ['Current action', <span key="a"><span className="font-medium text-ink">{actionLabel(s.currentAction)}</span>
-                <span className="block text-[12px] text-muted">on these requests: {(s.actions ?? []).map((a) => `${actionLabel(a.action)} ${whole.format(a.count)}`).join(' · ')}</span></span>],
+                <span className="block text-[12px] text-muted">on these requests: {(s.actions ?? []).map((a) => `${actionLabel(a.action)} ${exact(a.count)}`).join(' · ')}</span></span>],
               ...(s.deploy ? tuningLines(s.deploy).map(([k, v]) => [k, v] as [string, ReactNode]) : []),
               ...(s.deploy?.ruleOverride ? [['This rule’s override', s.deploy.ruleOverride] as [string, ReactNode]] : []),
               ['Mostly on', <span key="p" className="font-mono text-[12px] break-all">{s.host}{s.path}</span>],
@@ -86,7 +177,7 @@ function Suspect({ s }: { s: WafSuspect }) {
             ))}
             {!s.signals.length && <li className="text-muted">No signal points either way.</li>}
           </ul>
-          <p className="mt-2 text-[12px] text-faint">{pct(s.residentialShare)} consumer networks · {pct(s.browserShare)} browser user agents · {whole.format(s.asns)} networks</p>
+          <p className="mt-2 text-[12px] text-faint">{pct(s.residentialShare)} consumer networks · {pct(s.browserShare)} browser user agents · {exact(s.asns)} networks</p>
         </div>
         <div>
           <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted uppercase">Draft exception (not applied)</h3>
@@ -100,6 +191,7 @@ function Suspect({ s }: { s: WafSuspect }) {
           <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[12px] text-muted">{d.notes.map((n) => <li key={n}>{n}</li>)}</ul>
         </div>
       </div>
+      <Evidence s={s} />
     </Card>
   );
 }

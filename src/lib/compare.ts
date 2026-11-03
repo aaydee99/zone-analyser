@@ -5,7 +5,7 @@ import { cached } from './cache';
 import { mustSearch } from './zone-search';
 import { readZoneBackup, zoneBackups, type BackupRef } from './backup-sources';
 import {
-  MAX_TEMPLATE_ITEMS, cleanItems, diffBackups, diffZones, evaluate, isIndexKind, templateFrom,
+  MAX_TEMPLATE_ITEMS, cleanItems, diffBackups, diffZones, evaluate, hasChecks, isIndexKind, templateFrom,
   type Gap, type IndexKind, type ItemDiff, type ResourceChange, type StoredRow, type TemplateItem,
 } from './zone-index';
 
@@ -181,7 +181,8 @@ export async function deleteTemplate(id: string): Promise<Template> {
 export async function templateZone(id: string, zoneId: string): Promise<{ template: { id: string; name: string }; zone: { id: string; name: string }; gaps: Gap[]; checked: number }> {
   const t = await getTemplate(id);
   const z = await zoneInfo(zoneId);
-  const rows = (await rowsOf([zoneId], t.items.map((i) => i.item))).get(zoneId) ?? [];
+  // A rule check looks at every rule of its phase, wherever it sits: those need all the zone's rows.
+  const rows = (await rowsOf([zoneId], hasChecks(t.items) ? null : t.items.map((i) => i.item))).get(zoneId) ?? [];
   return { template: { id: t.id, name: t.name }, zone: { id: zoneId, name: z.zoneName }, gaps: evaluate(t.items, rows, z.zoneName), checked: t.items.length };
 }
 
@@ -199,7 +200,10 @@ export function computeTemplate(id: string): Compute {
   jobs.set(id, job);
   void (async () => {
     const t = await getTemplate(id);
-    const items = t.items.map((i) => i.item);
+    // Rule checks need every row of a zone (any rule position), so those templates read fewer zones at a time.
+    const checks = hasChecks(t.items);
+    const items = checks ? null : t.items.map((i) => i.item);
+    const BATCH = checks ? 25 : 200;
     const zones: { zone_id: string; zone_name: string; account_id: string | null }[] = [];
     const seen = new Set<string>();
     for (let from = 0; ; from += 1000) {
@@ -209,8 +213,8 @@ export function computeTemplate(id: string): Compute {
     }
     job.total = zones.length;
     const at = new Date().toISOString();
-    for (let i = 0; i < zones.length; i += 200) {
-      const batch = zones.slice(i, i + 200);
+    for (let i = 0; i < zones.length; i += BATCH) {
+      const batch = zones.slice(i, i + BATCH);
       const rows = await rowsOf(batch.map((z) => z.zone_id), items);
       const out = batch.map((z) => {
         const gaps = evaluate(t.items, rows.get(z.zone_id) ?? [], z.zone_name);

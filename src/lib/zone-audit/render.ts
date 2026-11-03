@@ -2,11 +2,12 @@
 // coverage or rule effectiveness). Pure — shared by the download route and the tests. Wording is
 // target-neutral and every number comes from the report.
 
-import { actionItems } from './actions';
+import { actionItems, findingRules } from './actions';
+import { REF_LABEL, effectRef, refText, ruleIndex } from './rule-refs';
 import { PENALTY, RATING_LABEL, THREAT_LABEL, postureOf } from './posture';
 import { CHECK_LABEL, explain, reproduce } from './proof';
 import { verifyReport } from './verify';
-import { GROUP_LABEL, COVERAGE_LABEL, KIND_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditReport } from './types';
+import { GROUP_LABEL, COVERAGE_LABEL, SEVERITIES, SEVERITY_LABEL, VERDICT_LABEL, windowLabel, type AuditFinding, type AuditReport } from './types';
 import { compactNum } from '../num';
 
 /** findings.json: the records, worst first, as stored. */
@@ -30,12 +31,13 @@ export function auditCsv(r: AuditReport, part: CsvPart): string {
   if (part === 'coverage') return csv(['rule', 'title', 'group', 'state', 'findings', 'reason', 'permission', 'attack_class', 'skill_ref'],
     r.coverage.map((c) => [c.ruleId, c.title, GROUP_LABEL[c.group], c.state, c.findings, c.reason ?? '', c.permission ?? '', c.attackClass, c.skillRef]));
   if (part === 'effectiveness') return csv(['kind', 'rule', 'ruleset', 'source', 'name', 'configured', 'config_action', 'events', 'by_action', 'challenged', 'solved', 'solve_rate', 'previous', 'trend', 'top_paths', 'top_countries', 'top_networks', 'passed', 'passed_bots', 'bot_basis', 'passed_malicious', 'malicious_basis', 'verdict', 'recommendation'],
-    (r.effectiveness?.rules ?? []).map((x) => [KIND_LABEL[x.kind], x.ruleId, x.rulesetId, x.source, x.name, x.configured, x.configAction ?? '', x.events, x.byAction, x.challenged, x.solved,
+    (r.effectiveness?.rules ?? []).map((x) => [REF_LABEL[effectRef(x).kind], x.ruleId, x.rulesetId, x.source, x.name, x.configured, x.configAction ?? '', x.events, x.byAction, x.challenged, x.solved,
       x.solveRate === null ? '' : x.solveRate.toFixed(3), x.previous ?? '', x.trend === null ? '' : x.trend.toFixed(3),
       x.topPaths.map((p) => `${p.path} (${compactNum(p.count)})`).join('; '), x.topCountries.map((p) => `${p.country} (${compactNum(p.count)})`).join('; '), x.topAsns.map((p) => `AS${p.asn} ${p.name} (${compactNum(p.count)})`).join('; '),
       x.passthrough?.passed ?? '', x.passthrough?.bots ?? '', x.passthrough?.botBasis ?? '', x.passthrough?.malicious ?? '', x.passthrough?.maliciousBasis ?? '', x.passthrough?.verdict ?? '', x.passthrough?.recommendation.title ?? '']));
-  return csv(['severity', 'verdict', 'rule', 'group', 'title', 'attack_class', 'skill_ref', 'description', 'root_cause', 'evidence', 'fix', 'validation', 'fingerprint'],
-    r.findings.map((f) => [f.severity, f.verdict, f.ruleId, GROUP_LABEL[f.group], f.title, f.attackClass, f.skillRef, f.description, f.rootCause,
+  const idx = ruleIndex(null, r.effectiveness);
+  return csv(['severity', 'verdict', 'rule', 'group', 'title', 'applies_to', 'attack_class', 'skill_ref', 'description', 'root_cause', 'evidence', 'fix', 'validation', 'fingerprint'],
+    r.findings.map((f) => [f.severity, f.verdict, f.ruleId, GROUP_LABEL[f.group], f.title, findingRules(f, r, idx).map(refText).join('; '), f.attackClass, f.skillRef, f.description, f.rootCause,
       f.evidence.map((e) => `${e.source} ${e.field} = ${e.value}${e.check ? ` [${e.check}]` : ''}`).join(' | '), f.fix.join(' | '), f.validation ?? '', f.fingerprint]));
 }
 
@@ -44,6 +46,10 @@ const md = (s: string) => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 /** REPORT.md, in the page's order: summary, posture, findings, recommended actions, effectiveness, managed ruleset, coverage ledger, method. */
 export function auditMarkdown(r: AuditReport, brand: string): string {
   const s = r.summary;
+  const idx = ruleIndex(null, r.effectiveness);
+  const byFp = new Map(r.findings.map((f) => [f.fingerprint, f]));
+  /** " · applies to Custom rule “Watch API”" for a finding that is about rules, else nothing. */
+  const appliesTo = (f: AuditFinding | undefined) => { const refs = f ? findingRules(f, r, idx) : []; return refs.length ? ` · applies to ${refs.map(refText).join(', ')}` : ''; };
   const L: string[] = [];
   const tick = (v: string) => `\`${v.replace(/`/g, "'")}\``;
   L.push(`# Security audit — ${r.zone.name}`, '');
@@ -85,7 +91,7 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
     ...p.threats.filter((t) => t.status !== 'not_applicable').map((t) => `| ${t.label} | ${THREAT_LABEL[t.status]} | ${md(t.controls.join('; ') || '—')} | ${md(t.gaps.map((x) => x.title).join('; ') || '—')} |`), '');
   for (const t of p.threats.filter((t) => t.playbook.length)) L.push(`- **${t.label}:** ${t.playbook.join(' ')}`);
   if (p.threats.some((t) => t.playbook.length)) L.push('');
-  const steps = (title: string, list: typeof p.steps.immediate) => { if (list.length) L.push(`### ${title}`, '', ...list.map((x, i) => `${i + 1}. **${x.title}**${x.severity ? ` (${x.severity})` : ''}${x.detail ? ` — ${x.detail}` : ''}`), ''); };
+  const steps = (title: string, list: typeof p.steps.immediate) => { if (list.length) L.push(`### ${title}`, '', ...list.map((x, i) => `${i + 1}. **${x.title}**${x.severity ? ` (${x.severity})` : ''}${md(appliesTo(x.fingerprint ? byFp.get(x.fingerprint) : undefined))}${x.detail ? ` — ${x.detail}` : ''}`), ''); };
   steps('Immediate', p.steps.immediate);
   steps('Short term', p.steps.shortTerm);
   steps('Hardening', p.steps.hardening);
@@ -99,6 +105,8 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   r.findings.forEach((f, i) => {
     L.push(`### ${i + 1}. ${f.title}`, '');
     L.push(`**${SEVERITY_LABEL[f.severity]} · ${VERDICT_LABEL[f.verdict]}** · ${GROUP_LABEL[f.group]} · rule \`${f.ruleId}\` · attack class: ${f.attackClass} (${f.skillRef})`, '');
+    const refs = findingRules(f, r, idx);
+    if (refs.length) L.push(`**Applies to:** ${refs.map(refText).join(', ')}`, '');
     L.push(f.description, '', `*Root cause:* ${f.rootCause}`, '', `*Intended behaviour:* ${f.intendedBehavior}`, '');
     L.push('**Proof:**', '');
     for (const e of f.evidence) {
@@ -122,7 +130,7 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
   L.push('## Recommended actions', '', 'Traffic recommendations for rules that let requests through, and the fix of every confirmed high or critical finding, most important first. Not applied.', '');
   if (!items.length) L.push('Nothing to change in what was read.', '');
   items.forEach((x, i) => {
-    L.push(`${i + 1}. **${x.title}** (${x.source === 'traffic' ? 'from traffic' : 'from configuration'}: ${x.ruleName}${x.severity ? `; ${SEVERITY_LABEL[x.severity]}` : ''}${x.impact ? `; ${x.impact} requests` : ''}${x.fingerprint ? `; finding \`${x.fingerprint}\`` : ''})`);
+    L.push(`${i + 1}. **${x.title}** (${x.source === 'traffic' ? 'from traffic' : 'from configuration'}: ${x.rules?.length ? x.rules.map(refText).join(', ') : x.ruleName}${x.severity ? `; ${SEVERITY_LABEL[x.severity]}` : ''}${x.impact ? `; ${x.impact} requests` : ''}${x.fingerprint ? `; finding \`${x.fingerprint}\`` : ''})`);
     for (const st of x.steps) L.push(`   - ${st}`);
     if (x.expression) L.push(`   - Expression: ${tick(x.expression)}`);
   });
@@ -137,7 +145,7 @@ export function auditMarkdown(r: AuditReport, brand: string): string {
     L.push('| Kind | Rule | Events | By action | Solve rate | Trend | Let through | Recommendation |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const x of e.rules) {
       const p = x.passthrough;
-      L.push(`| ${KIND_LABEL[x.kind]} | ${md(x.name)} | ${compactNum(x.events)} | ${md(Object.entries(x.byAction).map(([a, n]) => `${a} ${compactNum(n)}`).join(', '))} | ${x.solveRate === null ? '' : `${Math.round(x.solveRate * 100)}%`} | ${x.trend === null ? '' : `${x.trend >= 0 ? '+' : ''}${Math.round(x.trend * 100)}%`} | ${p ? `${compactNum(p.passed)}: ${compactNum(p.bots)} automated, ${compactNum(p.malicious)} malicious` : ''} | ${p ? md(p.recommendation.title) : ''} |`);
+      L.push(`| ${REF_LABEL[effectRef(x).kind]} | ${md(x.name)} | ${compactNum(x.events)} | ${md(Object.entries(x.byAction).map(([a, n]) => `${a} ${compactNum(n)}`).join(', '))} | ${x.solveRate === null ? '' : `${Math.round(x.solveRate * 100)}%`} | ${x.trend === null ? '' : `${x.trend >= 0 ? '+' : ''}${Math.round(x.trend * 100)}%`} | ${p ? `${compactNum(p.passed)}: ${compactNum(p.bots)} automated, ${compactNum(p.malicious)} malicious` : ''} | ${p ? md(p.recommendation.title) : ''} |`);
     }
     if (e.notAnalysed.length) L.push('', `Not analysed: ${e.notAnalysed.map((x) => `${x.ruleName} (${compactNum(x.passed)})`).join(', ')} — ${e.notAnalysed[0].reason}.`);
     L.push('');

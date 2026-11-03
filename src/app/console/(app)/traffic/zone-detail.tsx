@@ -8,6 +8,7 @@ import { Alert, Badge, Button, Card, Loading, Modal, SectionHeader, Skeleton, Sk
 import { bytes, dayLabel, num, pct, whole } from './format';
 import { compactNum } from '@/lib/num';
 import { actionLabel, sourceLabel } from '@/lib/waf-labels';
+import { BAND_LABEL, bandOf, botSummary, type BotBand } from '@/lib/bot-score';
 
 // One zone's (or account's) security events and requests (see src/lib/traffic-security.ts). Any card, bar, IP,
 // rule or ruleset opens the details window, narrowed to it; days open per hour, hours per minute.
@@ -233,13 +234,13 @@ const sumOf = (rows: DetailRow[] | undefined, keep: (r: DetailRow) => boolean) =
 const bytesOf = (rows: DetailRow[] | undefined, keep: (r: DetailRow) => boolean) => (rows ?? []).filter(keep).reduce((n, r) => n + (r.bytes ?? 0), 0);
 
 /** A ranked list with a share bar; long lists open on request. */
-function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'Nothing' }: {
+function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'Nothing', show = 10 }: {
   title: string; rows: DetailRow[] | undefined; label: (r: DetailRow) => ReactNode; sub?: (r: DetailRow) => ReactNode; total: number; withBytes?: boolean;
-  onPick?: (r: DetailRow) => void; empty?: string;
+  onPick?: (r: DetailRow) => void; empty?: string; show?: number;
 }) {
   const [all, setAll] = useState(false);
   if (!rows) return null;
-  const shown = all ? rows : rows.slice(0, 10);
+  const shown = all ? rows : rows.slice(0, show);
   const max = Math.max(1, ...rows.map((r) => r.count));
   return (
     <div className="min-w-0">
@@ -261,7 +262,7 @@ function BarList({ title, rows, label, sub, total, withBytes, onPick, empty = 'N
           ))}
         </ul>
       )}
-      {rows.length > 10 && (
+      {rows.length > show && (
         <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs text-muted hover:text-ink">{all ? 'Show fewer' : `Show all ${compactNum(rows.length)}`}</button>
       )}
     </div>
@@ -398,6 +399,7 @@ function More({ shown, total, onMore, onLess, what }: { shown: number; total: nu
 /** Single requests, newest first: who asked for what, and what the edge answered. */
 function RequestsTable({ rows, onIp }: { rows: FirewallEvent[]; onIp: (ip: string) => void }) {
   const withZone = rows.some((e) => e.zone);
+  const withBot = rows.some((e) => e.botScore !== undefined && e.botScore !== null);
   const [n, setN] = useState(25);
   const shown = rows.slice(0, n);
   if (!rows.length) return <p className="text-xs text-faint">No requests in this time.</p>;
@@ -406,7 +408,7 @@ function RequestsTable({ rows, onIp }: { rows: FirewallEvent[]; onIp: (ip: strin
     <div>
       <div className="overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[980px] text-left text-[11.5px]">
-          <thead className="bg-raised/50 text-muted"><tr>{['Time (UTC)', ...(withZone ? ['Zone'] : []), 'Client', 'Request', 'Status', 'Cache', 'Bytes', 'Ray ID'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+          <thead className="bg-raised/50 text-muted"><tr>{['Time (UTC)', ...(withZone ? ['Zone'] : []), 'Client', 'Request', 'Status', 'Cache', 'Bytes', ...(withBot ? ['Bot score'] : []), 'Ray ID'].map((h) => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
           <tbody className="align-top">
             {shown.map((e, i) => (
               <tr key={`${s(e.rayName)}-${i}`} className="border-t border-line/50">
@@ -423,6 +425,7 @@ function RequestsTable({ rows, onIp }: { rows: FirewallEvent[]; onIp: (ip: strin
                 <td className="px-3 py-1.5 tabular-nums text-ink-2">{s(e.edgeResponseStatus) || '—'}</td>
                 <td className="px-3 py-1.5 text-ink-2">{CACHE_LABEL[s(e.cacheStatus)] ?? (s(e.cacheStatus) || '—')}</td>
                 <td className="px-3 py-1.5 tabular-nums text-ink-2">{e.edgeResponseBytes !== undefined && e.edgeResponseBytes !== null ? bytes(Number(e.edgeResponseBytes)) : '—'}</td>
+                {withBot && <td className="px-3 py-1.5 whitespace-nowrap"><BotCell score={e.botScore} source={e.botScoreSrcName} /></td>}
                 <td className="px-3 py-1.5 font-mono text-[10.5px] text-faint">{s(e.rayName) || '—'}</td>
               </tr>
             ))}
@@ -701,6 +704,70 @@ function SecurityBody({ d, on }: { d: ZoneDetail; on: On }) {
   );
 }
 
+// ── Bot scores (Bot Management) ─────────────────────────────────────────────
+
+const BAND_DOT: Record<BotBand, string> = { automated: 'bg-bad', likely_automated: 'bg-warn', likely_human: 'bg-ok', not_scored: 'bg-faint' };
+const BAND_TEXT: Record<BotBand, string> = { automated: 'text-bad', likely_automated: 'text-warn', likely_human: 'text-ok', not_scored: 'text-faint' };
+
+/** Requests by bot score: Cloudflare's bands with exact counts, the average and median, the distribution and what scored them. */
+/** Exact counts (the bot score panel shows hard numbers, not 3.1k). */
+const exact = (n: number) => n.toLocaleString('en-US');
+
+function BotScores({ b, notes }: { b: Record<string, DetailRow[]>; notes: string[] }) {
+  if (!b.botScores) {
+    const why = notes.find((n) => /botScores/.test(n));
+    return (
+      <div>
+        <div className="eyebrow mb-2">Bot score</div>
+        <p className="text-xs text-muted">Cloudflare returned no bot scores here. They come with Bot Management (an Enterprise add-on){why ? `: ${why}` : ''}.</p>
+      </div>
+    );
+  }
+  const s = botSummary(b.botScores);
+  const ranges: DetailRow[] = s.ranges.map((r) => ({ dims: { range: r.label }, count: r.count }));
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="eyebrow">Bot score</div>
+        <p className="mt-1 text-[11.5px] text-muted">
+          Cloudflare Bot Management scores each request from 1 (automated) to 99 (human). {exact(s.scored)} of {exact(s.total)} requests were scored
+          {s.mean !== null && <> · average score {s.mean} · median {s.median}</>}.
+        </p>
+      </div>
+      {s.total > 0 && (
+        <div className="flex h-2.5 gap-[2px] overflow-hidden rounded-full" role="img" aria-label={s.bands.map((x) => `${x.label} ${pct(x.count, s.total)}`).join(', ')}>
+          {s.bands.filter((x) => x.count).map((x) => <div key={x.key} className={cx('h-full', BAND_DOT[x.key])} style={{ width: `${(x.count / s.total) * 100}%` }} title={`${x.label}: ${exact(x.count)} (${pct(x.count, s.total)})`} />)}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+        {s.bands.map((x) => (
+          <div key={x.key} className="min-w-0">
+            <div className="flex items-center gap-1.5 text-[11.5px] text-muted"><span className={cx('size-2 shrink-0 rounded-full', BAND_DOT[x.key])} aria-hidden />{x.label}</div>
+            <div className="mt-0.5 text-[20px] font-semibold tabular-nums text-ink">{exact(x.count)}</div>
+            <div className="text-[11.5px] text-muted">{pct(x.count, s.total)} · {x.range}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-6 md:grid-cols-2">
+        <BarList title="Scored requests by score" rows={ranges} show={ranges.length} label={(r) => <span className="font-mono">{r.dims.range}</span>} total={s.scored} />
+        <BarList title="What scored them" rows={b.botSources} label={(r) => r.dims.botScoreSrcName || 'Not given'} total={s.total} />
+      </div>
+    </div>
+  );
+}
+
+/** One request's bot score: the number, its band and what scored it. */
+function BotCell({ score, source }: { score: unknown; source: unknown }) {
+  const band = bandOf(score);
+  if (band === 'not_scored' && (score === undefined || score === null)) return <span className="text-faint">—</span>;
+  return (
+    <span>
+      <span className={cx('font-mono font-semibold tabular-nums', BAND_TEXT[band])}>{band === 'not_scored' ? '0' : String(score)}</span>
+      <span className="block text-[10.5px] text-faint">{BAND_LABEL[band]}{source ? ` · ${String(source)}` : ''}</span>
+    </span>
+  );
+}
+
 function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
   const onIp = on.ip;
   const q = d.requests;
@@ -735,6 +802,7 @@ function RequestsBody({ d, on }: { d: ZoneDetail; on: On }) {
           <IpTable rows={b.ips} total={q.total} withBytes onPick={onIp} what="Requests" />
         </div>
       )}
+      <BotScores b={b} notes={q.notes} />
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         {b.zones && <BarList title="By zone" rows={b.zones} label={(r) => r.dims.zone} total={q.total} withBytes />}
         <BarList title="Paths" rows={b.paths} label={(r) => <span className="font-mono">{r.dims.clientRequestPath || '/'}</span>} total={q.total} withBytes />

@@ -68,6 +68,23 @@ export interface TraceResult { url: string; method: string; zoneName: string; ac
 export const WAF_WINDOWS = [24, 72, 168] as const;
 
 export interface WafSignal { key: string; label: string; points: number; detail: string }
+/** One scoring check, scored or not: the numbers measured and the bands that turn them into points. */
+export interface WafCheck { key: string; label: string; points: number; measured: string; bands: string }
+/** The hard numbers behind a suspect's score, read from Cloudflare's security events in the window. */
+export interface WafEvidence {
+  since: string; until: string;
+  /** Events counted in each breakdown (Cloudflare groups them by IP, network, path and user agent separately). */
+  counted: { ips: number; asns: number; paths: number; uas: number };
+  /** The busiest of each, most first, with how many there are in all. */
+  topIps: { ip: string; count: number }[]; ipCount: number;
+  networks: { asn: string; name: string; count: number; consumer: boolean }[]; networkCount: number; consumerEvents: number; hostingEvents: number;
+  userAgents: { ua: string; count: number; browser: boolean }[]; uaCount: number; browserEvents: number;
+  paths: { host: string; path: string; count: number }[]; pathCount: number;
+  /** The main path's responses in the window (all requests, from httpRequestsAdaptiveGroups), or null when not read. */
+  pathStatus: { requests: number; stopped: number; others: number; ok: number } | null;
+  /** Every check, including the ones that scored 0, and the sum before it is kept within 0–100. */
+  checks: WafCheck[]; sum: number;
+}
 export interface WafSuspect {
   zoneId: string; zoneName: string;
   ruleId: string; rulesetId: string; source: string; description: string; rulesetName?: string;
@@ -88,6 +105,8 @@ export interface WafSuspect {
   deploy?: DeployTuning & { ruleOverride?: string };
   /** Ways to stop the false positive, the narrowest first. */
   fixes: WafFix[];
+  /** How the score was reached, in counts (absent on results kept from before it was added). */
+  evidence?: WafEvidence;
 }
 /** One way to stop a false positive: what to change, why, and the steps in the dashboard. */
 export interface WafFix { title: string; why: string; steps: string[]; /** The narrowest change: try it first. */ best?: boolean }
