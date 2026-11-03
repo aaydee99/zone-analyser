@@ -5,6 +5,7 @@
 -- monitor_rows.search, filled from the rows' data.
 alter table public.monitor_rows add column if not exists search text not null default '';
 update public.monitor_rows set search = public.monitor_row_text(data);
+drop function if exists public.monitor_rows_filtered(text, text, text, text, text, text, text, integer, integer);
 create or replace function public.monitor_rows_filtered(p_check text, p_section text, p_account text, p_list text, p_kind text,
   p_status_not text, p_q text, p_offset integer, p_limit integer)
 returns table (data jsonb, total bigint)
@@ -20,6 +21,8 @@ language sql stable set search_path = public as $$
   order by r.sort, r.id
   offset greatest(0, coalesce(p_offset, 0)) limit least(20000, greatest(1, coalesce(p_limit, 50)))
 $$;
+revoke all on function public.monitor_rows_filtered(text, text, text, text, text, text, text, integer, integer) from public, anon, authenticated;
+grant execute on function public.monitor_rows_filtered(text, text, text, text, text, text, text, integer, integer) to service_role;
 drop function if exists public.monitor_row_text(jsonb);
 
 -- The drift rows, back in zone_search (in their order).
@@ -30,6 +33,13 @@ from public.zone_search_drift d, jsonb_array_elements(d.rows) with ordinality as
 order by d.zone_id, e.o;
 
 -- The functions of 0016.
+-- The four search functions are dropped first: a database that ran an earlier version of 0016 has
+-- them with other return types, which `create or replace` can't change. Their grants are set again below.
+drop function if exists public.zone_search_replace(text, text, text, text, text, timestamptz, jsonb, boolean);
+drop function if exists public.zone_search_forget(text[], text);
+drop function if exists public.zone_search_find(text, text, text[], text, text[], integer, integer);
+drop function if exists public.zone_search_items(text[], text[]);
+
 create or replace function public.zone_search_replace(p_zone text, p_zone_name text, p_account text, p_source text, p_ref text, p_at timestamptz, p_rows jsonb, p_replace boolean)
 returns table (kept integer)
 language plpgsql set search_path = public as $$
@@ -117,5 +127,10 @@ language sql stable set search_path = public as $$
   order by s.zone_id, s.item, s.id
   limit 200000
 $$;
+
+revoke all on function public.zone_search_replace(text, text, text, text, text, timestamptz, jsonb, boolean), public.zone_search_forget(text[], text),
+  public.zone_search_find(text, text, text[], text, text[], integer, integer), public.zone_search_items(text[], text[]) from public, anon, authenticated;
+grant execute on function public.zone_search_replace(text, text, text, text, text, timestamptz, jsonb, boolean), public.zone_search_forget(text[], text),
+  public.zone_search_find(text, text, text[], text, text[], integer, integer), public.zone_search_items(text[], text[]) to service_role;
 
 drop table if exists public.zone_search_drift;

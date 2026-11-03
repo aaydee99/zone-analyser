@@ -1050,6 +1050,30 @@ This keeps a clean result from being mistaken for "everything was checked".
 
 **Downloads:** `REPORT.md` (sections in the page's order, the posture after the summary), `findings.json` (the finding records), and CSV for the findings, the rule-effectiveness table, the managed rulesets or the coverage ledger.
 
+**Client report** (the **Client report** button; `GET …/download?format=docx&client=NAME`). A Word document to hand to the client, `<zone>-Gaps-and-Recommendations.docx`: "Cloudflare Security Review: Gaps and recommendations", prepared by Adapture for the client named in the dialog. It is built from the same report in fixed rules (`src/lib/zone-audit/client-report.ts`, rendered by `client-report-docx.ts`):
+
+- **Sections:**
+  - a cover;
+  - an executive summary with priorities and the findings by severity (the audit's Info is shown as Advisory);
+  - scope and limits;
+  - coverage by threat;
+  - a summary of gaps;
+  - one card per gap (Gap, Evidence, Risk, Validate, Recommendation, Before rollout);
+  - a roadmap in dependency order, with the input needed and how progress is measured;
+  - what is working well (from passed checks);
+  - appendices of logged rule matches and failing paths.
+- **Gaps:** findings are grouped by root cause into at most 15 gaps (G1…, worst first); every finding is in exactly one.
+- **Review rules:**
+  - traffic that looks like devices or integrations (mostly automated, few hosting networks and browsers, service endpoints) is not sent to a challenge: the report asks to classify it and add exceptions first;
+  - fixes are ordered by what they depend on (origin certificate before Full (strict), SSL mode before proxying a DNS-only record, exceptions before removing a Log override);
+  - counts are called logged events;
+  - failing paths get "find the cause before rate limiting";
+  - a threat with a gap is never "Covered";
+  - TLS, HSTS, Full (strict), Turnstile and Managed Challenge changes carry their rollout caveat.
+- **Nothing internal:** no tool name, API paths, queries or commands, IDs or rule slugs, grade or score, origin addresses, method or verification sections, and no em or en dashes. Rule IDs in the audit's text are replaced by rule names. The tests scan the Word file itself for these.
+- **The dialog** shows what to check before sending, and where the report departs from the audit. Dates, owners and a logo are not included.
+- **Audit log:** each download is logged with the client name.
+
 **Rule areas.**
 
 | Area | What the rules check |

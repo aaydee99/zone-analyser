@@ -12,6 +12,7 @@ import {
   AuditNav, AuditReportCtx, AuditState, Coverage, EffectivenessTable, Findings, ManagedOverviewCard, Method, Queries, RecommendedActions, Summary, effectId, findingId, type AuditTab,
 } from '../audit-view';
 import { PostureView } from '../posture-view';
+import { ClientReportButton } from '../client-report-dialog';
 
 interface View { audit: AuditView & { hours: number; error: string | null }; generatedAt: string }
 
@@ -81,6 +82,7 @@ export default function AuditPage({ params }: { params: Promise<{ auditId: strin
             <ButtonLink href={dl('format=md')} download icon={<Download className="size-4" />}>REPORT.md</ButtonLink>
             <ButtonLink href={dl('format=json')} download icon={<FileJson className="size-4" />}>findings.json</ButtonLink>
             <ButtonLink href={dl('format=csv&part=findings')} download icon={<Download className="size-4" />}>CSV</ButtonLink>
+            <ClientReportButton r={r} href={(client) => dl(`format=docx&client=${encodeURIComponent(client)}`)} />
           </>}
         </>} />
       {error && <Alert tone="bad" title="The audit could not be read">{error}</Alert>}
