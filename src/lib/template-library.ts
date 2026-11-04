@@ -63,6 +63,7 @@ const check = (phase: string, key: string, path: string, when: CheckWhen[], matc
 });
 const w = (field: string, match: CheckWhen['match'], value: string): CheckWhen => ({ field, match, value });
 
+/** The console's own baseline checks (the first library; most are now covered by Cloudflare's docs list below). */
 export const LIBRARY: LibraryEntry[] = [
   // ── SSL/TLS ──
   { id: 'ssl-strict', group: 'SSL/TLS', title: 'SSL/TLS mode is Full (strict)', why: 'Cloudflare checks the origin certificate; Flexible or Full leave the origin leg open to interception.', item: setting('ssl', 'equals', 'strict', 'SSL/TLS encryption mode') },
@@ -129,3 +130,43 @@ export const LIBRARY: LibraryEntry[] = [
 
 /** The entries a new template from the library starts with: all of them. */
 export const libraryItems = (ids?: string[]) => LIBRARY.filter((e) => !ids || ids.includes(e.id)).map((e) => e.item);
+
+// ── Libraries ───────────────────────────────────────────────────────────────
+
+import { POLICY_LIBRARY } from './template-policy';
+import { CF_DOCS as DOCS } from './cf-best-practices';
+
+/** One entry of a library: a granular check, why it matters, and (for Cloudflare's) the docs page it comes from. */
+export interface AnyEntry { id: string; group: string; title: string; why: string; source?: string; item: TemplateItem }
+export interface Library { id: string; name: string; description: string; entries: AnyEntry[] }
+
+interface DocEntry { id: string; group: string; title: string; why: string; source: string; check: { setting?: { id: string; match: string; value: string }; rule?: { phase: string; expect: 'present' | 'absent'; conditions: CheckWhen[] } } }
+
+/** One check from Cloudflare's documentation, as a template item. A setting check is "setting:<id>#<check>" (several checks of one setting). */
+function fromDocs(d: DocEntry): AnyEntry {
+  const short = d.id.replace(/^cf-/, '').replace(/-/g, '_');
+  if (d.check.setting) {
+    const x = d.check.setting;
+    return { id: d.id, group: d.group, title: d.title, why: d.why, source: d.source, item: { item: `setting:${x.id}#${short}`, kind: 'setting', path: d.title, expected: x.value, match: x.match as TemplateMatch } };
+  }
+  const r = d.check.rule!;
+  return { id: d.id, group: d.group, title: d.title, why: d.why, source: d.source,
+    item: { item: `check:${r.phase}:${short}`, kind: PHASES.find((p) => p.phase === r.phase)?.kind ?? 'rule', path: d.title, expected: '', match: r.expect, check: { phase: r.phase, when: r.conditions } } };
+}
+
+/** Console checks the docs list has no counterpart for, kept beside it. */
+const EXTRA: Record<string, string> = {
+  'no-skip-all-managed': 'Managed rules and OWASP', 'owasp-action': 'Managed rules and OWASP', 'admin-protect': 'Custom rules', 'no-skip-all-custom': 'Custom rules',
+  'rl-api': 'Rate limiting', 'rl-not-log': 'Rate limiting', 'cache-static': 'Cache and CDN', 'cache-bypass-api': 'Cache and CDN', 'dev-mode-off': 'Security settings', 'cache-level': 'Cache and CDN',
+};
+
+/** Cloudflare's documented best practices (each with its docs page), and the console's extra checks. */
+export const CLOUDFLARE_LIBRARY: AnyEntry[] = [
+  ...(DOCS as DocEntry[]).map(fromDocs),
+  ...LIBRARY.filter((e) => EXTRA[e.id]).map((e) => ({ ...e, group: EXTRA[e.id], why: `${e.why} (Console check; not from one docs page.)` })),
+];
+
+export const LIBRARIES: Library[] = [
+  { id: 'cloudflare', name: 'Cloudflare best practices', description: 'Each check comes from Cloudflare’s documentation (the link says which page): SSL/TLS and HSTS, security settings, managed rules and OWASP tuning, attack score and leaked credentials, bots, rate limiting, DDoS, cache, protocols, security headers and DNS. A few console checks the docs have no page for are marked.', entries: CLOUDFLARE_LIBRARY },
+  { id: 'policy', name: 'Security policy (POL / RL)', description: 'The POL custom rules and RL rate limiting rules, each split into checks: the rule exists, its action, API exclusion, threshold, counting, origin-only, throttle. Host conditions are left out.', entries: POLICY_LIBRARY },
+];

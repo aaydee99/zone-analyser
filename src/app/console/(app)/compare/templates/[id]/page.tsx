@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import { ChevronDown, Play, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
 import { CHECK_MATCHES, INDEX_KINDS, MATCH_TEXT, MAX_CHECK_CONDITIONS, TEMPLATE_MATCHES, type CheckMatch, type CheckWhen, type IndexKind, type TemplateItem, type TemplateMatch } from '@/lib/zone-index';
-import { LIBRARY, LIBRARY_GROUPS, PHASES, PHASE_LABEL, RULE_FIELDS, SETTING_IDS } from '@/lib/template-library';
+import { LIBRARIES, PHASES, PHASE_LABEL, RULE_FIELDS, SETTING_IDS } from '@/lib/template-library';
 import type { GapsPage, Template } from '@/lib/compare';
 import { Alert, Badge, Button, Card, Checkbox, Field, Loading, Modal, PageHeader, SectionHeader, SkeletonTable, cx } from '@/components/ui';
 import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 import { Pager, Values } from '../../parts';
+import { AccountPicker, ZonePicker, type PickedAccount, type PickedZone } from '../../../investigate/shared';
 
 import { whole } from '@/lib/num';
 const PAGE = 50;
@@ -112,39 +113,65 @@ function AddItems({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: Templa
 
 function Library({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: TemplateItem[]) => void }) {
   const have = new Set(items.map((i) => i.item));
+  const [libId, setLibId] = useState(LIBRARIES[0].id);
+  const [q, setQ] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
-  const free = LIBRARY.filter((e) => !have.has(e.item.item));
-  const add = () => { onAdd(LIBRARY.filter((e) => picked.includes(e.id)).map((e) => e.item)); setPicked([]); };
+  const lib = LIBRARIES.find((l) => l.id === libId)!;
+  const term = q.trim().toLowerCase();
+  const shown = lib.entries.filter((e) => !term || `${e.title} ${e.why} ${e.group} ${e.item.check ? JSON.stringify(e.item.check.when) : `${e.item.item} ${e.item.expected}`}`.toLowerCase().includes(term));
+  const groups = [...new Set(shown.map((e) => e.group))];
+  const free = shown.filter((e) => !have.has(e.item.item));
+  const toggle = (ids: string[], on: boolean) => setPicked((p) => (on ? [...new Set([...p, ...ids])] : p.filter((y) => !ids.includes(y))));
+  const add = () => { onAdd(LIBRARIES.flatMap((l) => l.entries).filter((e) => picked.includes(e.id)).map((e) => e.item)); setPicked([]); };
   return (
-    <div className="px-5 py-4">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="primary" disabled={!picked.length} onClick={add} icon={<Plus className="size-3.5" />}>Add {picked.length || ''} selected</Button>
-        <Button size="sm" variant="ghost" disabled={!free.length} onClick={() => setPicked(free.map((e) => e.id))}>Select all not added ({free.length})</Button>
+    <div className="space-y-4 px-5 py-4">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Library">
+        {LIBRARIES.map((l) => (
+          <button key={l.id} type="button" aria-pressed={l.id === libId} onClick={() => setLibId(l.id)}
+            className={cx('rounded-lg border px-3 py-1.5 text-[12.5px]', l.id === libId ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink')}>
+            {l.name} <span className="text-faint">({l.entries.length.toLocaleString('en-US')})</span>
+          </button>
+        ))}
+      </div>
+      <p className="text-[12.5px] text-muted">{lib.description}</p>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[14rem] flex-1"><Field label="Search the library" optional><input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="POL-1010, bot score, OWASP, TLS, /login" /></Field></div>
+        <Button size="sm" variant="primary" disabled={!picked.length} onClick={add} icon={<Plus className="size-3.5" />}>Add {picked.length ? picked.length.toLocaleString('en-US') : ''} selected</Button>
+        <Button size="sm" variant="ghost" disabled={!free.length} onClick={() => toggle(free.map((e) => e.id), true)}>Select all shown not added ({free.length.toLocaleString('en-US')})</Button>
         {picked.length > 0 && <Button size="sm" variant="ghost" onClick={() => setPicked([])}>Clear</Button>}
       </div>
+      {!shown.length && <p className="text-[12.5px] text-muted">Nothing in this library matches “{q}”.</p>}
       <div className="space-y-5">
-        {LIBRARY_GROUPS.map((g) => (
-          <section key={g}>
-            <h3 className="mb-1.5 text-[12px] font-semibold tracking-wide text-muted uppercase">{g}</h3>
-            <ul className="divide-y divide-line/60 rounded-lg border border-line">
-              {LIBRARY.filter((e) => e.group === g).map((e) => {
-                const added = have.has(e.item.item);
-                return (
-                  <li key={e.id} className="flex gap-3 px-3 py-2.5">
-                    <span className="mt-0.5 shrink-0"><Checkbox label={<span className="sr-only">{e.title}</span>} disabled={added}
-                      checked={added || picked.includes(e.id)} onChange={(v) => setPicked((p) => (v ? [...p, e.id] : p.filter((y) => y !== e.id)))} /></span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-medium text-ink">{e.title}</span>{added && <Badge tone="ok">added</Badge>}</div>
-                      <p className="text-[12px] text-muted">{e.why}</p>
-                      <div className="mt-1"><ItemExpected t={e.item} /></div>
-                      {!e.item.check && <div className="mt-0.5 font-mono text-[11px] text-faint">{e.item.item}</div>}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ))}
+        {groups.map((g) => {
+          const inGroup = shown.filter((e) => e.group === g);
+          const freeIds = inGroup.filter((e) => !have.has(e.item.item)).map((e) => e.id);
+          const allOn = freeIds.length > 0 && freeIds.every((x) => picked.includes(x));
+          return (
+            <section key={g}>
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-[12px] font-semibold tracking-wide text-muted uppercase">{g} <span className="font-normal normal-case text-faint">· {inGroup.length.toLocaleString('en-US')} checks</span></h3>
+                {freeIds.length > 0 && <Button size="sm" variant="ghost" onClick={() => toggle(freeIds, !allOn)}>{allOn ? 'Unselect this group' : `Select this group (${freeIds.length.toLocaleString('en-US')})`}</Button>}
+              </div>
+              <ul className="divide-y divide-line/60 rounded-lg border border-line">
+                {inGroup.map((e) => {
+                  const added = have.has(e.item.item);
+                  return (
+                    <li key={e.id} className="flex gap-3 px-3 py-2.5">
+                      <span className="mt-0.5 shrink-0"><Checkbox label={<span className="sr-only">{e.title}</span>} disabled={added}
+                        checked={added || picked.includes(e.id)} onChange={(v) => toggle([e.id], v)} /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-medium break-words text-ink">{e.title}</span>{added && <Badge tone="ok">added</Badge>}</div>
+                        <p className="text-[12px] text-muted">{e.why}{e.source && <> <a href={e.source} target="_blank" rel="noreferrer" className="text-signal hover:underline">Cloudflare docs</a></>}</p>
+                        <div className="mt-1"><ItemExpected t={e.item} /></div>
+                        {!e.item.check && <div className="mt-0.5 font-mono text-[11px] text-faint">{e.item.item}</div>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
@@ -282,10 +309,12 @@ function ItemTable({ items, manage, onChange }: { items: TemplateItem[]; manage:
 function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[]; version: number; manage: boolean }) {
   const toast = useToast();
   const [offset, setOffset] = useState(0);
-  const [account, setAccount] = useState('');
+  // Empty account and zone: every account and every zone.
+  const [account, setAccount] = useState<PickedAccount | null>(null);
+  const [zone, setZone] = useState<PickedZone | null>(null);
   const [tag, setTag] = useState('');
   const [onlyGaps, setOnlyGaps] = useState(true);
-  const [filters, setFilters] = useState({ account: '', tag: '' });
+  const [filters, setFilters] = useState({ tag: '' });
   const [data, setData] = useState<Answer | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -294,11 +323,12 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
   const load = useCallback(async () => {
     setLoading(true);
     const u = new URLSearchParams({ offset: String(offset), limit: String(PAGE) });
-    if (filters.account) u.set('account', filters.account);
+    if (account) u.set('account', account.id);
+    if (zone) u.set('zone', zone.id);
     if (filters.tag) u.set('tag', filters.tag);
     if (onlyGaps) u.set('gaps', '1');
     try { setData(await api<Answer>(`/api/compare/templates/${id}/gaps?${u}`)); setError(''); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
-  }, [id, offset, filters, onlyGaps]);
+  }, [id, offset, filters, onlyGaps, account, zone]);
   useEffect(() => { void load(); }, [load, version]);
 
   const recompute = async () => {
@@ -317,9 +347,10 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
         </div>} />
       {job && !job.error && <p className="border-b border-line px-5 py-2 text-[12px] text-info">Computing: {whole.format(job.done)} of {whole.format(job.total)} zones (press Refresh to update)</p>}
       {job?.error && <p className="border-b border-line px-5 py-2 text-[12px] text-bad">The last computation failed: {job.error}</p>}
-      <form className="grid gap-3 border-b border-line px-5 py-3 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end" onSubmit={(e) => { e.preventDefault(); setOffset(0); setFilters({ account: account.trim(), tag: tag.trim() }); }}>
-        <Field label="Account ID" optional><input className="input font-mono" value={account} maxLength={64} onChange={(e) => setAccount(e.target.value)} placeholder="All accounts" /></Field>
-        <Field label="Zone tags" optional><input className="input" value={tag} maxLength={300} onChange={(e) => setTag(e.target.value)} placeholder="All zones" /></Field>
+      <form className="grid gap-3 border-b border-line px-5 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto] md:items-end" onSubmit={(e) => { e.preventDefault(); setOffset(0); setFilters({ tag: tag.trim() }); }}>
+        <AccountPicker label="Account" value={account} onChange={(a) => { setAccount(a); setZone(null); setOffset(0); }} placeholder="All accounts — type to search" />
+        <ZonePicker label="Zone" value={zone} onChange={(z) => { setZone(z); setOffset(0); }} accountId={account?.id} placeholder={account ? `All zones of ${account.name}` : 'All zones — type to search'} />
+        <Field label="Zone tags" optional><input className="input" value={tag} maxLength={300} onChange={(e) => setTag(e.target.value)} placeholder="Any tag" /></Field>
         <Checkbox label="Only zones with gaps" checked={onlyGaps} onChange={(v) => { setOnlyGaps(v); setOffset(0); }} />
         <Button type="submit" size="sm">Filter</Button>
       </form>

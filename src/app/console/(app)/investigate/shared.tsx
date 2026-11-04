@@ -151,6 +151,51 @@ export function useAccounts() {
   return accounts;
 }
 
+/**
+ * A searchable account box: type part of an account's name (or its ID), choose it with the mouse or the
+ * keyboard. Empty means every account. The list is the accounts the console knows (from the zone store).
+ */
+export function AccountPicker({ label, value, onChange, hint, placeholder = 'All accounts' }: { label: string; value: PickedAccount | null; onChange: (a: PickedAccount | null) => void; hint?: string; placeholder?: string }) {
+  const id = useId();
+  const accounts = useAccounts();
+  const [typed, setTyped] = useState<string | null>(null);
+  const q = typed ?? value?.name ?? '';
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const term = (typed ?? '').trim().toLowerCase();
+  const hits = (accounts ?? []).filter((a) => !term || a.name.toLowerCase().includes(term) || a.id === term).sort((x, y) => x.name.localeCompare(y.name));
+  const pick = (a: PickedAccount | null) => { onChange(a); setTyped(null); setOpen(false); };
+  return (
+    <div className="relative space-y-1.5">
+      <label htmlFor={id} className="flex items-center gap-2 text-[13px] font-medium text-ink-2">{label}</label>
+      <input id={id} className="input" role="combobox" aria-expanded={open} aria-controls={`${id}-list`} aria-autocomplete="list" autoComplete="off"
+        aria-activedescendant={open && hits[active] ? `${id}-${hits[active].id}` : undefined}
+        placeholder={accounts === null ? 'Loading accounts' : placeholder} value={q}
+        onChange={(e) => { setTyped(e.target.value); setOpen(true); setActive(0); if (!e.target.value) onChange(null); }}
+        onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => { setOpen(false); setTyped(null); }, 150)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive((a) => Math.min(hits.length - 1, a + 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+          else if (e.key === 'Enter' && open && hits[active]) { e.preventDefault(); pick(hits[active]); }
+          else if (e.key === 'Escape') setOpen(false);
+        }} />
+      {hint && <p className="text-xs text-muted">{hint}</p>}
+      {open && (
+        <ul id={`${id}-list`} role="listbox" className="panel absolute z-20 mt-1 max-h-72 w-full overflow-y-auto py-1 shadow-lg">
+          {value && <li role="option" aria-selected={false} onMouseDown={(e) => { e.preventDefault(); pick(null); }} className="cursor-pointer px-3 py-1.5 text-[13px] text-muted hover:bg-raised">All accounts</li>}
+          {hits.map((a, i) => (
+            <li key={a.id} id={`${id}-${a.id}`} role="option" aria-selected={i === active} onMouseDown={(e) => { e.preventDefault(); pick(a); }}
+              className={cx('flex cursor-pointer items-baseline justify-between gap-3 px-3 py-1.5 text-[13px]', i === active ? 'bg-raised text-ink' : 'text-ink-2')}>
+              <span className="min-w-0 break-words">{a.name}</span><span className="shrink-0 text-[11px] text-faint">{a.zones.toLocaleString('en-US')} zones</span>
+            </li>
+          ))}
+          {accounts !== null && !hits.length && <li className="px-3 py-1.5 text-[12px] text-faint">No account matches</li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Copy-able code. */
 export function Code({ children, className }: { children: string; className?: string }) {
   return <pre className={cx('overflow-x-auto rounded-lg border border-line bg-sunken/60 px-3 py-2 font-mono text-[12px] whitespace-pre-wrap break-all text-ink-2', className)}>{children}</pre>;

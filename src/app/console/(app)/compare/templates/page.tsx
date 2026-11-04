@@ -12,7 +12,7 @@ import { useMe } from '@/components/me';
 import { useToast } from '@/components/toast';
 import { useSnapshot } from '../../monitoring/use-run';
 import { ZonePicker } from '../parts';
-import { LIBRARY, libraryItems } from '@/lib/template-library';
+import { LIBRARIES } from '@/lib/template-library';
 
 type Row = Omit<Template, 'items'> & { itemCount: number };
 const DEFAULT_KINDS: IndexKind[] = ['setting', 'rule', 'header', 'redirect'];
@@ -57,12 +57,12 @@ function CreateTemplate({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState('');
   const [zone, setZone] = useState<{ id: string; name: string } | null>(null);
   const [kinds, setKinds] = useState<IndexKind[]>(DEFAULT_KINDS);
-  const [from, setFrom] = useState<'zone' | 'library'>('zone');
+  const [from, setFrom] = useState<string>('zone');
   const [saving, setSaving] = useState(false);
   const save = async () => {
     setSaving(true);
     try {
-      const r = await api<{ template: Template }>('/api/compare/templates', { method: 'POST', json: from === 'zone' ? { name, description, zoneId: zone?.id, kinds } : { name, description, items: libraryItems() } });
+      const r = await api<{ template: Template }>('/api/compare/templates', { method: 'POST', json: from === 'zone' ? { name, description, zoneId: zone?.id, kinds } : { name, description, items: (LIBRARIES.find((l) => l.id === from)?.entries ?? []).map((e) => e.item) } });
       toast(`Template “${r.template.name}” made with ${r.template.items.length} items`);
       router.push(`/console/compare/templates/${r.template.id}`);
     } catch (e) { toast((e as Error).message, 'bad'); setSaving(false); }
@@ -75,7 +75,7 @@ function CreateTemplate({ onClose }: { onClose: () => void }) {
         <Field label="Description" optional><input className="input" value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} /></Field>
         <Field label="Start from">
           <div className="flex flex-wrap gap-2">
-            {([['zone', 'A zone I trust'], ['library', `The best-practice library (${LIBRARY.length} items)`]] as const).map(([k, l]) => (
+            {[['zone', 'A zone I trust'], ...LIBRARIES.map((x) => [x.id, `${x.name} (${x.entries.length.toLocaleString('en-US')} checks)`])].map(([k, l]) => (
               <button key={k} type="button" onClick={() => setFrom(k)} aria-pressed={from === k}
                 className={`rounded-lg border px-3 py-1.5 text-[12.5px] ${from === k ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>{l}</button>
             ))}

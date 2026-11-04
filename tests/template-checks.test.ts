@@ -148,3 +148,102 @@ test('cleanItems keeps rule checks (and drops broken ones); the library is valid
   assert.equal(c[0].kind, 'rule');
   assert.equal(c[0].expected, 'expression contains /x');
 });
+
+test('contains_all: every ID on its own, in any order and spacing', () => {
+  assert.ok(valueMatches('(any(cf.bot_management.detection_ids[*] in {33554642 160956963   33554655 160352931}))', 'contains_all', '33554642 33554655 160352931 160956963'));
+  assert.ok(!valueMatches('(any(cf.bot_management.detection_ids[*] in {33554642 33554655 160352931}))', 'contains_all', '33554642 33554655 160352931 160956963'), 'one ID missing');
+  assert.ok(!valueMatches('in {133554642}', 'contains_all', '33554642'), 'not inside a longer number');
+  assert.ok(valueMatches('(ip.src in $cf.anonymizer)\n  and not http.request.uri.path in {"/api"}', 'contains', 'ip.src in $cf.anonymizer) and not http.request.uri.path'), 'spacing does not count');
+});
+
+test('the policy library: each POL and RL rule split into granular checks, found wherever the rule sits', async () => {
+  const { POLICY_LIBRARY, POLICY_RULES, RATE_RULES } = await import('@/lib/template-policy');
+  assert.equal(POLICY_RULES.length, 41);
+  assert.equal(RATE_RULES.length, 15);
+  assert.equal(new Set(POLICY_LIBRARY.map((e) => e.item.item)).size, POLICY_LIBRARY.length, 'unique keys');
+  assert.deepEqual(cleanItems(POLICY_LIBRARY.map((e) => e.item)).length, POLICY_LIBRARY.length, 'every item survives cleaning');
+  assert.equal(POLICY_RULES.find((r) => r.id === 'POL-8016')!.detectionIds!.split(' ').length, 264);
+  const zone = rowsOf([
+    ruleset(1, 'http_request_firewall_custom', `{
+    action      = "log"
+    description = "other"
+    expression  = "true"
+  }, {
+    action      = "managed_challenge"
+    description = "POL-1010 CF ANONYMIZER"
+    expression  = "(ip.src in $cf.anonymizer) and not http.request.uri.path in {\\"/api\\"}"
+  }, {
+    action      = "log"
+    description = "POL-8004"
+    expression  = "(any(cf.bot_management.detection_ids[*] in {160956963 33554642 33554655 160352931}))"
+  }`),
+    ruleset(2, 'http_ratelimit', `{
+    action      = "log"
+    description = "RL-09"
+    expression  = "true"
+    ratelimit = {
+      characteristics      = ["cf.colo.id", "ip.src"]
+      counting_expression  = "(http.response.code in {403 404})"
+      mitigation_timeout   = 0
+      period               = 180
+      requests_per_period  = 8
+      requests_to_origin   = true
+    }
+  }`),
+  ].join('\n'));
+  const pick = (...ids: string[]) => POLICY_LIBRARY.filter((e) => ids.includes(e.id)).map((e) => e.item);
+  const g = Object.fromEntries(gapsOf(pick('POL-1010-exists', 'POL-1010-action', 'POL-1010-api', 'POL-8004-exists', 'POL-8004-action', 'RL-09-exists', 'RL-09-by', 'RL-09-origin', 'RL-09-throttle', 'RL-09-counting', 'RL-09-action', 'RL-01-exists'), zone).map((x) => [x.item, x]));
+  assert.deepEqual(Object.keys(g).sort(), ['check:http_ratelimit:rl_01_exists', 'check:http_request_firewall_custom:pol_8004_action'], JSON.stringify(g, null, 1));
+  // POL-8004's target is Managed Challenge; it is still on Log.
+  assert.match(g['check:http_request_firewall_custom:pol_8004_action'].actual[0], /rule 3 “POL-8004”: 2 of 3 conditions met \(action is log\)/);
+});
+
+test('the Cloudflare docs library: valid, unique keys, every check cites a docs page', async () => {
+  const { CLOUDFLARE_LIBRARY, LIBRARIES } = await import('@/lib/template-library');
+  const items = CLOUDFLARE_LIBRARY.map((e) => e.item);
+  assert.ok(CLOUDFLARE_LIBRARY.length >= 80, `${CLOUDFLARE_LIBRARY.length} checks`);
+  assert.equal(new Set(items.map((x) => x.item)).size, items.length, 'unique keys');
+  assert.equal(cleanItems(items).length, items.length, 'every item survives cleaning');
+  for (const e of CLOUDFLARE_LIBRARY) {
+    if (e.item.check) assert.ok(PHASES.some((p) => p.phase === e.item.check!.phase), e.id);
+    if (e.id.startsWith('cf-')) assert.match(e.source ?? '', /^https:\/\/developers\.cloudflare\.com\//, e.id);
+  }
+  assert.ok(LIBRARIES.reduce((n, l) => n + l.entries.length, 0) <= 500 * 2);
+});
+
+test('several checks of one setting; [*] conditions held to the same list entry; enabled by default', async () => {
+  const { CLOUDFLARE_LIBRARY } = await import('@/lib/template-library');
+  const pick = (...ids: string[]) => CLOUDFLARE_LIBRARY.filter((e) => ids.includes(e.id)).map((e) => e.item);
+  const hsts = rowsOf(`resource "cloudflare_zone_setting" "h" {
+  setting_id = "security_header"
+  zone_id    = "${ZID}"
+  value = {
+    strict_transport_security = {
+      enabled            = true
+      include_subdomains = true
+      max_age            = 31536000
+      nosniff            = true
+      preload            = false
+    }
+  }
+}
+` + ruleset(5, 'http_request_firewall_managed', `{
+    action = "execute"
+    action_parameters = {
+      id = "${OWASP_ID}"
+      overrides = {
+        rules = [{
+          id     = "6179ae15870a4bb7b2d480d4843b323c"
+          action = "block"
+        }, {
+          id     = "other"
+          action = "log"
+        }]
+      }
+    }
+    expression = "true"
+  }`));
+  const g = gapsOf(pick('cf-hsts-enabled', 'cf-hsts-max-age-12-months', 'cf-hsts-include-subdomains', 'cf-hsts-preload', 'cf-hsts-nosniff', 'cf-owasp-anomaly-rule-not-log', 'cf-owasp-enabled'), hsts);
+  // Only preload is off. The anomaly rule is Block; "log" belongs to another override entry, so it is not a match. No "enabled": enabled.
+  assert.deepEqual(g.map((x) => x.item), ['setting:security_header#hsts_preload'], JSON.stringify(g, null, 1));
+});

@@ -517,8 +517,8 @@ export function diffZones(a: StoredRow[], aZone: string, b: StoredRow[], bZone: 
 // ── Templates ───────────────────────────────────────────────────────────────
 
 /** How a value is compared: one_of takes values separated by commas; at_least / at_most compare numbers and versions ("1.2"). */
-export type CheckMatch = 'equals' | 'not_equals' | 'contains' | 'one_of' | 'at_least' | 'at_most';
-export const CHECK_MATCHES: CheckMatch[] = ['equals', 'not_equals', 'contains', 'one_of', 'at_least', 'at_most'];
+export type CheckMatch = 'equals' | 'not_equals' | 'contains' | 'contains_all' | 'one_of' | 'at_least' | 'at_most';
+export const CHECK_MATCHES: CheckMatch[] = ['equals', 'not_equals', 'contains', 'contains_all', 'one_of', 'at_least', 'at_most'];
 export type TemplateMatch = CheckMatch | 'present' | 'absent';
 export const TEMPLATE_MATCHES: TemplateMatch[] = [...CHECK_MATCHES, 'present', 'absent'];
 /** One condition on a rule's field ("action", "expression", "action_parameters.headers.X-Frame-Options.value"; [*] is any list position). */
@@ -557,10 +557,21 @@ function cmpNum(a: string, b: string): number | null {
   return 0;
 }
 
+/** `word` appears in `text` on its own (33554433 is not found inside 133554433 or 33554433.5). */
+function wordIn(text: string, word: string): boolean {
+  for (let i = text.indexOf(word); i >= 0; i = text.indexOf(word, i + 1)) {
+    const before = text[i - 1] ?? '', after = text[i + word.length] ?? '';
+    if (!/[\w.]/.test(before) && !/[\w.]/.test(after)) return true;
+  }
+  return false;
+}
+
 /** One value against an expected value. */
 export function valueMatches(actual: string, match: TemplateMatch | CheckMatch, expected: string): boolean {
-  const a = actual.trim().toLowerCase(), e = expected.trim().toLowerCase();
+  // Spacing does not count: an expression written over several lines still matches.
+  const a = actual.trim().toLowerCase().replace(/\s+/g, ' '), e = expected.trim().toLowerCase().replace(/\s+/g, ' ');
   if (match === 'equals') return a === e;
+  if (match === 'contains_all') return e.split(/[\s,]+/).filter(Boolean).every((t) => wordIn(a, t));
   if (match === 'not_equals') return a !== e;
   if (match === 'contains') return a.includes(e);
   if (match === 'one_of') return e.split(',').map((x) => x.trim()).filter(Boolean).includes(a);
@@ -569,15 +580,18 @@ export function valueMatches(actual: string, match: TemplateMatch | CheckMatch, 
   return true;
 }
 
-export const MATCH_TEXT: Record<TemplateMatch, string> = { equals: 'is', not_equals: 'is not', contains: 'contains', one_of: 'is one of', at_least: 'is at least', at_most: 'is at most', present: 'exists', absent: 'does not exist' };
+export const MATCH_TEXT: Record<TemplateMatch, string> = { equals: 'is', not_equals: 'is not', contains: 'contains', contains_all: 'contains every one of', one_of: 'is one of', at_least: 'is at least', at_most: 'is at most', present: 'exists', absent: 'does not exist' };
 /** "action is block · expression contains /login". */
 export const checkText = (c: RuleCheck) => c.when.map((w) => `${w.field} ${MATCH_TEXT[w.match]} ${w.value}`).join(' · ');
 
 /** A field pattern ("rules[*].score_threshold") against a field ("rules[2].score_threshold"). */
 function fieldRe(pattern: string): RegExp {
   const esc = pattern.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${esc.split('\\[\\*\\]').join('\\[\\d+\\]')}$`, 'i');
+  // Each [*] is any list position, captured so conditions on one list can be held to the same entry.
+  return new RegExp(`^${esc.split('\\[\\*\\]').join('\\[(\\d+)\\]')}$`, 'i');
 }
+/** What a [*] field belongs to: the list before its first [*] ("action_parameters.overrides.rules"). */
+const listOf = (field: string) => (field.includes('[*]') ? field.slice(0, field.indexOf('[*]')).toLowerCase() : null);
 
 /** The rules of one phase in a zone: position → field → values. */
 function rulesOf(v: Map<string, { values: string[] }>, phase: string): Map<string, Map<string, string[]>> {
@@ -603,11 +617,24 @@ function checkRules(c: RuleCheck, v: Map<string, { values: string[] }>): { hits:
   let best: { n: string; met: number; miss: string } | null = null;
   for (const [n, fields] of [...rules].sort((x, y) => Number(x[0]) - Number(y[0]))) {
     let met = 0, miss = '';
+    // Conditions on the same list ([*]) must hold for one entry of it: the positions where each one matched.
+    const at = new Map<string, Set<string> | null>();
     for (const w of c.when) {
       const re = fieldRe(w.field);
-      const vals = [...fields].filter(([f]) => re.test(f)).flatMap(([, x]) => x);
-      if (vals.some((x) => valueMatches(x, w.match, w.value))) met++;
-      else if (!miss) miss = vals.length ? `${w.field} is ${vals.slice(0, 3).join(', ')}` : `no ${w.field}`;
+      const found = [...fields].map(([f, x]) => ({ m: re.exec(f), x })).filter((y) => y.m);
+      // A rule without "enabled" is enabled (Cloudflare's default).
+      const vals = found.length || w.field.toLowerCase() !== 'enabled' ? found.flatMap((y) => y.x) : ['true'];
+      const where = new Set(found.filter((y) => y.x.some((x) => valueMatches(x, w.match, w.value))).map((y) => y.m![1] ?? ''));
+      const list = listOf(w.field);
+      let ok = vals.some((x) => valueMatches(x, w.match, w.value));
+      if (ok && list) {
+        const before = at.get(list);
+        const both = before ? new Set([...where].filter((p) => before.has(p))) : where;
+        if (before && !both.size) ok = false;
+        at.set(list, both.size ? both : before ?? where);
+      }
+      if (ok) met++;
+      else if (!miss) miss = vals.length ? (list && at.has(list) ? `${w.field} is not in the same ${list} entry` : `${w.field} is ${vals.slice(0, 3).join(', ')}`) : `no ${w.field}`;
     }
     const name = fields.get('description')?.[0] ? `rule ${n} “${fields.get('description')![0]}”` : `rule ${n}`;
     if (met === c.when.length) hits.push(name);
@@ -628,7 +655,8 @@ export function evaluate(items: TemplateItem[], rows: StoredRow[], zone: string)
       else if (!r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: 'present', actual: r.closest ? [r.closest] : [r.rules ? 'no rule meets it' : `no ${t.check.phase} rules stored`], problem: r.rules ? 'different' : 'missing' });
       continue;
     }
-    const actual = v.get(t.item)?.values ?? [];
+    // "setting:security_header#hsts_preload": one of several checks of the same stored item.
+    const actual = v.get(t.item.split('#')[0])?.values ?? [];
     let problem: Gap['problem'] | null = null;
     if (t.match === 'absent') problem = actual.length ? 'unexpected' : null;
     else if (!actual.length) problem = 'missing';

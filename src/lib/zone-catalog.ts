@@ -7,7 +7,7 @@
 
 /** Sections, in the order the explorer (page, CSV and JSON) shows them. */
 export type ZoneGroup = 'zone' | 'dns' | 'email' | 'ssl' | 'security_rules' | 'security' | 'speed' | 'cache' | 'cache_rules' | 'cdn_rules' | 'network'
-  | 'traffic' | 'workers' | 'api_shield' | 'zero_trust' | 'logs' | 'other';
+  | 'traffic' | 'workers' | 'api_shield' | 'zero_trust' | 'logs' | 'account' | 'other';
 
 export const ZONE_GROUPS: { key: ZoneGroup; label: string }[] = [
   { key: 'zone', label: 'Zone settings' },
@@ -27,6 +27,7 @@ export const ZONE_GROUPS: { key: ZoneGroup; label: string }[] = [
   { key: 'api_shield', label: 'API Shield' },
   { key: 'zero_trust', label: 'Zone-level Zero Trust' },
   { key: 'logs', label: 'Logs & observability' },
+  { key: 'account', label: 'Account-level (applies to this zone)' },
   { key: 'other', label: 'Other' },
 ];
 
@@ -38,15 +39,24 @@ export interface ZoneEndpoint {
   group: ZoneGroup;
   /** Page size for list endpoints (the documented maximum, or a safe size). */
   perPage?: number;
+  /** Not under /zones/{zone_id}: the full path, with {zone_id} and {account_id} filled in (an account resource the zone uses). */
+  url?: string;
+  /** Each item of the list is read again at this path ({id} is the item's id), e.g. a list's items; at most `max` items. */
+  each?: { path: string; label: string; perPage?: number; max: number };
 }
 
 const e = (group: ZoneGroup, path: string, label: string, perPage?: number): ZoneEndpoint =>
   ({ key: path ? path.slice(1).replace(/[/-]/g, '_') : 'zone', path, label, group, ...(perPage ? { perPage } : {}) });
+/** An account (or global) resource the zone uses, read at `url`. */
+const a = (url: string, label: string, perPage?: number, each?: ZoneEndpoint['each']): ZoneEndpoint =>
+  ({ key: `account_${url.replace('/accounts/{account_id}', '').replace(/[{}]/g, '').replace(/^\//, '').replace(/[/?=-]/g, '_')}`, path: url, url, label, group: 'account', ...(perPage ? { perPage } : {}), ...(each ? { each } : {}) });
 
 export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('zone', '', 'Zone details'),
   e('zone', '/subscription', 'Subscription'),
   e('zone', '/hold', 'Zone hold'),
+  e('zone', '/entitlements', 'Zone entitlements'),
+  e('zone', '/environments', 'Zone environments (versioning)'),
 
   e('dns', '/dns_records', 'DNS records', 5000),
   e('dns', '/dns_settings', 'DNS settings'),
@@ -54,12 +64,16 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('dns', '/dns_records/usage', 'DNS record usage'),
   e('dns', '/secondary_dns/incoming', 'Secondary DNS (incoming)'),
   e('dns', '/secondary_dns/outgoing', 'Secondary DNS (outgoing)'),
+  e('dns', '/secondary_dns/outgoing/status', 'Outgoing zone transfer status'),
+  e('dns', '/dnssec/zsk', 'DNSSEC zone signing keys'),
+  e('dns', '/dns_records/scan/review', 'DNS scan: records pending review'),
 
   e('email', '/email/routing', 'Email Routing'),
   e('email', '/email/routing/dns', 'Email Routing DNS'),
   e('email', '/email/routing/rules', 'Email Routing rules', 50),
   e('email', '/email/routing/rules/catch_all', 'Email Routing catch-all rule'),
   e('email', '/email/auth/dmarc-reports', 'DMARC reports'),
+  e('email', '/email/sending/subdomains', 'Email Sending subdomains'),
 
   e('ssl', '/ssl/universal/settings', 'Universal SSL'),
   e('ssl', '/ssl/certificate_packs', 'Edge certificates (certificate packs)', 50),
@@ -83,6 +97,10 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('ssl', '/certificate_authorities/hostname_associations', 'mTLS hostname associations'),
   e('ssl', '/ct/alerting', 'Certificate Transparency alerting'),
   e('ssl', '/dcv_delegation/uuid', 'DCV delegation id'),
+  e('ssl', '/hostnames/settings/min_tls_version', 'Per-hostname minimum TLS version'),
+  e('ssl', '/hostnames/settings/ciphers', 'Per-hostname cipher suites'),
+  e('ssl', '/hostnames/settings/http2', 'Per-hostname HTTP/2'),
+  e('ssl', '/custom_csrs', 'Custom CSRs', 50),
 
   e('security_rules', '/firewall/access_rules/rules', 'IP Access rules', 1000),
   e('security_rules', '/firewall/ua_rules', 'User Agent blocking', 1000),
@@ -104,11 +122,19 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('security', '/ai-audit/robots', 'AI audit robots.txt rules'),
   e('security', '/security-center/securitytxt', 'security.txt'),
   e('security', '/security-center/insights', 'Security Center insights', 1000),
+  e('security', '/security-center/insights/scans', 'Security Center recent scans'),
+  e('security', '/bot_management/feedback', 'Bot Management feedback reports'),
+  e('security', '/firewall/payload_logging/key', 'WAF payload logging key'),
+  e('security', '/settings/csam_scanner_third_party', 'CSAM Scanning Tool'),
 
   e('speed', '/settings/fonts', 'Cloudflare Fonts'),
   e('speed', '/settings/speed_brain', 'Speed Brain'),
   e('speed', '/settings/rum', 'Web Analytics (RUM)'),
   e('speed', '/images/v1/flows', 'Image transformation flows'),
+  e('speed', '/settings/binary_ast', 'Binary AST'),
+  e('speed', '/settings/transformations_config', 'Image transformations configuration'),
+  e('speed', '/settings/transformations_c2pa', 'Image transformations C2PA'),
+  e('speed', '/speed_api/pages', 'Observatory tested pages'),
 
   e('cache', '/argo/tiered_caching', 'Tiered caching'),
   e('cache', '/cache/tiered_cache_smart_topology_enable', 'Smart Tiered Cache'),
@@ -117,6 +143,8 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('cache', '/cache/variants', 'Cache variants'),
   e('cache', '/origin/cloud_regions', 'Origin cloud regions', 100),
   e('cache', '/smart_shield', 'Smart Shield'),
+  e('cache', '/smart_shield/healthchecks', 'Smart Shield health checks', 1000),
+  e('cache', '/cache/cache_reserve_clear', 'Cache Reserve clear status'),
 
   e('cdn_rules', '/pagerules', 'Page Rules'),
   e('cdn_rules', '/managed_headers', 'Managed Transforms'),
@@ -128,6 +156,7 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('cdn_rules', '/custom_pages/assets', 'Custom error page assets', 200),
 
   e('network', '/argo/smart_routing', 'Argo Smart Routing'),
+  e('network', '/settings/ohttp-gateway', 'Oblivious HTTP gateway'),
 
   e('traffic', '/load_balancers', 'Load balancers'),
   e('traffic', '/healthchecks', 'Health checks', 1000),
@@ -139,6 +168,8 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
 
   e('workers', '/workers/routes', 'Worker routes'),
   e('workers', '/settings/zaraz/config', 'Zaraz configuration'),
+  e('workers', '/settings/zaraz/workflow', 'Zaraz workflow'),
+  e('workers', '/settings/google-tag-gateway/config', 'Google tag gateway'),
 
   e('api_shield', '/api_gateway/configuration', 'Session identifiers'),
   e('api_shield', '/api_gateway/operations', 'Endpoints (operations)', 50),
@@ -148,6 +179,8 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('api_shield', '/schema_validation/schemas', 'Uploaded schemas', 50),
   e('api_shield', '/token_validation/config', 'Token validation configurations', 50),
   e('api_shield', '/token_validation/rules', 'Token validation rules', 50),
+  e('api_shield', '/api_gateway/discovery/operations', 'API Discovery: discovered endpoints', 50),
+  e('api_shield', '/schema_validation/schemas/hosts', 'Hosts covered by schemas', 50),
 
   e('zero_trust', '/access/apps', 'Access applications'),
   e('zero_trust', '/access/groups', 'Access groups'),
@@ -164,9 +197,35 @@ export const ZONE_ENDPOINTS: ZoneEndpoint[] = [
   e('logs', '/logs/explorer/datasets', 'Log Explorer datasets'),
   e('logs', '/observability/tracing/settings', 'Tracing settings'),
   e('logs', '/observability/tracing/rules', 'Tracing rules'),
+  e('logs', '/logs/explorer/datasets/available', 'Log Explorer available datasets'),
+
+  // Account resources the zone's traffic depends on (read with the same token).
+  a('/certificates?zone_id={zone_id}', 'Origin CA certificates', 50),
+  a('/accounts/{account_id}/rules/lists', 'Lists (IP, ASN, hostname, redirect)', undefined, { path: '/accounts/{account_id}/rules/lists/{id}/items', label: 'List items', perPage: 500, max: 50 }),
+  a('/accounts/{account_id}/rulesets/phases/http_request_redirect/entrypoint', 'Bulk Redirects (account)'),
+  a('/accounts/{account_id}/rulesets/phases/http_request_firewall_custom/entrypoint', 'Account WAF custom rulesets'),
+  a('/accounts/{account_id}/rulesets/phases/http_request_firewall_managed/entrypoint', 'Account WAF managed rulesets'),
+  a('/accounts/{account_id}/rulesets/phases/http_ratelimit/entrypoint', 'Account rate limiting rulesets'),
+  a('/accounts/{account_id}/rulesets/phases/ddos_l7/entrypoint', 'Account HTTP DDoS overrides'),
+  a('/accounts/{account_id}/rulesets/phases/ddos_l4/entrypoint', 'Account network-layer DDoS overrides'),
+  a('/accounts/{account_id}/rulesets', 'Account rulesets', 50),
+  a('/accounts/{account_id}/challenges/widgets', 'Turnstile widgets', 1000),
+  a('/accounts/{account_id}/custom_ns', 'Account custom nameservers'),
+  a('/accounts/{account_id}/dns_settings', 'Account DNS settings'),
+  a('/accounts/{account_id}/load_balancers/pools', 'Load balancer pools'),
+  a('/accounts/{account_id}/load_balancers/monitors', 'Load balancer monitors'),
+  a('/accounts/{account_id}/workers/domains?zone_id={zone_id}', 'Workers custom domains on this zone'),
+  a('/accounts/{account_id}/cfd_tunnel', 'Cloudflare Tunnels', 1000),
+  a('/accounts/{account_id}/mtls_certificates', 'mTLS certificates (account)'),
+  a('/accounts/{account_id}/email/routing/addresses', 'Email Routing destination addresses', 50),
+  a('/accounts/{account_id}/custom_pages', 'Custom error pages (account)'),
+  a('/accounts/{account_id}/secondary_dns/tsigs', 'Secondary DNS TSIG keys'),
+  a('/accounts/{account_id}/secondary_dns/peers', 'Secondary DNS peers'),
+  a('/accounts/{account_id}/secondary_dns/acls', 'Secondary DNS ACLs'),
 
   e('other', '/rulesets', 'All rulesets (including managed)', 50),
   e('other', '/pay-per-crawl/configuration', 'Pay per crawl'),
+  e('other', '/pay-per-use/configuration', 'Pay per use'),
   e('other', '/monetization/rules', 'Monetization rules'),
   e('other', '/devices/policy/certificates', 'Device certificate provisioning'),
 ];
@@ -188,6 +247,16 @@ export const SETTING_IDS = [
 ];
 
 /** Settings section of each setting, as the dashboard places them. */
+/**
+ * Cloudflare's default cipher suites (the "Legacy (default)" set), shown when the ciphers setting is an empty
+ * list: developers.cloudflare.com/ssl/edge-certificates/additional-options/cipher-suites/supported-cipher-suites/
+ */
+export const DEFAULT_CIPHERS: { protocol: string; suites: string[] }[] = [
+  { protocol: 'TLS 1.3 (when TLS 1.3 is on; not configurable)', suites: ['AEAD-AES128-GCM-SHA256', 'AEAD-AES256-GCM-SHA384', 'AEAD-CHACHA20-POLY1305-SHA256'] },
+  { protocol: 'TLS 1.2 and later', suites: ['ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-CHACHA20-POLY1305', 'ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-RSA-CHACHA20-POLY1305', 'ECDHE-ECDSA-AES256-GCM-SHA384', 'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-AES128-SHA256', 'ECDHE-RSA-AES128-SHA256', 'ECDHE-ECDSA-AES256-SHA384', 'ECDHE-RSA-AES256-SHA384', 'AES128-GCM-SHA256', 'AES128-SHA256', 'AES256-GCM-SHA384', 'AES256-SHA256'] },
+  { protocol: 'TLS 1.0 and later', suites: ['ECDHE-ECDSA-AES128-SHA', 'ECDHE-RSA-AES128-SHA', 'AES128-SHA', 'ECDHE-RSA-AES256-SHA', 'AES256-SHA', 'DES-CBC3-SHA'] },
+];
+
 export type SettingGroup = 'zone' | 'ssl' | 'security' | 'speed' | 'cache' | 'network';
 const SETTING_SECTIONS: Record<SettingGroup, string[]> = {
   zone: ['content_converter', 'redirects_for_ai_training', 'search_for_agents', 'webmcp_enabled', 'webmcp_mcp_url', 'webmcp_packs'],

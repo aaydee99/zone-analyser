@@ -130,8 +130,9 @@ export async function readZoneList(): Promise<ZoneList> {
 // ── One zone, in full ───────────────────────────────────────────────────────
 
 /** Reads one endpoint, following pages (page numbers or a cursor) up to MAX_ITEMS. */
-async function readSection(token: string, zoneId: string, ep: ZoneEndpoint): Promise<ZoneSection> {
-  const base = `/zones/${zoneId}${ep.path}`;
+async function readSection(token: string, zoneId: string, ep: ZoneEndpoint, accountId = ''): Promise<ZoneSection> {
+  // An account resource the zone uses has its own path ({zone_id} and {account_id} filled in).
+  const base = ep.url ? ep.url.replace('{zone_id}', encodeURIComponent(zoneId)).replace('{account_id}', encodeURIComponent(accountId)) : `/zones/${zoneId}${ep.path}`;
   const out: ZoneSection = { key: ep.key, label: ep.label, group: ep.group, path: ep.path || '/', status: 'ok', http: null };
   let items: unknown[] | null = null;
   let page = 1;
@@ -141,7 +142,7 @@ async function readSection(token: string, zoneId: string, ep: ZoneEndpoint): Pro
     if (ep.perPage) q.set('per_page', String(ep.perPage));
     if (page > 1) q.set('page', String(page));
     if (cursor) q.set('cursor', cursor);
-    const r = await get(token, `${base}${q.size ? `?${q}` : ''}`);
+    const r = await get(token, `${base}${q.size ? `${base.includes('?') ? '&' : '?'}${q}` : ''}`);
     out.http = r.status;
     if (r.status < 200 || r.status >= 300 || r.body?.success === false || !r.body) {
       if (items?.length) { out.truncated = true; break; } // later page failed: keep what was read
@@ -261,11 +262,19 @@ async function readGroup(zoneId: string, group: ZoneGroup, fresh: boolean): Prom
   const g = READ_GROUPS.find((x) => x.key === group)!;
   const phases = RULE_PHASES.filter((p) => p.area === group);
   const [sections, settings, rules, names] = await Promise.all([
-    inParallel(ZONE_ENDPOINTS.filter((e) => e.group === group), PARALLEL, (ep) => readSection(token, zoneId, ep)),
+    inParallel(ZONE_ENDPOINTS.filter((e) => e.group === group), PARALLEL, (ep) => readSection(token, zoneId, ep, zone.accountId)),
     SETTING_IDS.some((id) => SETTING_GROUP[id] === group) ? readSettings(token, zoneId, group as SettingGroup) : null,
     inParallel(phases, PARALLEL, (p) => readPhase(token, zoneId, p)),
     phases.length ? rulesetNames(zoneId, fresh) : {},
   ]);
+  // Lists whose items are read one by one (an account's lists and their entries), each item a section of its own.
+  for (const ep of ZONE_ENDPOINTS.filter((e) => e.group === group && e.each)) {
+    const parent = sections.find((x) => x.key === ep.key);
+    const list = Array.isArray(parent?.data) ? (parent!.data as Record<string, unknown>[]).filter((x) => typeof x?.id === 'string').slice(0, ep.each!.max) : [];
+    const each = ep.each!;
+    const items = await inParallel(list, PARALLEL, (x) => readSection(token, zoneId, { key: `${ep.key}:${String(x.id)}`, label: `${each.label}: ${String(x.name ?? x.id)}`, group, path: each.path.replace('{id}', String(x.id)), url: each.path.replace('{id}', encodeURIComponent(String(x.id))), ...(each.perPage ? { perPage: each.perPage } : {}) }, zone.accountId));
+    sections.splice(sections.indexOf(parent!) + 1, 0, ...items);
+  }
   // Settings come first in a section — except Zone settings, which opens with the zone's details.
   if (settings) { if (group === 'zone') sections.push(settings); else sections.unshift(settings); }
   return { zoneId, zoneName: zone.name, group, label: g.label, generatedAt: new Date().toISOString(), credentialName: credential, sections, rules, rulesetNames: names };

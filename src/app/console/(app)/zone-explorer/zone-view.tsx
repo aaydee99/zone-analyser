@@ -4,7 +4,7 @@ import { compactNum } from '@/lib/num';
 import { isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronRight, Download, FileJson, Globe, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { fmtDate } from '@/lib/client';
-import type { ZoneGroupReport, ZoneRulePhase, ZoneSection, ZoneSummary } from '@/lib/zone-catalog';
+import { DEFAULT_CIPHERS, type ZoneGroupReport, type ZoneRulePhase, type ZoneSection, type ZoneSummary } from '@/lib/zone-catalog';
 import { MANAGED_RULESETS } from '@/lib/traffic-types';
 import { deployOf, tuningLines, tuningOf } from '@/lib/waf-labels';
 import { actionDetail, certificatesOf, daysLeft, isExpired, isObj, ruleScope, rulesByHost, text, type CertRow, type RuleScope, type ScopedRule } from '@/lib/zone-format';
@@ -19,50 +19,91 @@ const ROWS = 300;
 /** Columns worth showing first for a list of objects. */
 const PREFERRED = ['name', 'description', 'hostname', 'type', 'pattern', 'expression', 'action', 'mode', 'status', 'enabled', 'paused', 'value', 'content', 'priority', 'id'];
 
+/** Every field of an object as path → value (nested objects flattened: "a.b", lists of objects "a[0].b"). */
+function fields(v: unknown, path = '', out: [string, unknown][] = []): [string, unknown][] {
+  if (Array.isArray(v) && v.some(isObj)) { v.forEach((x, i) => fields(x, `${path}[${i}]`, out)); return out; }
+  if (isObj(v) && Object.keys(v).length) { for (const [k, x] of Object.entries(v)) fields(x, path ? `${path}.${k}` : k, out); return out; }
+  out.push([path || 'value', v]);
+  return out;
+}
+
+/** A setting's value in words: Cloudflare answers an empty list for ciphers when the zone uses its default cipher suites. */
+function settingValue(id: unknown, v: unknown): unknown {
+  if (id === 'ciphers' && Array.isArray(v)) {
+    return v.length ? v.join(', ')
+      : [`Cloudflare default (Legacy): no suites chosen, so every suite below can be used, from the minimum TLS version up`, ...DEFAULT_CIPHERS.map((c) => `${c.protocol}: ${c.suites.join(', ')}`)].join('\n');
+  }
+  if (Array.isArray(v) && v.every((x) => typeof x !== 'object')) return v.length ? v.join(', ') : '(empty list)';
+  if (isObj(v)) return fields(v).map(([k, x]) => `${k}: ${text(x) || '—'}`).join('\n');
+  return v;
+}
+
 function Cell({ v }: { v: unknown }) {
   if (isValidElement(v)) return v;
   if (typeof v === 'boolean') return <Badge tone={v ? 'ok' : 'neutral'}>{v ? 'on' : 'off'}</Badge>;
   const s = text(v);
-  return <span className={cx('break-all', !s && 'text-faint')} title={s.length > 160 ? s : undefined}>{s.length > 160 ? `${s.slice(0, 160)}…` : s || '—'}</span>;
+  return <span className={cx('break-words whitespace-pre-wrap [overflow-wrap:anywhere]', !s && 'text-faint')}>{s || '—'}</span>;
 }
 
-function Table({ head, rows }: { head: string[]; rows: unknown[][] }) {
+/** Rows of a table; with `details`, each row opens every field of its object. */
+function Table({ head, rows, details }: { head: string[]; rows: unknown[][]; details?: Record<string, unknown>[] }) {
   const [all, setAll] = useState(false);
+  const [open, setOpen] = useState<Set<number>>(new Set());
   const shown = all ? rows : rows.slice(0, ROWS);
+  const flip = (i: number) => setOpen((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; });
+  const width = head.length + (details ? 1 : 0);
   return (
     <div className="overflow-x-auto rounded-lg border border-line">
       <table className="w-full min-w-[520px] text-left text-[12px]">
-        <thead className="bg-raised/50 text-muted"><tr>{head.map((h) => <th key={h} className="px-3 py-1.5 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+        <thead className="bg-raised/50 text-muted"><tr>{head.map((h) => <th key={h} className="px-3 py-1.5 font-medium whitespace-nowrap">{h}</th>)}{details && <th className="px-3 py-1.5 font-medium whitespace-nowrap">All fields</th>}</tr></thead>
         <tbody className="font-mono">
-          {shown.map((r, i) => <tr key={i} className="border-t border-line/50 align-top">{r.map((c, j) => <td key={j} className="px-3 py-1.5"><Cell v={c} /></td>)}</tr>)}
+          {shown.map((r, i) => {
+            const f = details ? fields(details[i]) : [];
+            return [
+              <tr key={i} className="border-t border-line/50 align-top">
+                {r.map((c, j) => <td key={j} className="max-w-[28rem] px-3 py-1.5"><Cell v={c} /></td>)}
+                {details && <td className="px-3 py-1.5 whitespace-nowrap"><button type="button" aria-expanded={open.has(i)} onClick={() => flip(i)} className="font-sans text-[11.5px] text-muted hover:text-ink">{open.has(i) ? 'Hide' : `Show all ${f.length.toLocaleString('en-US')}`}</button></td>}
+              </tr>,
+              details && open.has(i) && (
+                <tr key={`${i}-all`} className="bg-sunken/40">
+                  <td colSpan={width} className="px-3 py-2">
+                    <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[minmax(10rem,max-content)_minmax(0,1fr)]">
+                      {f.map(([k, v]) => <div key={k} className="contents"><dt className="text-muted break-all">{k}</dt><dd className="min-w-0"><Cell v={v} /></dd></div>)}
+                    </dl>
+                  </td>
+                </tr>
+              ),
+            ];
+          })}
         </tbody>
       </table>
       {rows.length > ROWS && (
         <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-line/50 px-3 py-1.5 text-left text-xs text-muted hover:text-ink">
-          {all ? 'Show fewer' : `Show all ${compactNum(rows.length)} rows`}
+          {all ? 'Show fewer' : `Show all ${rows.length.toLocaleString('en-US')} rows`}
         </button>
       )}
     </div>
   );
 }
 
-/** A readable view of one section: settings and DNS get their own tables; other lists and objects a generic one. */
+/** A readable view of one section: settings and DNS get their own tables; other lists and objects a generic one, each row opening all its fields. */
 function SectionBody({ s }: { s: ZoneSection }) {
   const d = s.data;
   if (s.key.startsWith('settings:') && Array.isArray(d)) {
-    return <Table head={['Setting', 'Value', 'Editable', 'Modified']} rows={(d as Record<string, unknown>[]).map((x) => [x.id, x.value, x.editable, x.modified_on ? fmtDate(String(x.modified_on)) : ''])} />;
+    return <Table head={['Setting', 'Value', 'Editable', 'Modified']} rows={(d as Record<string, unknown>[]).map((x) => [x.id, settingValue(x.id, x.value), x.editable, x.modified_on ? fmtDate(String(x.modified_on)) : ''])} />;
   }
   if (s.key === 'dns_records' && Array.isArray(d)) {
-    return <Table head={['Type', 'Name', 'Content', 'Proxied', 'TTL', 'Priority', 'Comment']} rows={(d as Record<string, unknown>[]).map((x) => [x.type, x.name, x.content, x.proxied, x.ttl === 1 ? 'auto' : x.ttl, x.priority, x.comment])} />;
+    const recs = d as Record<string, unknown>[];
+    return <Table head={['Type', 'Name', 'Content', 'Proxied', 'TTL', 'Priority', 'Comment']} rows={recs.map((x) => [x.type, x.name, x.content, x.proxied, x.ttl === 1 ? 'auto' : x.ttl, x.priority, x.comment])} details={recs} />;
   }
   if (Array.isArray(d)) {
     const objs = d.filter(isObj);
     if (objs.length !== d.length) return <Table head={['Value']} rows={d.map((x) => [x])} />;
     const keys = [...new Set(objs.flatMap((o) => Object.keys(o)))];
     const cols = [...PREFERRED.filter((k) => keys.includes(k)), ...keys.filter((k) => !PREFERRED.includes(k))].slice(0, 7);
-    return <Table head={cols} rows={objs.map((o) => cols.map((k) => o[k]))} />;
+    return <Table head={cols} rows={objs.map((o) => cols.map((k) => (isObj(o[k]) || Array.isArray(o[k]) ? settingValue('', o[k]) : o[k])))} details={keys.length > cols.length || objs.some((o) => Object.values(o).some((v) => isObj(v) || Array.isArray(v))) ? objs : undefined} />;
   }
-  if (isObj(d)) return <Table head={['Field', 'Value']} rows={Object.entries(d).map(([k, v]) => [k, v])} />;
+  if (isObj(d)) return <Table head={['Field', 'Value']} rows={fields(d).map(([k, v]) => [k, Array.isArray(v) ? settingValue('', v) : v])} />;
   return <p className="font-mono text-[12px] break-all text-ink-2">{text(d)}</p>;
 }
 
@@ -148,7 +189,7 @@ function RulePages({ pages, names, find, zone }: { pages: ZoneRulePhase[]; names
                     rows={rules.map((r) => {
                       const rs = rulesetCells(r, names);
                       return [p.rules.indexOf(r) + 1, rs?.name ?? (r.description || r.ref || r.id), <Scope key="s" s={ruleScope(r.expression)} zone={zone} />, r.expression, rs?.action ?? r.action, rs?.detail ?? actionDetail(r, names), r.enabled !== false];
-                    })} />
+                    })} details={rules} />
                   <p className="mt-1.5 text-xs text-faint">Ruleset {p.rulesetId}{p.version ? ` · version ${p.version}` : ''}{p.lastUpdated ? ` · updated ${fmtDate(p.lastUpdated)}` : ''}</p>
                 </>
               ) : (
