@@ -644,14 +644,15 @@ function checkRules(c: RuleCheck, v: Map<string, { values: string[] }>): { hits:
 }
 
 /** How a zone differs from a template (only what does not match). */
-export function evaluate(items: TemplateItem[], rows: StoredRow[], zone: string): Gap[] {
+/** `maxActual`: how many of an item's found values each gap keeps (all, for one zone's page). */
+export function evaluate(items: TemplateItem[], rows: StoredRow[], zone: string, maxActual = 5): Gap[] {
   const v = itemValues(rows, zone);
   const gaps: Gap[] = [];
   for (const t of items) {
     if (t.check) {
       const r = checkRules(t.check, v);
       const expected = checkText(t.check);
-      if (t.match === 'absent') { if (r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: t.match, actual: r.hits.slice(0, 5), problem: 'unexpected' }); }
+      if (t.match === 'absent') { if (r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: t.match, actual: r.hits.slice(0, maxActual), problem: 'unexpected' }); }
       else if (!r.hits.length) gaps.push({ item: t.item, path: t.path, expected, match: 'present', actual: r.closest ? [r.closest] : [r.rules ? 'no rule meets it' : `no ${t.check.phase} rules stored`], problem: r.rules ? 'different' : 'missing' });
       continue;
     }
@@ -661,7 +662,7 @@ export function evaluate(items: TemplateItem[], rows: StoredRow[], zone: string)
     if (t.match === 'absent') problem = actual.length ? 'unexpected' : null;
     else if (!actual.length) problem = 'missing';
     else if (t.match !== 'present' && !actual.some((x) => valueMatches(x, t.match, t.expected))) problem = 'different';
-    if (problem) gaps.push({ item: t.item, path: t.path, expected: t.expected, match: t.match, actual: actual.slice(0, 5), problem });
+    if (problem) gaps.push({ item: t.item, path: t.path, expected: t.expected, match: t.match, actual: actual.slice(0, maxActual), problem });
   }
   return gaps;
 }

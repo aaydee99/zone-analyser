@@ -166,7 +166,8 @@ export const CLOUDFLARE_LIBRARY: AnyEntry[] = [
   ...LIBRARY.filter((e) => EXTRA[e.id]).map((e) => ({ ...e, group: EXTRA[e.id], why: `${e.why} (Console check; not from one docs page.)` })),
 ];
 
+/** One best-practice library: Cloudflare's documented checks, then the security policy (POL / RL) rules, each in its own groups. */
 export const LIBRARIES: Library[] = [
-  { id: 'cloudflare', name: 'Cloudflare best practices', description: 'Each check comes from Cloudflare’s documentation (the link says which page): SSL/TLS and HSTS, security settings, managed rules and OWASP tuning, attack score and leaked credentials, bots, rate limiting, DDoS, cache, protocols, security headers and DNS. A few console checks the docs have no page for are marked.', entries: CLOUDFLARE_LIBRARY },
-  { id: 'policy', name: 'Security policy (POL / RL)', description: 'The POL custom rules and RL rate limiting rules, each split into checks: the rule exists, its action, API exclusion, threshold, counting, origin-only, throttle. Host conditions are left out.', entries: POLICY_LIBRARY },
+  { id: 'best-practices', name: 'Best practices', description: 'Cloudflare’s documented best practices (each links to its docs page: SSL/TLS and HSTS, security settings, managed rules and OWASP, attack score and leaked credentials, bots, rate limiting, DDoS, cache, protocols, headers, DNS), and the security policy rules: the POL custom rules and RL rate limiting rules, each split into checks (exists, action, API exclusion, threshold, counting, origin only, throttle). Host conditions are left out.',
+    entries: [...CLOUDFLARE_LIBRARY, ...POLICY_LIBRARY.map((e) => ({ ...e, group: `Security policy · ${e.group}` }))] },
 ];

@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, Play, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { api, fmtDate, relTime } from '@/lib/client';
@@ -101,7 +102,7 @@ function AddItems({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: Templa
     <Card>
       <SectionHeader title="Add items" description="Pick best-practice items or define your own: zone settings, custom rules, rate limiting, managed rules and OWASP, cache rules, headers, redirects, or any stored item. They are checked against every zone; nothing is written to Cloudflare. Save to keep them." />
       <div className="flex gap-1 border-b border-line px-5" role="tablist">
-        {([['library', 'Best-practice library'], ['custom', 'Custom item']] as const).map(([k, label]) => (
+        {([['library', 'Best practices'], ['custom', 'Custom item']] as const).map(([k, label]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
             className={cx('-mb-px border-b-2 px-3 py-2 text-[13px] font-medium', tab === k ? 'border-signal text-ink' : 'border-transparent text-muted hover:text-ink')}>{label}</button>
         ))}
@@ -125,14 +126,14 @@ function Library({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: Templat
   const add = () => { onAdd(LIBRARIES.flatMap((l) => l.entries).filter((e) => picked.includes(e.id)).map((e) => e.item)); setPicked([]); };
   return (
     <div className="space-y-4 px-5 py-4">
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Library">
+      {LIBRARIES.length > 1 && <div className="flex flex-wrap gap-2" role="group" aria-label="Library">
         {LIBRARIES.map((l) => (
           <button key={l.id} type="button" aria-pressed={l.id === libId} onClick={() => setLibId(l.id)}
             className={cx('rounded-lg border px-3 py-1.5 text-[12.5px]', l.id === libId ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink')}>
             {l.name} <span className="text-faint">({l.entries.length.toLocaleString('en-US')})</span>
           </button>
         ))}
-      </div>
+      </div>}
       <p className="text-[12.5px] text-muted">{lib.description}</p>
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-[14rem] flex-1"><Field label="Search the library" optional><input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="POL-1010, bot score, OWASP, TLS, /login" /></Field></div>
@@ -159,11 +160,11 @@ function Library({ items, onAdd }: { items: TemplateItem[]; onAdd: (add: Templat
                     <li key={e.id} className="flex gap-3 px-3 py-2.5">
                       <span className="mt-0.5 shrink-0"><Checkbox label={<span className="sr-only">{e.title}</span>} disabled={added}
                         checked={added || picked.includes(e.id)} onChange={(v) => toggle([e.id], v)} /></span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-medium break-words text-ink">{e.title}</span>{added && <Badge tone="ok">added</Badge>}</div>
+                      <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                        <div className="flex flex-wrap items-center gap-2"><span className="min-w-0 text-[13px] font-medium break-words text-ink">{e.title}</span>{added && <Badge tone="ok">added</Badge>}</div>
                         <p className="text-[12px] text-muted">{e.why}{e.source && <> <a href={e.source} target="_blank" rel="noreferrer" className="text-signal hover:underline">Cloudflare docs</a></>}</p>
                         <div className="mt-1"><ItemExpected t={e.item} /></div>
-                        {!e.item.check && <div className="mt-0.5 font-mono text-[11px] text-faint">{e.item.item}</div>}
+                        {!e.item.check && <div className="mt-0.5 font-mono text-[11px] break-all text-faint">{e.item.item}</div>}
                       </div>
                     </li>
                   );
@@ -362,7 +363,7 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
             <li key={z.zoneId} className="border-b border-line/60 last:border-0">
               <button type="button" aria-expanded={open === z.zoneId} onClick={() => setOpen(open === z.zoneId ? null : z.zoneId)}
                 className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left text-[13px] hover:bg-raised/40">
-                <span className="font-medium">{z.zoneName}</span>
+                <span className="min-w-0"><span className="font-medium">{z.zoneName}</span> <span className="font-mono text-[11px] text-faint">{z.zoneId}</span></span>
                 <span className="flex items-center gap-2">
                   {z.gaps ? <Badge tone="warn">{whole.format(z.gaps)} of {whole.format(z.checked)} differ</Badge> : <Badge tone="ok">matches</Badge>}
                   <ChevronDown className={cx('size-4 text-faint transition-transform', open === z.zoneId && 'rotate-180')} />
@@ -384,7 +385,7 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
                       </tbody>
                     </table>
                   )}
-                  {z.gaps > z.details.length && <p className="mt-1 text-xs text-muted">and {whole.format(z.gaps - z.details.length)} more</p>}
+                  <p className="mt-2 text-xs"><Link href={`/console/compare/templates/${id}/zones/${z.zoneId}`} className="font-medium text-signal hover:underline">Open all {z.gaps.toLocaleString('en-US')} differences of {z.zoneName}</Link>{z.gaps > z.details.length && <span className="text-muted"> (the first {z.details.length.toLocaleString('en-US')} are shown here)</span>}</p>
                 </div>
               )}
             </li>

@@ -183,7 +183,7 @@ export async function templateZone(id: string, zoneId: string): Promise<{ templa
   const z = await zoneInfo(zoneId);
   // A rule check looks at every rule of its phase, wherever it sits: those need all the zone's rows.
   const rows = (await rowsOf([zoneId], hasChecks(t.items) ? null : t.items.map((i) => i.item))).get(zoneId) ?? [];
-  return { template: { id: t.id, name: t.name }, zone: { id: zoneId, name: z.zoneName }, gaps: evaluate(t.items, rows, z.zoneName), checked: t.items.length };
+  return { template: { id: t.id, name: t.name }, zone: { id: zoneId, name: z.zoneName }, gaps: evaluate(t.items, rows, z.zoneName, Infinity), checked: t.items.length };
 }
 
 // Template results across every zone, computed in the background on this server.
