@@ -328,7 +328,12 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
     if (zone) u.set('zone', zone.id);
     if (filters.tag) u.set('tag', filters.tag);
     if (onlyGaps) u.set('gaps', '1');
-    try { setData(await api<Answer>(`/api/compare/templates/${id}/gaps?${u}`)); setError(''); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+    try {
+      const got = await api<Answer>(`/api/compare/templates/${id}/gaps?${u}`);
+      setData(got); setError('');
+      // One zone chosen: its differences open at once.
+      if (got.summary.scope === 'zone' && got.zones[0]) setOpen(got.zones[0].zoneId);
+    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
   }, [id, offset, filters, onlyGaps, account, zone]);
   useEffect(() => { void load(); }, [load, version]);
 
@@ -339,8 +344,9 @@ function Gaps({ id, items, version, manage }: { id: string; items: TemplateItem[
   const job = data?.computing;
   return (
     <Card>
-      <SectionHeader title={s ? `${whole.format(s.withGaps)} of ${whole.format(s.zones)} zones have gaps` : 'Gaps per zone'}
-        description={s?.computedAt ? `Computed ${relTime(s.computedAt)} from stored data${s.stale ? ' — older than the template or the index: being computed again' : ''}.` : 'Not computed yet.'}
+      <SectionHeader title={!s ? 'Gaps per zone' : s.scope === 'zone' ? (data?.zones[0] ? `${data.zones[0].zoneName}: ${data.zones[0].gaps ? `${data.zones[0].gaps.toLocaleString('en-US')} of ${data.zones[0].checked.toLocaleString('en-US')} items differ` : 'matches every item'}` : 'That zone is not in this account')
+          : `${s.withGaps.toLocaleString('en-US')} of ${s.zones.toLocaleString('en-US')} zones${account ? ` of ${account.name}` : ''} have gaps`}
+        description={s?.scope === 'zone' ? 'Only this zone, compared now with the template from its stored configuration.' : s?.computedAt ? `Computed ${relTime(s.computedAt)} from stored data${s.stale ? ' — older than the template or the index: being computed again' : ''}.` : 'Not computed yet.'}
         aside={<div className="flex items-center gap-2">
           {data && <span className="text-[12px] text-faint" title={fmtDate(data.generatedAt)}>As of {new Date(data.generatedAt).toLocaleTimeString()}</span>}
           <Button size="sm" variant="ghost" loading={loading} onClick={load} icon={<RefreshCw className="size-3.5" />}>Refresh</Button>

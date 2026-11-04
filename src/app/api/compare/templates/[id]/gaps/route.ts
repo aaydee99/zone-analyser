@@ -7,7 +7,7 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * A page of a template's gaps per zone, most first: ?offset=&limit= (up to 200) &account= &zone= &tag=<tag>,<tag>
- * &gaps=1 (only zones with gaps). Kept results; stale ones are computed again in the background.
+ * &gaps=1 (only zones with gaps). With &zone= that one zone is compared now (all its differences), within the account when one is given. Kept results; stale ones are computed again in the background.
  */
 export const GET = route<Ctx>(async (req, { params }) => {
   const u = new URL(req.url).searchParams;
@@ -16,12 +16,12 @@ export const GET = route<Ctx>(async (req, { params }) => {
   const zone = u.get('zone') ?? '';
   if (zone && !ID.test(zone)) throw new HttpError(400, 'Unknown zone');
   const tags = (u.get('tag') ?? '').split(',').map((t) => t.trim()).filter(Boolean).slice(0, 10);
-  let zoneIds: string[] | null = zone ? [zone] : null;
+  let zoneIds: string[] | null = null;
   if (tags.length) {
     const meta = await import('@/lib/zone-meta');
     const tagged = (await meta.zoneIdsMatching({ tags })) ?? new Set<string>();
-    zoneIds = zoneIds ? zoneIds.filter((z) => tagged.has(z)) : [...tagged];
+    zoneIds = [...tagged];
   }
-  const page = await templateGaps((await params).id, { offset: Number(u.get('offset')) || 0, limit: Number(u.get('limit')) || 50, accountId: account || undefined, zoneIds, onlyGaps: u.get('gaps') === '1' });
+  const page = await templateGaps((await params).id, { offset: Number(u.get('offset')) || 0, limit: Number(u.get('limit')) || 50, accountId: account || undefined, zoneId: zone || undefined, zoneIds, onlyGaps: u.get('gaps') === '1' });
   return { ...page, generatedAt: new Date().toISOString() };
 }, { perm: 'runs:read' });

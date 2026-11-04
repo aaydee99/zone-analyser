@@ -234,7 +234,8 @@ export interface GapRow { zoneId: string; zoneName: string; accountId: string | 
 export interface GapsPage {
   template: Omit<Template, 'items'> & { itemCount: number };
   zones: GapRow[]; total: number; offset: number; limit: number;
-  summary: { zones: number; withGaps: number; computedAt: string | null; stale: boolean };
+  /** `scope`: what the counts cover (every zone, one account, tagged zones, or the one zone chosen, compared now). */
+  summary: { zones: number; withGaps: number; computedAt: string | null; stale: boolean; scope?: 'all' | 'account' | 'tags' | 'zone' };
   computing: Compute | null;
 }
 
@@ -243,14 +244,17 @@ export interface GapsPage {
  * zone ids — a tag — and `onlyGaps`). Results older than the template or the index are computed
  * again in the background (the page says so); nothing kept yet starts that too.
  */
-export async function templateGaps(id: string, o: { offset?: number; limit?: number; accountId?: string; zoneIds?: string[] | null; onlyGaps?: boolean } = {}): Promise<GapsPage> {
+export async function templateGaps(id: string, o: { offset?: number; limit?: number; accountId?: string; zoneId?: string; zoneIds?: string[] | null; onlyGaps?: boolean } = {}): Promise<GapsPage> {
   const t = await getTemplate(id);
   const { offset, limit } = bounds(o);
+  if (o.zoneId) return oneZone(t, o.zoneId, o.accountId, o.zoneIds ?? null, offset, limit);
   const COLS = 'zone_id, zone_name, account_id, gaps, checked, details, computed_at';
   type R = { zone_id: string; zone_name: string; account_id: string | null; gaps: number; checked: number; details: Gap[]; computed_at: string };
   const toRow = (r: R): GapRow => ({ zoneId: r.zone_id, zoneName: r.zone_name, accountId: r.account_id, gaps: r.gaps, checked: r.checked, details: r.details ?? [], computedAt: r.computed_at });
   let zones: GapRow[];
   let total: number;
+  /** The counts within the filter (an account, or tagged zones), when there is one. */
+  let scoped: { zones: number; withGaps: number } | null = null;
   if (o.zoneIds) {
     // A tag can name thousands of zones: filtered here from the (small) result rows, details for the page only.
     const wanted = new Set(o.zoneIds);
@@ -258,13 +262,14 @@ export async function templateGaps(id: string, o: { offset?: number; limit?: num
     for (let from = 0; ; from += 1000) {
       let q = db().from('zone_template_results').select('zone_id, zone_name, account_id, gaps, checked, computed_at').eq('template_id', id);
       if (o.accountId) q = q.eq('account_id', o.accountId);
-      if (o.onlyGaps) q = q.gt('gaps', 0);
       const part = mustSearch(await q.order('gaps', { ascending: false }).order('zone_name').range(from, from + 999), 'Reading template results') as R[];
       all.push(...part.filter((r) => wanted.has(r.zone_id)));
       if (part.length < 1000) break;
     }
-    total = all.length;
-    const ids = page(all, offset, limit).map((r) => r.zone_id);
+    scoped = { zones: all.length, withGaps: all.filter((r) => r.gaps > 0).length };
+    const kept = o.onlyGaps ? all.filter((r) => r.gaps > 0) : all;
+    total = kept.length;
+    const ids = page(kept, offset, limit).map((r) => r.zone_id);
     const details = ids.length ? mustSearch(await db().from('zone_template_results').select(COLS).eq('template_id', id).in('zone_id', ids), 'Reading template results') as R[] : [];
     const byId = new Map(details.map((r) => [r.zone_id, r]));
     zones = ids.map((z) => toRow(byId.get(z)!)).filter((r) => r.zoneId);
@@ -279,12 +284,13 @@ export async function templateGaps(id: string, o: { offset?: number; limit?: num
   const head = async (gaps: boolean) => {
     let q = db().from('zone_template_results').select('zone_id', { count: 'exact', head: true }).eq('template_id', id);
     if (gaps) q = q.gt('gaps', 0);
+    if (o.accountId) q = q.eq('account_id', o.accountId);
     const r = await q;
     mustSearch(r, 'Counting template results');
     return r.count ?? 0;
   };
   const [count, withGaps, oldest, indexed] = await Promise.all([
-    head(false), head(true),
+    scoped ? scoped.zones : head(false), scoped ? scoped.withGaps : head(true),
     db().from('zone_template_results').select('computed_at').eq('template_id', id).order('computed_at').limit(1),
     db().from('zone_search_sources').select('indexed_at').order('indexed_at', { ascending: false }).limit(1),
   ]);
@@ -295,5 +301,19 @@ export async function templateGaps(id: string, o: { offset?: number; limit?: num
   // Recomputed at most every 10 minutes on its own (a busy index changes all the time).
   if (stale && (!job || (job.finishedAt && Date.parse(job.finishedAt) < Date.now() - 10 * 60_000)) && (!computedAt || !lastIndexed || computedAt < t.updatedAt || Date.parse(computedAt) < Date.now() - 10 * 60_000)) job = computeTemplate(id);
   const { items, ...meta } = t;
-  return { template: { ...meta, itemCount: items.length }, zones, total, offset, limit, summary: { zones: count, withGaps, computedAt, stale }, computing: job && !job.finishedAt ? job : job?.error ? job : null };
+  return { template: { ...meta, itemCount: items.length }, zones, total, offset, limit, summary: { zones: count, withGaps, computedAt, stale, scope: o.accountId ? 'account' : o.zoneIds ? 'tags' : 'all' }, computing: job && !job.finishedAt ? job : job?.error ? job : null };
+}
+
+/** One zone (of one account, when given): compared now from its stored configuration, every difference. */
+async function oneZone(t: Template, zoneId: string, accountId: string | undefined, tagged: string[] | null, offset: number, limit: number): Promise<GapsPage> {
+  const { items, ...meta } = t;
+  const base = { template: { ...meta, itemCount: items.length }, offset, limit, computing: null };
+  const z = await zoneInfo(zoneId);
+  if ((accountId && z.accountId && z.accountId !== accountId) || (tagged && !tagged.includes(zoneId))) {
+    return { ...base, zones: [], total: 0, summary: { zones: 0, withGaps: 0, computedAt: new Date().toISOString(), stale: false, scope: 'zone' } };
+  }
+  const r = await templateZone(t.id, zoneId);
+  const at = new Date().toISOString();
+  const row: GapRow = { zoneId, zoneName: z.zoneName, accountId: z.accountId, gaps: r.gaps.length, checked: r.checked, details: r.gaps, computedAt: at };
+  return { ...base, zones: [row], total: 1, summary: { zones: 1, withGaps: r.gaps.length ? 1 : 0, computedAt: at, stale: false, scope: 'zone' } };
 }
