@@ -105,7 +105,7 @@ Every variable the console, the worker (`scripts/worker.mjs`) and `backup.js` re
 |---|---|---|
 | `CF_API_TOKEN`, `CF_ACCOUNT_ID` | empty | Cloudflare API token and account id. |
 | `ZONE_STATUS_FILTER` | `all` | Only zones with this status. |
-| `BACKUP_REQUIRE_UPLOAD` | on under GitHub Actions, else off | `1` refuses to start without an R2 or S3 destination (on the worker the local copy disappears when the job ends); `0` never requires one. |
+| Uploads | — | A backup always runs. Only an upload you turn on needs its keys: `R2_SKIP_UPLOAD=false` fails without `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`, `AWS_SKIP_UPLOAD=false` without `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. With both off the backup stays in the local folder only (on GitHub Actions that folder is discarded with the job; a warning says so). `BACKUP_REQUIRE_UPLOAD` is no longer read. |
 | `ZONE_STATUS_EXCLUDE` | `moved` | Space-separated statuses to skip. |
 | `ZONE_NAME_FILTER` | `*` | Shell glob on the zone name. |
 | `ZONE_IDS` | empty (every zone) | Space- or comma-separated zone ids. |

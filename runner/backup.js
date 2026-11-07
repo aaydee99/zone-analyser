@@ -228,14 +228,11 @@ let AWS_REGION = envOr('AWS_REGION', '');
 const AWS_SKIP_UPLOAD = envOr('AWS_SKIP_UPLOAD', 'true');
 
 // ── Upload requirement ────────────────────────────────────────────────────────
-//   BACKUP_REQUIRE_UPLOAD  1/true — refuse to start unless R2 or AWS S3 upload
-//                          is enabled (the local copy will not survive the run).
-//                          0/false — never require it. Unset: required when
-//                          GITHUB_ACTIONS=true (the console worker, whose disk
-//                          is discarded with the job).
-const REQUIRE_UPLOAD = E.BACKUP_REQUIRE_UPLOAD
-  ? ['1', 'true', 'yes'].includes(E.BACKUP_REQUIRE_UPLOAD.toLowerCase())
-  : E.GITHUB_ACTIONS === 'true';
+//   None. A backup always runs. Only an upload that is turned on needs its keys:
+//   R2_SKIP_UPLOAD=false needs R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY, and
+//   AWS_SKIP_UPLOAD=false needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+//   With both uploads off the backup is kept only in the local folder (on GitHub
+//   Actions that folder goes with the job: a warning says so).
 
 // ╔═════════════════════════════════════════════════════════════════════════════╗
 // ║                      END OF CONFIGURATION                                  ║
@@ -473,13 +470,9 @@ function checkPrereqs() {
     logWarn('AWS_SKIP_UPLOAD=true — AWS S3 upload disabled');
   }
 
-  // A run whose local folder is discarded afterwards must upload somewhere,
-  // or it "succeeds" with nothing kept.
-  if (REQUIRE_UPLOAD && R2_SKIP_UPLOAD === 'true' && AWS_SKIP_UPLOAD === 'true') {
-    logError(`No upload destination configured, but this run requires one (${E.BACKUP_REQUIRE_UPLOAD
-      ? 'BACKUP_REQUIRE_UPLOAD is set' : 'running on GitHub Actions, where the local backup is discarded'})`);
-    logError('  Enable R2 or AWS S3 upload (R2_SKIP_UPLOAD=false / AWS_SKIP_UPLOAD=false), or set BACKUP_REQUIRE_UPLOAD=0');
-    fail++;
+  // No upload turned on: the backup still runs, kept in the local folder only.
+  if (R2_SKIP_UPLOAD === 'true' && AWS_SKIP_UPLOAD === 'true') {
+    logWarn(`No upload turned on — the backup is kept in the local folder only${E.GITHUB_ACTIONS === 'true' ? ' (on GitHub Actions that folder is discarded when the job ends)' : ''}`);
   }
 
   // Bucket names, prefixes and regions end up in URLs (API paths, the S3 host name):
