@@ -8,6 +8,7 @@ const TABS = [
   { href: '/console/investigate/ray', label: 'Ray ID lookup' },
   { href: '/console/investigate/trace', label: 'URL trace' },
   { href: '/console/investigate/waf', label: 'WAF false positives' },
+  { href: '/console/investigate/leaked', label: 'Leaked credentials' },
   { href: '/console/investigate/timeline', label: 'Zone timeline' },
 ];
 

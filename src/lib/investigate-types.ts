@@ -137,3 +137,53 @@ export interface TimelineReport {
   series: TimelineSeries[]; events: TimelineEvent[]; sources: TimelineSource[];
   generatedAt: string;
 }
+
+// ── Leaked credentials ──────────────────────────────────────────────────────
+
+export const LEAKED_WINDOWS = [24, 72, 168] as const;
+
+/** A custom or rate limiting rule that uses a leaked-credential field. */
+export interface LeakedRule {
+  phase: 'custom' | 'ratelimit'; id: string; description: string; enabled: boolean; action: string; expression: string;
+  /** The credential fields the expression uses (cf.waf.credential_check.*, cf.waf.auth_detected). */
+  fields: string[];
+  /** Rate limiting: requests per period (seconds). */
+  rate?: { requests: number; period: number };
+}
+export interface LeakedConfig {
+  /** Leaked credentials detection on the zone (GET /leaked-credential-checks); null when not read. */
+  enabled: boolean | null; enabledNote?: string;
+  /** Custom detection locations (Enterprise); null when not read. */
+  detections: { id: string; username: string; password: string }[] | null; detectionsNote?: string;
+  rules: LeakedRule[]; rulesNote?: string;
+  /** The managed transform that adds the Exposed-Credential-Check header to origin requests; null when not read. */
+  header: boolean | null;
+}
+export interface LeakedCount { result: string; count: number }
+export interface LeakedTraffic {
+  /** The analytics dimension that holds the result (httpRequestsAdaptiveGroups). */
+  field: string; since: string; until: string;
+  /** All requests in the window by check result (including clean and not checked). */
+  results: LeakedCount[];
+  /** Requests with a leaked result. */
+  leaked: number;
+  /** Leaked requests by result and edge status code. */
+  byStatus: (LeakedCount & { status: number })[];
+  /** Leaked requests by result and security action; null when the plan's analytics do not offer it. */
+  byAction: (LeakedCount & { action: string })[] | null;
+  paths: (LeakedCount & { host: string; path: string; method: string })[];
+  ips: { ip: string; asn: string; asnName: string; country: string; count: number }[];
+  hours: (LeakedCount & { hour: string })[];
+  note?: string;
+}
+export interface LeakedFinding { key: string; tone: 'bad' | 'warn' | 'info' | 'ok'; title: string; detail: string; fix?: string[] }
+export interface LeakedZone {
+  zoneId: string; zoneName: string; plan: string;
+  status: 'ok' | 'unavailable' | 'error'; message?: string;
+  config: LeakedConfig | null; traffic: LeakedTraffic | null; findings: LeakedFinding[];
+}
+export interface LeakedReport {
+  scope: { kind: 'zone' | 'account'; id: string; name: string };
+  hours: number; offset: number; limit: number; totalZones: number;
+  zones: LeakedZone[]; generatedAt: string;
+}

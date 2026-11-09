@@ -54,7 +54,7 @@ function pack(specs: Spec[], max: number): Spec[][] {
 }
 
 /** The window in parts of at most the plan's maxDuration, newest last, never older than the plan keeps. */
-function partsOf(hours: number, l: Limits, now = Date.now()) {
+export function partsOf(hours: number, l: Limits, now = Date.now()) {
   const end = now;
   const start = Math.max(end - hours * 3600_000, end - l.notOlderThan * 1000 + 60_000);
   const step = l.maxDuration * 1000;

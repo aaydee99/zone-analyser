@@ -274,7 +274,7 @@ The first super admin: on Vercel the setup token is printed in the function log 
 | Connect Cloudflare's own alerts (Monitoring › Cloudflare alerts) | | | | ✓ |
 | **Cache purge**, **roll back** a Worker or Pages deployment (hidden from other roles; the page answers 403) | | | ✓ (needs a super admin's approval) | ✓ |
 | **Approve or reject** admins' cache purges and rollbacks | | | | ✓ |
-| **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, timeline), **Security audit** (run and read), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
+| **Search**, **Compare**, **Investigate** (Ray ID, URL trace, WAF false positives, leaked credentials, timeline), **Security audit** (run and read), **Zone health**, **IP & ASN lists**, **Logpush** status, **Zone onboarding**, **Reports**: read-only | ✓ | ✓ | ✓ | ✓ |
 | **Zone tags**, owners and comparison templates: set and change (`zones:tag`) | | | ✓ | ✓ |
 | Live **Worker logs** (`workers:tail`) | ✓ | ✓ | ✓ | ✓ |
 | **API console** with the stored tokens (`cloudflare:query`); others see it locked in the menu and the page answers 403 | | | ✓ | ✓ |
