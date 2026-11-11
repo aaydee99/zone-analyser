@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeftRight, Download, RefreshCw } from 'lucide-react';
 import { api, fmtDate } from '@/lib/client';
-import { groupOf, whatOf } from '@/lib/zone-diff-groups';
+import { groupCounts, groupOf, whatOf } from '@/lib/zone-diff-groups';
 import type { ZoneDiffPage } from '@/lib/compare';
 import { Alert, Badge, Button, Card, EmptyState, Field, Loading, PageHeader, SectionHeader, SkeletonTable } from '@/components/ui';
 import { Pager, Values, ZonePicker } from '../parts';
@@ -51,6 +51,10 @@ function ZonesCompare() {
     return `/api/compare/zone-diff/report?${u}`;
   };
 
+  // From an older server (before types were added) the answer has no groups: count them from the rows shown.
+  const groups = data ? (Array.isArray(data.groups) ? data.groups : groupCounts(data.diffs ?? [])) : [];
+  const counts = data?.counts ?? { different: 0, onlyA: 0, onlyB: 0 };
+
   const compare = () => {
     if (!za || !zb) return;
     setOffset(0);
@@ -86,7 +90,7 @@ function ZonesCompare() {
             ))}
           </div>
           <div className="flex flex-wrap gap-2 border-b border-line px-5 py-3">
-            {data.groups.map((g) => (
+            {groups.map((g) => (
               <button key={g.key} type="button" aria-pressed={group === g.key} onClick={() => { setGroup(group === g.key ? '' : g.key); setOffset(0); }}
                 className={`rounded-lg border px-2.5 py-1 text-left text-[12.5px] ${group === g.key ? 'border-signal bg-signal/10 text-ink' : 'border-line text-muted hover:text-ink'}`}>
                 <span className="font-medium">{g.label}</span> <span className="tabular-nums">{whole.format(g.total)}</span>
@@ -97,8 +101,8 @@ function ZonesCompare() {
           <div className="grid gap-3 border-b border-line px-5 py-3 sm:grid-cols-2 md:max-w-xl">
             <Field label="Type">
               <select className="input" value={group} onChange={(e) => { setGroup(e.target.value); setOffset(0); }}>
-                <option value="">Everything ({whole.format(data.counts.different + data.counts.onlyA + data.counts.onlyB)})</option>
-                {data.groups.map((g) => <option key={g.key} value={g.key}>{g.label} ({whole.format(g.total)})</option>)}
+                <option value="">Everything ({whole.format(counts.different + counts.onlyA + counts.onlyB)})</option>
+                {groups.map((g) => <option key={g.key} value={g.key}>{g.label} ({whole.format(g.total)})</option>)}
               </select>
             </Field>
             <Field label="Show">
@@ -128,7 +132,7 @@ function ZonesCompare() {
                       first && (
                         <tr key={`h:${g.key}`} className="border-b border-line bg-sunken/60">
                           <th colSpan={3} scope="colgroup" className="px-4 py-2 text-left text-[12.5px] font-semibold text-ink">
-                            {g.label} <span className="font-normal text-muted">· {whole.format(data.groups.find((x) => x.key === g.key)?.total ?? 0)} differences</span>
+                            {g.label} <span className="font-normal text-muted">· {whole.format(groups.find((x) => x.key === g.key)?.total ?? 0)} differences</span>
                           </th>
                         </tr>
                       ),
