@@ -8,6 +8,7 @@ import {
   MAX_TEMPLATE_ITEMS, cleanItems, diffBackups, diffZones, evaluate, hasChecks, isIndexKind, templateFrom,
   type Gap, type IndexKind, type ItemDiff, type ResourceChange, type StoredRow, type TemplateItem,
 } from './zone-index';
+import { groupCounts, groupOf, sortDiffs, type GroupCount, type ZoneDiffReport } from './zone-diff-groups';
 
 // Comparisons, read-only (nothing is applied): two backups of one zone (from the .tf files), two
 // zones (their newest backups and snapshots, from the search index), and zones against a template —
@@ -87,22 +88,49 @@ export async function compareBackups(zoneId: string, a: string, b: string, o: { 
 
 // ── Zone vs zone ────────────────────────────────────────────────────────────
 
-export interface ZoneDiffPage { a: { id: string; name: string }; b: { id: string; name: string }; diffs: ItemDiff[]; total: number; same: number; counts: { onlyA: number; onlyB: number; different: number }; offset: number; limit: number }
+export interface ZoneDiffPage {
+  a: { id: string; name: string }; b: { id: string; name: string }; diffs: ItemDiff[]; total: number; same: number;
+  counts: { onlyA: number; onlyB: number; different: number };
+  /** Every group with differences (Origin rules, Cache rules, DNS records, ...), with its counts. */
+  groups: GroupCount[];
+  offset: number; limit: number;
+}
 
-/** Two zones' stored configuration side by side (their names written as {zone} in values). */
-export async function compareZones(aId: string, bId: string, o: { offset?: number; limit?: number; kind?: string; status?: string } = {}): Promise<ZoneDiffPage> {
+/** Every difference between two zones, in group order (cached two minutes). */
+async function zoneDiffAll(aId: string, bId: string) {
   if (aId === bId) throw new HttpError(400, 'Choose two different zones');
   const [za, zb] = await Promise.all([zoneInfo(aId), zoneInfo(bId)]);
-  const full = await cached(`compare:zones:${aId}:${bId}`, 2 * 60_000, async () => {
+  const full = await cached(`compare:zones:v2:${aId}:${bId}`, 2 * 60_000, async () => {
     const rows = await rowsOf([aId, bId]);
-    return diffZones(rows.get(aId) ?? [], za.zoneName, rows.get(bId) ?? [], zb.zoneName);
+    const d = diffZones(rows.get(aId) ?? [], za.zoneName, rows.get(bId) ?? [], zb.zoneName);
+    return { diffs: sortDiffs(d.diffs), same: d.same };
   });
-  let list = full.diffs;
-  if (o.kind && isIndexKind(o.kind)) list = list.filter((d) => d.kind === o.kind);
-  if (o.status === 'only-a' || o.status === 'only-b' || o.status === 'different') list = list.filter((d) => d.status === o.status);
-  const { offset, limit } = bounds(o);
   const n = (s: ItemDiff['status']) => full.diffs.filter((d) => d.status === s).length;
-  return { a: { id: aId, name: za.zoneName }, b: { id: bId, name: zb.zoneName }, diffs: page(list, offset, limit), total: list.length, same: full.same, counts: { onlyA: n('only-a'), onlyB: n('only-b'), different: n('different') }, offset, limit };
+  return { a: { id: aId, name: za.zoneName }, b: { id: bId, name: zb.zoneName }, ...full, counts: { onlyA: n('only-a'), onlyB: n('only-b'), different: n('different') }, groups: groupCounts(full.diffs) };
+}
+
+/** Narrowed by kind, group ("phase:http_request_origin", "kind:dns") and status. */
+function narrowDiffs(list: ItemDiff[], o: { kind?: string; group?: string; status?: string }) {
+  if (o.kind && isIndexKind(o.kind)) list = list.filter((d) => d.kind === o.kind);
+  if (o.group) list = list.filter((d) => groupOf(d).key === o.group);
+  if (o.status === 'only-a' || o.status === 'only-b' || o.status === 'different') list = list.filter((d) => d.status === o.status);
+  return list;
+}
+
+/** Two zones' stored configuration side by side (their names written as {zone} in values). */
+export async function compareZones(aId: string, bId: string, o: { offset?: number; limit?: number; kind?: string; group?: string; status?: string } = {}): Promise<ZoneDiffPage> {
+  const all = await zoneDiffAll(aId, bId);
+  const list = narrowDiffs(all.diffs, o);
+  const { offset, limit } = bounds(o);
+  return { a: all.a, b: all.b, diffs: page(list, offset, limit), total: list.length, same: all.same, counts: all.counts, groups: all.groups, offset, limit };
+}
+
+/** Every difference (no paging) for a downloaded report, narrowed like the page when asked. */
+export async function zoneDiffReport(aId: string, bId: string, o: { group?: string; status?: string } = {}): Promise<ZoneDiffReport> {
+  const all = await zoneDiffAll(aId, bId);
+  const diffs = narrowDiffs(all.diffs, o);
+  const n = (s: ItemDiff['status']) => diffs.filter((d) => d.status === s).length;
+  return { a: all.a, b: all.b, diffs, same: all.same, counts: { onlyA: n('only-a'), onlyB: n('only-b'), different: n('different') }, groups: groupCounts(diffs), generatedAt: new Date().toISOString() };
 }
 
 // ── Templates ───────────────────────────────────────────────────────────────
